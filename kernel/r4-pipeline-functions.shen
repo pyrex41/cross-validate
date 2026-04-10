@@ -6,7 +6,7 @@
 \* Check a single Composition's pipeline against installed functions *\
 (define check-r4-composition
   {(list A) --> (list (list A)) --> (list judgment)}
-  [composition-fact Name CTR Pipeline-mode Pipeline Src] Functions ->
+  [composition-fact Name CTR Pipeline-mode Pipeline _ Src] Functions ->
     (if (= Pipeline-mode "Pipeline")
         (flatten (map (/. Step (check-r4-step Name Src Step Functions)) Pipeline))
         [])

@@ -26,11 +26,11 @@
   Name Version Annotations Src [crd-fact Group Kind Scope Versions [Strategy CostClass WebhookSvc] CrdSrc] ->
     (if (and (= CostClass webhook)
              (not (= Version (find-storage-version Versions))))
-        (if (has-annotation? Annotations "xpc.dev/accept-conversion-webhook" "true")
+        (if (check-r2-opt-out? Annotations)
             []
             [(make-error "XPC002"
               Src
-              (cn "webhook conversion not acknowledged")
+              "webhook conversion not acknowledged"
               (cn "This resource is written at version " (cn Version
                 (cn ", but the storage version of CRD " (cn Group (cn "." (cn Kind
                   (cn " is " (cn (find-storage-version Versions)
@@ -55,6 +55,14 @@
   [] _ _ -> false
   [[Key Val] | _] Key Val -> true
   [_ | Rest] Key Val -> (has-annotation? Rest Key Val))
+
+\* Check if opt-out is allowed (false in strict mode) *\
+(define check-r2-opt-out?
+  {(list (list string)) --> boolean}
+  Annotations ->
+    (if (value *strict-conversions*)
+        false
+        (has-annotation? Annotations "xpc.dev/accept-conversion-webhook" "true")))
 
 \* Top-level R2 check *\
 (define check-r2

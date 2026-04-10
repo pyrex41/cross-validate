@@ -6,7 +6,7 @@
 \* Check a single Composition's compositeTypeRef against all XRDs *\
 (define check-r3-composition
   {(list A) --> (list (list A)) --> (list judgment)}
-  [composition-fact Name [gvk Group Version Kind] Mode Pipeline Src] XRDs ->
+  [composition-fact Name [gvk Group Version Kind] Mode Pipeline _ Src] XRDs ->
     (let Matching (filter (/. X (xrd-matches-gk? X Group Kind)) XRDs)
       (if (= Matching [])
           \* R3a: no XRD found *\
