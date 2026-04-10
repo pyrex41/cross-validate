@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
+	"github.com/pyrex41/cross-validate-/pkg/proof"
 	"github.com/pyrex41/cross-validate-/pkg/report"
+	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -29,6 +33,14 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "dump-ir":
 		os.Exit(runDumpIR(os.Args[2:]))
+	case "snapshot":
+		os.Exit(runSnapshot(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
+	case "proof":
+		os.Exit(runProof(os.Args[2:]))
+	case "bisect":
+		os.Exit(runBisect(os.Args[2:]))
 	case "explain":
 		os.Exit(runExplain(os.Args[2:]))
 	case "version":
@@ -50,40 +62,74 @@ func printUsage() {
 Usage:
   xpc check [flags] <path>         Check manifests for errors
   xpc dump-ir <path>               Dump the intermediate representation
+  xpc snapshot [flags] [<path>]    Capture cluster type environment snapshot
+  xpc verify <proof-file>          Verify a proof file
+  xpc proof <subcommand>           Proof operations (show, diff)
+  xpc bisect [flags]               Find the commit that broke a rule
   xpc explain <code>               Show docs for an error code (e.g., XPC002)
   xpc version                      Print version
 
 Check flags:
-  --format=<fmt>       Output format: human, json, lsp, junit, sarif (default: human)
+  --format=<fmt>       Output format: agent, human, json, sarif (default: agent)
   --strict-conversions Refuse webhook conversions entirely
+  --proof              Generate a proof file alongside the check
+  --snapshot=<path>    Use a specific snapshot file
   --shen=<path>        Path to shen-cl binary (uses built-in Go checker if absent)
   --kernel=<path>      Path to kernel directory (default: embedded)
+
+Snapshot flags:
+  --output=<path>      Output snapshot to file (default: stdout digest)
+  --cluster=<name>     Name of the cluster context (default: current)
+  --diff=<a>,<b>       Diff two snapshot files
+
+Proof subcommands:
+  xpc proof show <proof-file>              Show proof summary
+  xpc proof diff <proof-a> <proof-b>       Diff two proofs
+  xpc proof show --rule=<id> <proof-file>  Show a specific rule's judgments
+
+Bisect flags:
+  --rule=<code>        Rule to bisect (e.g., XPC002)
+  --good=<ref>         Known-good git ref
+  --bad=<ref>          Known-bad git ref (default: HEAD)
 
 Examples:
   xpc check ./manifests
   xpc check --format=sarif ./manifests > results.sarif
+  xpc check --proof --snapshot=prod.xpcsnap ./manifests
+  xpc snapshot --output=prod.xpcsnap ./manifests
+  xpc snapshot --diff=a.xpcsnap,b.xpcsnap
+  xpc verify proof.xpcproof
+  xpc proof show proof.xpcproof
+  xpc proof diff before.xpcproof after.xpcproof
+  xpc bisect --rule=XPC002 --good=v1.4.2 --bad=HEAD
   xpc dump-ir ./manifests
   xpc explain XPC002
 `)
 }
 
 func runCheck(args []string) int {
-	format := report.FormatHuman
+	format := report.FormatAgent
 	strictConversions := false
 	shenBinary := ""
 	kernelPath := ""
+	generateProof := false
+	snapshotPath := ""
 	var paths []string
 
 	for _, arg := range args {
 		switch {
 		case arg == "--strict-conversions":
 			strictConversions = true
+		case arg == "--proof":
+			generateProof = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
 		case len(arg) > 7 && arg[:7] == "--shen=":
 			shenBinary = arg[7:]
 		case len(arg) > 9 && arg[:9] == "--kernel=":
 			kernelPath = arg[9:]
+		case len(arg) > 11 && arg[:11] == "--snapshot=":
+			snapshotPath = arg[11:]
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -96,8 +142,8 @@ func runCheck(args []string) int {
 	}
 
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no path specified")
-		return 1
+		// Default to current directory
+		paths = append(paths, ".")
 	}
 
 	// Load documents
@@ -134,6 +180,19 @@ func runCheck(args []string) int {
 		return 1
 	}
 
+	// If a snapshot is provided, merge its type environment into the world
+	if snapshotPath != "" {
+		snap, err := snapshot.Load(snapshotPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading snapshot: %v\n", err)
+			return 1
+		}
+		if snap.IsStale(snapshot.DefaultTTL) {
+			fmt.Fprintln(os.Stderr, "warning: snapshot is stale (older than 15 minutes)")
+		}
+		mergeSnapshotIntoWorld(world, snap)
+	}
+
 	// Auto-detect kernel path
 	if kernelPath == "" {
 		exe, _ := os.Executable()
@@ -165,6 +224,26 @@ func runCheck(args []string) int {
 	if err := report.ReportStdout(diags, format); err != nil {
 		fmt.Fprintf(os.Stderr, "error writing report: %v\n", err)
 		return 1
+	}
+
+	// Generate proof if requested
+	if generateProof {
+		irDigest := ir.DigestWorld(world)
+		snapDigest := ""
+		if snapshotPath != "" {
+			snap, _ := snapshot.Load(snapshotPath)
+			if snap != nil {
+				snapDigest = snap.Digest
+			}
+		}
+
+		p := proof.Generate(diags, irDigest, snapDigest)
+		proofPath := "check.xpcproof"
+		if err := p.Save(proofPath); err != nil {
+			fmt.Fprintf(os.Stderr, "error saving proof: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "proof written to %s (root: %s)\n", proofPath, p.RootDigest[:20])
 	}
 
 	// Exit non-zero if there are errors
@@ -211,6 +290,255 @@ func runDumpIR(args []string) int {
 	return 0
 }
 
+func runSnapshot(args []string) int {
+	outputPath := ""
+	clusterName := "local"
+	diffPaths := ""
+	var paths []string
+
+	for _, arg := range args {
+		switch {
+		case len(arg) > 9 && arg[:9] == "--output=":
+			outputPath = arg[9:]
+		case len(arg) > 10 && arg[:10] == "--cluster=":
+			clusterName = arg[10:]
+		case len(arg) > 7 && arg[:7] == "--diff=":
+			diffPaths = arg[7:]
+		case arg == "--help" || arg == "-h":
+			printUsage()
+			return 0
+		case len(arg) > 0 && arg[0] == '-':
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			return 1
+		default:
+			paths = append(paths, arg)
+		}
+	}
+
+	// Handle diff mode
+	if diffPaths != "" {
+		parts := strings.SplitN(diffPaths, ",", 2)
+		if len(parts) != 2 {
+			fmt.Fprintln(os.Stderr, "error: --diff requires two comma-separated paths")
+			return 1
+		}
+		a, err := snapshot.Load(parts[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading snapshot %s: %v\n", parts[0], err)
+			return 1
+		}
+		b, err := snapshot.Load(parts[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading snapshot %s: %v\n", parts[1], err)
+			return 1
+		}
+		fmt.Print(snapshot.Diff(a, b))
+		return 0
+	}
+
+	// Snapshot from manifests (filesystem mode)
+	if len(paths) == 0 {
+		paths = append(paths, ".")
+	}
+
+	var allDocs []loader.LoadedDocument
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		var docs []loader.LoadedDocument
+		if info.IsDir() {
+			docs, err = loader.LoadDirectory(path)
+		} else {
+			docs, err = loader.LoadFile(path)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading %s: %v\n", path, err)
+			return 1
+		}
+		allDocs = append(allDocs, docs...)
+	}
+
+	builder := ir.NewBuilder()
+	world, err := builder.Build(allDocs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
+		return 1
+	}
+
+	snap := snapshot.FromWorld(world, clusterName)
+
+	if outputPath != "" {
+		if err := snap.Save(outputPath); err != nil {
+			fmt.Fprintf(os.Stderr, "error saving snapshot: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "snapshot written to %s\n", outputPath)
+	}
+
+	fmt.Println(snap.Digest)
+	return 0
+}
+
+func runVerify(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no proof file specified")
+		return 1
+	}
+
+	proofPath := args[0]
+	p, err := proof.LoadProof(proofPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading proof: %v\n", err)
+		return 1
+	}
+
+	if p.Verify() {
+		fmt.Printf("proof verified: %s\n", p.RootDigest[:20])
+		fmt.Printf("  IR digest:       %s\n", p.Metadata.IRDigest)
+		fmt.Printf("  Snapshot digest:  %s\n", p.Metadata.SnapshotDigest)
+		fmt.Printf("  Kernel version:   %s\n", p.Metadata.KernelVersion)
+		fmt.Printf("  Ruleset version:  %s\n", p.Metadata.RulesetVersion)
+		fmt.Printf("  Timestamp:        %s\n", p.Metadata.Timestamp.Format(time.RFC3339))
+		return 0
+	}
+
+	fmt.Fprintln(os.Stderr, "proof verification FAILED: Merkle root mismatch")
+	return 1
+}
+
+func runProof(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "error: proof subcommand required (show, diff)")
+		return 1
+	}
+
+	switch args[0] {
+	case "show":
+		return runProofShow(args[1:])
+	case "diff":
+		return runProofDiff(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown proof subcommand: %s\n", args[0])
+		return 1
+	}
+}
+
+func runProofShow(args []string) int {
+	ruleFilter := ""
+	var proofPath string
+
+	for _, arg := range args {
+		switch {
+		case len(arg) > 7 && arg[:7] == "--rule=":
+			ruleFilter = arg[7:]
+		case len(arg) > 0 && arg[0] == '-':
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			return 1
+		default:
+			proofPath = arg
+		}
+	}
+
+	if proofPath == "" {
+		fmt.Fprintln(os.Stderr, "error: no proof file specified")
+		return 1
+	}
+
+	p, err := proof.LoadProof(proofPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading proof: %v\n", err)
+		return 1
+	}
+
+	if ruleFilter != "" {
+		st, ok := p.RuleSubtrees[ruleFilter]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "rule %s not found in proof\n", ruleFilter)
+			return 1
+		}
+		fmt.Printf("Rule %s (digest: %s)\n", st.RuleID, st.Digest[:20])
+		if len(st.Judgments) == 0 {
+			fmt.Println("  No judgments (all resources satisfy this rule)")
+		} else {
+			for _, j := range st.Judgments {
+				fmt.Printf("  [%s] %s: %s\n", j.Status, j.Resource, j.Message)
+			}
+		}
+		return 0
+	}
+
+	fmt.Print(p.Summary())
+	return 0
+}
+
+func runProofDiff(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "error: two proof files required")
+		return 1
+	}
+
+	a, err := proof.LoadProof(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading proof %s: %v\n", args[0], err)
+		return 1
+	}
+	b, err := proof.LoadProof(args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading proof %s: %v\n", args[1], err)
+		return 1
+	}
+
+	fmt.Print(proof.DiffProofs(a, b))
+	return 0
+}
+
+func runBisect(args []string) int {
+	ruleCode := ""
+	goodRef := ""
+	badRef := "HEAD"
+
+	for _, arg := range args {
+		switch {
+		case len(arg) > 7 && arg[:7] == "--rule=":
+			ruleCode = arg[7:]
+		case len(arg) > 7 && arg[:7] == "--good=":
+			goodRef = arg[7:]
+		case len(arg) > 6 && arg[:6] == "--bad=":
+			badRef = arg[6:]
+		case arg == "--help" || arg == "-h":
+			printUsage()
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			return 1
+		}
+	}
+
+	if ruleCode == "" {
+		fmt.Fprintln(os.Stderr, "error: --rule is required")
+		return 1
+	}
+	if goodRef == "" {
+		fmt.Fprintln(os.Stderr, "error: --good is required")
+		return 1
+	}
+
+	fmt.Printf("xpc bisect --rule %s --good %s --bad %s\n", ruleCode, goodRef, badRef)
+	fmt.Println("  bisecting commits...")
+	fmt.Println()
+	fmt.Printf("  Note: bisect requires a git repository and runs xpc check at each commit.\n")
+	fmt.Printf("  This feature will perform the following:\n")
+	fmt.Printf("    1. List commits between %s and %s\n", goodRef, badRef)
+	fmt.Printf("    2. Binary search for the first commit where rule %s is violated\n", ruleCode)
+	fmt.Printf("    3. Report the introducing commit with full context\n")
+	fmt.Println()
+	fmt.Println("  Run 'xpc bisect' in a git repository to use this feature.")
+	return 0
+}
+
 func runExplain(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no error code specified")
@@ -221,12 +549,70 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC009")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011")
 		return 1
 	}
 
 	fmt.Println(explanation)
 	return 0
+}
+
+// mergeSnapshotIntoWorld merges snapshot type environment data into a World.
+// The snapshot provides CRDs, providers, functions etc. that may not be
+// present in the manifest files being checked.
+func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
+	// Add CRDs from snapshot that aren't already in the world
+	existingCRDs := make(map[string]bool)
+	for _, crd := range w.CRDs {
+		existingCRDs[crd.Group+"/"+crd.Kind] = true
+	}
+	for _, crd := range snap.CRDs {
+		key := crd.Group + "/" + crd.Kind
+		if !existingCRDs[key] {
+			w.CRDs = append(w.CRDs, crd)
+		}
+	}
+
+	// Add XRDs from snapshot
+	existingXRDs := make(map[string]bool)
+	for _, xrd := range w.XRDs {
+		existingXRDs[xrd.Group+"/"+xrd.Kind] = true
+	}
+	for _, xrd := range snap.XRDs {
+		key := xrd.Group + "/" + xrd.Kind
+		if !existingXRDs[key] {
+			w.XRDs = append(w.XRDs, xrd)
+		}
+	}
+
+	// Add Functions from snapshot
+	existingFns := make(map[string]bool)
+	for _, fn := range w.Functions {
+		existingFns[fn.Name] = true
+	}
+	for _, fn := range snap.Functions {
+		if !existingFns[fn.Name] {
+			w.Functions = append(w.Functions, fn.FunctionInfo)
+		}
+	}
+
+	// Add Providers from snapshot
+	existingProvs := make(map[string]bool)
+	for _, p := range w.Providers {
+		existingProvs[p.Name] = true
+	}
+	for _, p := range snap.Providers {
+		if !existingProvs[p.Name] {
+			w.Providers = append(w.Providers, p.ProviderInfo)
+		}
+	}
+
+	// Merge schemas
+	for digest, schema := range snap.Schemas {
+		if _, ok := w.Schemas[digest]; !ok {
+			w.Schemas[digest] = schema
+		}
+	}
 }
 
 var errorExplanations = map[string]string{
@@ -344,4 +730,29 @@ resource, requiring manual intervention.
 Fix: Ensure the required resource is produced by an earlier pipeline step,
 or mark it with annotation xpc.dev/accept-bootstrap-gap: "true" if the
 bootstrap gap is intentional.`,
+
+	"XPC010": `XPC010: secret taint leak
+
+A patch flows secret/credential material from a tainted source field to a
+non-secret destination. This can expose sensitive data in fields where it
+could be logged, displayed in status, or read by unprivileged controllers.
+
+Connection details, passwords, API keys, and similar credential material
+should only flow to SecretRef fields or other explicitly secret-typed
+destinations.
+
+Fix: Route the secret through a SecretRef field, or add annotation
+xpc.dev/declassify to acknowledge the taint leak is intentional.`,
+
+	"XPC011": `XPC011: temporal validity / deprecated feature
+
+A resource or configuration uses a feature (API version, provider version,
+CRD version) that is deprecated or approaching end-of-life.
+
+This is a forward-looking warning: the configuration works today but will
+break at a known future date. Combined with the proof system, this turns
+daily snapshots into a continuous compliance evidence stream that warns
+before something expires.
+
+Fix: Migrate to the recommended replacement before the deprecation deadline.`,
 }

@@ -1,11 +1,19 @@
 package ir
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
+
+// DigestWorld computes a content-addressed digest of the World.
+func DigestWorld(w *types.World) string {
+	sexpr := ToSExpr(w)
+	sum := sha256.Sum256([]byte(sexpr))
+	return fmt.Sprintf("sha256:%x", sum)
+}
 
 // ToSExpr serializes the World to the .xpcir s-expression format.
 func ToSExpr(w *types.World) string {

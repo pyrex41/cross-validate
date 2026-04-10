@@ -1,0 +1,92 @@
+# Argo CD PreSync hook for xpc type checking.
+# This Job runs before every Argo CD sync and blocks the sync if
+# type-checking fails.
+#
+# Installation:
+#   1. Build and push the xpc container image
+#   2. Apply this manifest to the Argo CD namespace
+#   3. Configure the snapshot source (see env vars below)
+#
+# The hook exits non-zero on type-checking failure, which causes
+# Argo CD to abort the sync.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xpc-presync-check
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: xpc-checker
+      restartPolicy: Never
+      containers:
+        - name: xpc
+          image: ghcr.io/pyrex41/xpc:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "xpc PreSync check starting..."
+
+              # Take a fresh snapshot of the cluster
+              xpc snapshot --cluster=prod --output=/tmp/prod.xpcsnap .
+
+              # Run type check with proof generation
+              xpc check --proof --snapshot=/tmp/prod.xpcsnap --format=agent .
+
+              echo "xpc PreSync check passed."
+          env:
+            - name: XPC_PROOF_STORE
+              value: "s3://xpc-proofs"
+            - name: XPC_CLUSTER
+              value: "prod"
+          volumeMounts:
+            - name: manifests
+              mountPath: /manifests
+              readOnly: true
+      volumes:
+        - name: manifests
+          emptyDir: {}
+---
+# ServiceAccount for the xpc checker with read-only cluster access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: xpc-checker
+---
+# ClusterRole with read-only access to CRDs, Providers, Functions, etc.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: xpc-checker
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.crossplane.io"]
+    resources: ["compositeresourcedefinitions", "compositions"]
+    verbs: ["get", "list"]
+  - apiGroups: ["pkg.crossplane.io"]
+    resources: ["providers", "functions", "configurations"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: xpc-checker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: xpc-checker
+subjects:
+  - kind: ServiceAccount
+    name: xpc-checker
+    namespace: argocd
