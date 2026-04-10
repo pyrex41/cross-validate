@@ -1,0 +1,9 @@
+# This resource uses v1beta1 but the storage version is v1beta2.
+# xpc should flag this as XPC002: webhook conversion not acknowledged.
+apiVersion: s3.aws.m.upbound.io/v1beta1
+kind: Bucket
+metadata:
+  name: my-bucket
+spec:
+  forProvider:
+    region: us-east-2
