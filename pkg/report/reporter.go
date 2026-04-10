@@ -17,11 +17,12 @@ import (
 type Format string
 
 const (
-	FormatHuman Format = "human"
-	FormatJSON  Format = "json"
-	FormatLSP   Format = "lsp"
-	FormatJUnit Format = "junit"
-	FormatSARIF Format = "sarif"
+	FormatHuman      Format = "human"
+	FormatAgent      Format = "agent"
+	FormatJSON       Format = "json"
+	FormatLSP        Format = "lsp"
+	FormatJUnit      Format = "junit"
+	FormatSARIF      Format = "sarif"
 )
 
 // Report writes diagnostics to the given writer in the specified format.
@@ -29,6 +30,8 @@ func Report(w io.Writer, diags []types.Diagnostic, format Format) error {
 	switch format {
 	case FormatHuman:
 		return reportHuman(w, diags)
+	case FormatAgent:
+		return reportAgent(w, diags)
 	case FormatJSON:
 		return reportJSON(w, diags)
 	case FormatJUnit:
@@ -176,6 +179,96 @@ func wordWrap(s string, width int) []string {
 	}
 	lines = append(lines, current)
 	return lines
+}
+
+// reportAgent writes the agent-optimized structured-text format.
+// This is designed for LLM consumption: dense, scannable, every field on its
+// own line. No prose preamble, no box-drawing, no color codes.
+func reportAgent(w io.Writer, diags []types.Diagnostic) error {
+	if len(diags) == 0 {
+		fmt.Fprintln(w, "xpc: ok (no issues)")
+		return nil
+	}
+
+	errors := 0
+	warnings := 0
+	for _, d := range diags {
+		switch d.Severity {
+		case types.SeverityError:
+			errors++
+		case types.SeverityWarning:
+			warnings++
+		}
+	}
+
+	for i, d := range diags {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+
+		loc := formatLocation(d.Source)
+		fmt.Fprintf(w, "%s %s\n", d.Code, loc)
+		fmt.Fprintf(w, "  rule:     %s\n", d.Message)
+		fmt.Fprintf(w, "  severity: %s\n", d.Severity)
+
+		if d.Detail != "" {
+			fmt.Fprintf(w, "  problem:  %s\n", compactString(d.Detail))
+		}
+
+		if len(d.Related) > 0 {
+			for _, rel := range d.Related {
+				fmt.Fprintf(w, "  source:   %s\n", formatLocation(rel))
+			}
+		}
+
+		if d.Fix != "" {
+			// Print fix compactly, replacing newlines with semicolons
+			fixLines := strings.Split(strings.TrimSpace(d.Fix), "\n")
+			if len(fixLines) == 1 {
+				fmt.Fprintf(w, "  fix:      %s\n", fixLines[0])
+			} else {
+				fmt.Fprintf(w, "  fix:      %s\n", fixLines[0])
+				for _, line := range fixLines[1:] {
+					trimmed := strings.TrimSpace(line)
+					if trimmed != "" {
+						fmt.Fprintf(w, "            %s\n", trimmed)
+					}
+				}
+			}
+		}
+
+		// Check for acknowledgment patterns
+		if strings.Contains(d.Fix, "xpc.dev/accept") || strings.Contains(d.Fix, "xpc.dev/declassify") {
+			// Extract the annotation from the fix text
+			ackStart := strings.Index(d.Fix, "xpc.dev/")
+			if ackStart >= 0 {
+				ackEnd := ackStart
+				for ackEnd < len(d.Fix) && d.Fix[ackEnd] != ' ' && d.Fix[ackEnd] != '\n' && d.Fix[ackEnd] != '"' {
+					ackEnd++
+				}
+				ack := d.Fix[ackStart:ackEnd]
+				fmt.Fprintf(w, "  ack:      add annotation %s\n", ack)
+			}
+		}
+
+		fmt.Fprintf(w, "  docs:     https://xpc.dev/errors/%s\n", d.Code)
+	}
+
+	fmt.Fprintf(w, "\nxpc: %d error(s), %d warning(s)\n", errors, warnings)
+	return nil
+}
+
+// compactString removes extra whitespace and joins long strings.
+func compactString(s string) string {
+	lines := strings.Split(s, "\n")
+	var parts []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // reportJSON writes diagnostics as a JSON array.

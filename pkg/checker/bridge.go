@@ -72,6 +72,8 @@ func checkWithGo(w *types.World, cfg Config) ([]types.Diagnostic, error) {
 	diags = append(diags, checkR7(w)...)
 	diags = append(diags, checkR8(w)...)
 	diags = append(diags, checkR9(w)...)
+	diags = append(diags, checkR10(w)...)
+	diags = append(diags, checkR11(w)...)
 
 	return diags, nil
 }
