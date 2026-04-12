@@ -11,13 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pyrex41/cross-validate-/pkg/audit"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
-	"github.com/pyrex41/cross-validate-/pkg/proof"
 	"github.com/pyrex41/cross-validate-/pkg/report"
 	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
+
+	// Register obligation generators. The blank import triggers init() in
+	// the refs package, which registers the comp-xrd-ref pilot generator.
+	_ "github.com/pyrex41/cross-validate-/pkg/obligation/refs"
 )
 
 const version = "0.1.0"
@@ -237,7 +241,7 @@ func runCheck(args []string) int {
 			}
 		}
 
-		p := proof.Generate(diags, irDigest, snapDigest)
+		p := audit.Generate(diags, irDigest, snapDigest)
 		proofPath := "check.xpcproof"
 		if err := p.Save(proofPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving proof: %v\n", err)
@@ -389,7 +393,7 @@ func runVerify(args []string) int {
 	}
 
 	proofPath := args[0]
-	p, err := proof.LoadProof(proofPath)
+	p, err := audit.LoadProof(proofPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading proof: %v\n", err)
 		return 1
@@ -447,7 +451,7 @@ func runProofShow(args []string) int {
 		return 1
 	}
 
-	p, err := proof.LoadProof(proofPath)
+	p, err := audit.LoadProof(proofPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading proof: %v\n", err)
 		return 1
@@ -480,18 +484,18 @@ func runProofDiff(args []string) int {
 		return 1
 	}
 
-	a, err := proof.LoadProof(args[0])
+	a, err := audit.LoadProof(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading proof %s: %v\n", args[0], err)
 		return 1
 	}
-	b, err := proof.LoadProof(args[1])
+	b, err := audit.LoadProof(args[1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading proof %s: %v\n", args[1], err)
 		return 1
 	}
 
-	fmt.Print(proof.DiffProofs(a, b))
+	fmt.Print(audit.DiffProofs(a, b))
 	return 0
 }
 

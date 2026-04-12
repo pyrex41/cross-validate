@@ -2,6 +2,11 @@
 // It serializes the World to Shen-readable s-expressions, invokes the
 // Shen kernel over stdin/stdout, and parses the judgment results back
 // into Go diagnostics.
+//
+// The obligation framework (pkg/obligation) is the successor to the ad-hoc
+// R1-R11 rules. During the transition, both paths coexist: CheckWithGo runs
+// the legacy rules; CheckWithObligations runs the obligation framework.
+// The Check() entry point uses the legacy path by default.
 package checker
 
 import (
@@ -10,6 +15,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/pyrex41/cross-validate-/pkg/obligation"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -284,4 +290,16 @@ func extractQuoted(s string) []string {
 		}
 	}
 	return results
+}
+
+// CheckWithObligations runs the obligation framework against the World.
+// This is the new path that will eventually replace checkWithGo.
+// During Phase 0, only the pilot generator (comp-xrd-ref) is registered.
+func CheckWithObligations(w *types.World, cfg Config) obligation.RunResult {
+	reg := obligation.DefaultRegistry()
+	ctx := &obligation.Context{
+		World:             w,
+		StrictConversions: cfg.StrictConversions,
+	}
+	return obligation.Run(reg, ctx)
 }

@@ -204,6 +204,17 @@ func NewWorld() *World {
 	}
 }
 
+// ObligationRef links a diagnostic back to the obligation that produced it.
+// This is the provenance trail from the bounded obligation taxonomy.
+type ObligationRef struct {
+	// ID is the structured obligation ID (e.g., "XPC.B.comp-xrd-ref.billing-api").
+	ID string `json:"id"`
+	// Category is the obligation category letter (A-L).
+	Category string `json:"category"`
+	// Generator is the generator name that produced this obligation.
+	Generator string `json:"generator"`
+}
+
 // Diagnostic is a single error/warning/info produced by the checker.
 type Diagnostic struct {
 	Code     string         `json:"code"`     // XPC001, XPC002, ...
@@ -213,4 +224,7 @@ type Diagnostic struct {
 	Detail   string         `json:"detail,omitempty"`
 	Fix      string         `json:"fix,omitempty"`
 	Related  []SourceLocation `json:"related,omitempty"`
+	// Obligation links this diagnostic to its obligation provenance.
+	// Nil for legacy rule diagnostics not yet ported to the obligation framework.
+	Obligation *ObligationRef `json:"obligation,omitempty"`
 }
