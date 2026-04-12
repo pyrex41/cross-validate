@@ -1,3 +1,20 @@
+// LEGACY: These rule functions are superseded by the obligation framework
+// in pkg/obligation/ subpackages. They are retained for reference and test
+// comparison but are no longer called by Check(). They will be removed once
+// the obligation framework is fully validated in production.
+//
+// Absorption map:
+//   R1  -> pkg/obligation/versions/version_coherence.go
+//   R2  -> pkg/obligation/conversion/cost_opt_in.go
+//   R3  -> pkg/obligation/refs/composition_xrd.go
+//   R4  -> pkg/obligation/refs/pipeline_fn_ref.go
+//   R5  -> pkg/obligation/refs/patch_compat.go
+//   R6  -> pkg/obligation/trajectory/wave_order.go
+//   R7  -> pkg/obligation/crossapp/label_tracking.go
+//   R8  -> pkg/obligation/versions/machinery.go
+//   R9  -> pkg/obligation/trajectory/bootstrap.go
+//   R10 -> pkg/obligation/secretflow/source_sink.go
+//   R11 -> pkg/obligation/deprecation/api_calendar.go
 package checker
 
 import (

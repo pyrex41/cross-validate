@@ -46,6 +46,10 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 			err = b.addConfiguration(doc)
 		case "argo-application":
 			err = b.addArgoApplication(doc)
+		case "argo-appproject":
+			err = b.addArgoAppProject(doc)
+		case "argo-applicationset":
+			err = b.addArgoApplicationSet(doc)
 		case "resource":
 			err = b.addResource(doc)
 		}
@@ -417,8 +421,435 @@ func (b *Builder) addArgoApplication(doc loader.LoadedDocument) error {
 		}
 	}
 
+	spec := getMap(doc.Raw, "spec")
+	if spec != nil {
+		app.Project, _ = spec["project"].(string)
+
+		// Parse destination
+		if dest := getMap(spec, "destination"); dest != nil {
+			app.Destination.Server, _ = dest["server"].(string)
+			app.Destination.Name, _ = dest["name"].(string)
+			app.Destination.Namespace, _ = dest["namespace"].(string)
+		}
+
+		// Parse sources (multi-source or single-source)
+		if sources := getSlice(spec, "sources"); sources != nil {
+			for _, s := range sources {
+				if sm, ok := s.(map[string]interface{}); ok {
+					app.Sources = append(app.Sources, b.parseArgoSource(sm))
+				}
+			}
+		} else if source := getMap(spec, "source"); source != nil {
+			app.Sources = append(app.Sources, b.parseArgoSource(source))
+		}
+
+		// Parse syncPolicy
+		if sp := getMap(spec, "syncPolicy"); sp != nil {
+			app.SyncPolicy = b.parseArgoSyncPolicy(sp)
+		}
+
+		// Parse ignoreDifferences
+		if diffs := getSlice(spec, "ignoreDifferences"); diffs != nil {
+			for _, d := range diffs {
+				if dm, ok := d.(map[string]interface{}); ok {
+					app.IgnoreDifferences = append(app.IgnoreDifferences, parseArgoIgnoreDiff(dm))
+				}
+			}
+		}
+	}
+
 	b.world.ArgoApps = append(b.world.ArgoApps, app)
 	return nil
+}
+
+func (b *Builder) parseArgoSource(m map[string]interface{}) types.ArgoSource {
+	src := types.ArgoSource{}
+	src.RepoURL, _ = m["repoURL"].(string)
+	src.Path, _ = m["path"].(string)
+	src.TargetRevision, _ = m["targetRevision"].(string)
+	src.Chart, _ = m["chart"].(string)
+
+	if helm := getMap(m, "helm"); helm != nil {
+		src.Renderer = types.RendererHelm
+		h := &types.ArgoHelmSource{}
+		if vf := getSlice(helm, "valueFiles"); vf != nil {
+			for _, v := range vf {
+				if vs, ok := v.(string); ok {
+					h.ValueFiles = append(h.ValueFiles, vs)
+				}
+			}
+		}
+		if vo := getMap(helm, "valuesObject"); vo != nil {
+			h.ValuesObject = vo
+		}
+		h.Values, _ = helm["values"].(string)
+		h.ReleaseName, _ = helm["releaseName"].(string)
+		if params := getSlice(helm, "parameters"); params != nil {
+			for _, p := range params {
+				if pm, ok := p.(map[string]interface{}); ok {
+					name, _ := pm["name"].(string)
+					value, _ := pm["value"].(string)
+					h.Parameters = append(h.Parameters, types.ArgoHelmParam{Name: name, Value: value})
+				}
+			}
+		}
+		src.Helm = h
+	} else if kust := getMap(m, "kustomize"); kust != nil {
+		src.Renderer = types.RendererKustomize
+		k := &types.ArgoKustomizeSource{}
+		k.NamePrefix, _ = kust["namePrefix"].(string)
+		k.NameSuffix, _ = kust["nameSuffix"].(string)
+		if imgs := getSlice(kust, "images"); imgs != nil {
+			for _, img := range imgs {
+				if is, ok := img.(string); ok {
+					k.Images = append(k.Images, is)
+				}
+			}
+		}
+		if cl := getMap(kust, "commonLabels"); cl != nil {
+			k.CommonLabels = make(map[string]string)
+			for key, val := range cl {
+				if vs, ok := val.(string); ok {
+					k.CommonLabels[key] = vs
+				}
+			}
+		}
+		if ca := getMap(kust, "commonAnnotations"); ca != nil {
+			k.CommonAnnotations = make(map[string]string)
+			for key, val := range ca {
+				if vs, ok := val.(string); ok {
+					k.CommonAnnotations[key] = vs
+				}
+			}
+		}
+		src.Kustomize = k
+	} else if plugin := getMap(m, "plugin"); plugin != nil {
+		src.Renderer = types.RendererPlugin
+		p := &types.ArgoPluginSource{}
+		p.Name, _ = plugin["name"].(string)
+		if envs := getSlice(plugin, "env"); envs != nil {
+			for _, e := range envs {
+				if em, ok := e.(map[string]interface{}); ok {
+					n, _ := em["name"].(string)
+					v, _ := em["value"].(string)
+					p.Env = append(p.Env, types.ArgoPluginEnv{Name: n, Value: v})
+				}
+			}
+		}
+		src.Plugin = p
+	} else if dir := getMap(m, "directory"); dir != nil {
+		src.Renderer = types.RendererDirectory
+		d := &types.ArgoDirectorySource{}
+		d.Recurse, _ = dir["recurse"].(bool)
+		d.Exclude, _ = dir["exclude"].(string)
+		d.Include, _ = dir["include"].(string)
+		src.Directory = d
+	} else {
+		src.Renderer = types.RendererDirectory // default
+	}
+
+	return src
+}
+
+func (b *Builder) parseArgoSyncPolicy(m map[string]interface{}) types.ArgoSyncPolicy {
+	sp := types.ArgoSyncPolicy{}
+
+	if auto := getMap(m, "automated"); auto != nil {
+		a := &types.ArgoAutomatedSync{}
+		a.Prune, _ = auto["prune"].(bool)
+		a.SelfHeal, _ = auto["selfHeal"].(bool)
+		sp.Automated = a
+	}
+
+	// Parse syncOptions — Argo stores these as a list of "Key=Value" strings
+	if opts := getSlice(m, "syncOptions"); opts != nil {
+		for _, o := range opts {
+			if s, ok := o.(string); ok {
+				switch s {
+				case "Replace=true":
+					sp.SyncOptions.Replace = true
+				case "ServerSideApply=true":
+					sp.SyncOptions.ServerSideApply = true
+				case "Prune=true":
+					sp.SyncOptions.Prune = true
+				case "PruneLast=true":
+					sp.SyncOptions.PruneLast = true
+				case "CreateNamespace=true":
+					sp.SyncOptions.CreateNamespace = true
+				case "ApplyOutOfSyncOnly=true":
+					sp.SyncOptions.ApplyOutOfSyncOnly = true
+				case "Validate=true":
+					sp.SyncOptions.Validate = true
+				case "FailOnSharedResource=true":
+					sp.SyncOptions.FailOnSharedResource = true
+				case "RespectIgnoreDifferences=true":
+					sp.SyncOptions.RespectIgnoreDifferences = true
+				}
+			}
+		}
+	}
+
+	if retry := getMap(m, "retry"); retry != nil {
+		r := &types.ArgoRetryPolicy{}
+		if limit, ok := retry["limit"].(float64); ok {
+			r.Limit = int(limit)
+		}
+		sp.Retry = r
+	}
+
+	return sp
+}
+
+func parseArgoIgnoreDiff(m map[string]interface{}) types.ArgoIgnoreDiff {
+	d := types.ArgoIgnoreDiff{}
+	d.Group, _ = m["group"].(string)
+	d.Kind, _ = m["kind"].(string)
+	d.Name, _ = m["name"].(string)
+	d.Namespace, _ = m["namespace"].(string)
+
+	if jp := getSlice(m, "jsonPointers"); jp != nil {
+		for _, p := range jp {
+			if ps, ok := p.(string); ok {
+				d.JSONPointers = append(d.JSONPointers, ps)
+			}
+		}
+	}
+	if jq := getSlice(m, "jqPathExpressions"); jq != nil {
+		for _, e := range jq {
+			if es, ok := e.(string); ok {
+				d.JQPathExpressions = append(d.JQPathExpressions, es)
+			}
+		}
+	}
+	if mf := getSlice(m, "managedFieldsManagers"); mf != nil {
+		for _, f := range mf {
+			if fs, ok := f.(string); ok {
+				d.ManagedFieldsManagers = append(d.ManagedFieldsManagers, fs)
+			}
+		}
+	}
+	return d
+}
+
+func (b *Builder) addArgoAppProject(doc loader.LoadedDocument) error {
+	metadata := getMap(doc.Raw, "metadata")
+	name := ""
+	if metadata != nil {
+		name, _ = metadata["name"].(string)
+	}
+
+	proj := types.ArgoAppProject{
+		Name:   name,
+		Source: doc.Source,
+	}
+
+	spec := getMap(doc.Raw, "spec")
+	if spec != nil {
+		// sourceRepos
+		if repos := getSlice(spec, "sourceRepos"); repos != nil {
+			for _, r := range repos {
+				if rs, ok := r.(string); ok {
+					proj.SourceRepos = append(proj.SourceRepos, rs)
+				}
+			}
+		}
+
+		// destinations
+		if dests := getSlice(spec, "destinations"); dests != nil {
+			for _, d := range dests {
+				if dm, ok := d.(map[string]interface{}); ok {
+					pd := types.ArgoProjectDestination{}
+					pd.Server, _ = dm["server"].(string)
+					pd.Name, _ = dm["name"].(string)
+					pd.Namespace, _ = dm["namespace"].(string)
+					proj.Destinations = append(proj.Destinations, pd)
+				}
+			}
+		}
+
+		// resource whitelists/blacklists
+		proj.ClusterResourceWhitelist = parseGroupKindList(spec, "clusterResourceWhitelist")
+		proj.ClusterResourceBlacklist = parseGroupKindList(spec, "clusterResourceBlacklist")
+		proj.NamespaceResourceWhitelist = parseGroupKindList(spec, "namespaceResourceWhitelist")
+		proj.NamespaceResourceBlacklist = parseGroupKindList(spec, "namespaceResourceBlacklist")
+
+		// syncWindows
+		if wins := getSlice(spec, "syncWindows"); wins != nil {
+			for _, w := range wins {
+				if wm, ok := w.(map[string]interface{}); ok {
+					sw := types.ArgoSyncWindow{}
+					sw.Kind, _ = wm["kind"].(string)
+					sw.Schedule, _ = wm["schedule"].(string)
+					sw.Duration, _ = wm["duration"].(string)
+					sw.Applications = getStringSlice(wm, "applications")
+					sw.Namespaces = getStringSlice(wm, "namespaces")
+					sw.Clusters = getStringSlice(wm, "clusters")
+					proj.SyncWindows = append(proj.SyncWindows, sw)
+				}
+			}
+		}
+
+		// signatureKeys
+		if keys := getSlice(spec, "signatureKeys"); keys != nil {
+			for _, k := range keys {
+				if km, ok := k.(map[string]interface{}); ok {
+					if keyID, ok := km["keyID"].(string); ok {
+						proj.SignatureKeys = append(proj.SignatureKeys, keyID)
+					}
+				}
+			}
+		}
+	}
+
+	b.world.ArgoProjects = append(b.world.ArgoProjects, proj)
+	return nil
+}
+
+func (b *Builder) addArgoApplicationSet(doc loader.LoadedDocument) error {
+	metadata := getMap(doc.Raw, "metadata")
+	name := ""
+	if metadata != nil {
+		name, _ = metadata["name"].(string)
+	}
+
+	appSet := types.ArgoApplicationSet{
+		Name:   name,
+		Source: doc.Source,
+	}
+
+	spec := getMap(doc.Raw, "spec")
+	if spec != nil {
+		// Parse generators
+		if gens := getSlice(spec, "generators"); gens != nil {
+			for _, g := range gens {
+				if gm, ok := g.(map[string]interface{}); ok {
+					appSet.Generators = append(appSet.Generators, b.parseAppSetGenerator(gm))
+				}
+			}
+		}
+
+		// Parse template
+		if tmpl := getMap(spec, "template"); tmpl != nil {
+			appSet.Template = b.parseAppSetTemplate(tmpl)
+		}
+	}
+
+	b.world.ArgoAppSets = append(b.world.ArgoAppSets, appSet)
+	return nil
+}
+
+func (b *Builder) parseAppSetGenerator(m map[string]interface{}) types.ArgoAppSetGenerator {
+	gen := types.ArgoAppSetGenerator{}
+
+	if list := getMap(m, "list"); list != nil {
+		gen.Kind = types.AppSetGenList
+		if elems := getSlice(list, "elements"); elems != nil {
+			for _, e := range elems {
+				if em, ok := e.(map[string]interface{}); ok {
+					elem := make(map[string]string)
+					for k, v := range em {
+						if vs, ok := v.(string); ok {
+							elem[k] = vs
+						}
+					}
+					gen.ListElements = append(gen.ListElements, elem)
+				}
+			}
+		}
+	} else if clusters := getMap(m, "clusters"); clusters != nil {
+		gen.Kind = types.AppSetGenCluster
+		if sel := getMap(clusters, "selector"); sel != nil {
+			if matchLabels := getMap(sel, "matchLabels"); matchLabels != nil {
+				gen.ClusterSelector = make(map[string]string)
+				for k, v := range matchLabels {
+					if vs, ok := v.(string); ok {
+						gen.ClusterSelector[k] = vs
+					}
+				}
+			}
+		}
+	} else if git := getMap(m, "git"); git != nil {
+		gen.Kind = types.AppSetGenGit
+		g := &types.ArgoAppSetGitGenerator{}
+		g.RepoURL, _ = git["repoURL"].(string)
+		g.Revision, _ = git["revision"].(string)
+		if dirs := getSlice(git, "directories"); dirs != nil {
+			for _, d := range dirs {
+				if dm, ok := d.(map[string]interface{}); ok {
+					gd := types.ArgoAppSetGitDir{}
+					gd.Path, _ = dm["path"].(string)
+					gd.Exclude, _ = dm["exclude"].(bool)
+					g.Directories = append(g.Directories, gd)
+				}
+			}
+		}
+		if files := getSlice(git, "files"); files != nil {
+			for _, f := range files {
+				if fm, ok := f.(map[string]interface{}); ok {
+					gf := types.ArgoAppSetGitFile{}
+					gf.Path, _ = fm["path"].(string)
+					g.Files = append(g.Files, gf)
+				}
+			}
+		}
+		gen.Git = g
+	} else if matrix := getMap(m, "matrix"); matrix != nil {
+		gen.Kind = types.AppSetGenMatrix
+		if subs := getSlice(matrix, "generators"); subs != nil {
+			for _, s := range subs {
+				if sm, ok := s.(map[string]interface{}); ok {
+					gen.MatrixGenerators = append(gen.MatrixGenerators, b.parseAppSetGenerator(sm))
+				}
+			}
+		}
+	} else if merge := getMap(m, "merge"); merge != nil {
+		gen.Kind = types.AppSetGenMerge
+		gen.MergeKeys = getStringSlice(merge, "mergeKeys")
+		if subs := getSlice(merge, "generators"); subs != nil {
+			for _, s := range subs {
+				if sm, ok := s.(map[string]interface{}); ok {
+					gen.MergeGenerators = append(gen.MergeGenerators, b.parseAppSetGenerator(sm))
+				}
+			}
+		}
+	}
+
+	return gen
+}
+
+func (b *Builder) parseAppSetTemplate(m map[string]interface{}) types.ArgoAppSetTemplate {
+	tmpl := types.ArgoAppSetTemplate{}
+
+	if meta := getMap(m, "metadata"); meta != nil {
+		tmpl.Name, _ = meta["name"].(string)
+		tmpl.Namespace, _ = meta["namespace"].(string)
+	}
+
+	if spec := getMap(m, "spec"); spec != nil {
+		tmpl.Project, _ = spec["project"].(string)
+
+		if source := getMap(spec, "source"); source != nil {
+			s := b.parseArgoSource(source)
+			tmpl.Source = &s
+		}
+		if sources := getSlice(spec, "sources"); sources != nil {
+			for _, src := range sources {
+				if sm, ok := src.(map[string]interface{}); ok {
+					tmpl.Sources = append(tmpl.Sources, b.parseArgoSource(sm))
+				}
+			}
+		}
+		if dest := getMap(spec, "destination"); dest != nil {
+			tmpl.Destination.Server, _ = dest["server"].(string)
+			tmpl.Destination.Name, _ = dest["name"].(string)
+			tmpl.Destination.Namespace, _ = dest["namespace"].(string)
+		}
+		if sp := getMap(spec, "syncPolicy"); sp != nil {
+			tmpl.SyncPolicy = b.parseArgoSyncPolicy(sp)
+		}
+	}
+
+	return tmpl
 }
 
 func (b *Builder) addResource(doc loader.LoadedDocument) error {
@@ -475,6 +906,37 @@ func getMap(m map[string]interface{}, key string) map[string]interface{} {
 		return nil
 	}
 	return vm
+}
+
+func getStringSlice(m map[string]interface{}, key string) []string {
+	raw := getSlice(m, key)
+	if raw == nil {
+		return nil
+	}
+	var result []string
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func parseGroupKindList(spec map[string]interface{}, key string) []types.ArgoGroupKind {
+	items := getSlice(spec, key)
+	if items == nil {
+		return nil
+	}
+	var result []types.ArgoGroupKind
+	for _, item := range items {
+		if m, ok := item.(map[string]interface{}); ok {
+			gk := types.ArgoGroupKind{}
+			gk.Group, _ = m["group"].(string)
+			gk.Kind, _ = m["kind"].(string)
+			result = append(result, gk)
+		}
+	}
+	return result
 }
 
 func getSlice(m map[string]interface{}, key string) []interface{} {

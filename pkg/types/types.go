@@ -169,6 +169,365 @@ type ArgoApplication struct {
 	TrackingMode string              `json:"trackingMode"` // annotation or label
 	SyncWaves    []SyncWaveEntry     `json:"syncWaves"`
 	Source       SourceLocation      `json:"source"`
+
+	// --- Phase 1 extensions ---
+
+	// Project is the AppProject this Application belongs to (spec.project).
+	// Empty string means "default".
+	Project string `json:"project,omitempty"`
+
+	// Sources is the list of sources for multi-source Applications.
+	// For single-source Applications, this has one element.
+	Sources []ArgoSource `json:"sources,omitempty"`
+
+	// Destination is where this Application deploys to.
+	Destination ArgoDestination `json:"destination"`
+
+	// SyncPolicy describes automated sync behavior.
+	SyncPolicy ArgoSyncPolicy `json:"syncPolicy"`
+
+	// IgnoreDifferences lists fields to ignore during diff.
+	IgnoreDifferences []ArgoIgnoreDiff `json:"ignoreDifferences,omitempty"`
+
+	// Hooks are sync-hook annotations found on managed resources.
+	// Populated during rendering or from manifest scan.
+	Hooks []ArgoHook `json:"hooks,omitempty"`
+}
+
+// RendererKind identifies which renderer an Argo source uses.
+type RendererKind string
+
+const (
+	RendererHelm      RendererKind = "helm"
+	RendererKustomize RendererKind = "kustomize"
+	RendererDirectory RendererKind = "directory"
+	RendererPlugin    RendererKind = "plugin"
+)
+
+// ArgoSource represents a single source in an Argo CD Application.
+// This is a tagged union: exactly one of Helm, Kustomize, Directory, or Plugin
+// should be non-nil, indicated by Renderer.
+type ArgoSource struct {
+	// RepoURL is the git/Helm/OCI repository URL.
+	RepoURL string `json:"repoURL"`
+	// Path is the directory within the repo.
+	Path string `json:"path,omitempty"`
+	// TargetRevision is the git ref, chart version, or OCI tag.
+	TargetRevision string `json:"targetRevision,omitempty"`
+	// Chart is the Helm chart name (for Helm repo sources).
+	Chart string `json:"chart,omitempty"`
+	// Renderer identifies which renderer config is active.
+	Renderer RendererKind `json:"renderer"`
+
+	// Helm config (non-nil when Renderer == RendererHelm).
+	Helm *ArgoHelmSource `json:"helm,omitempty"`
+	// Kustomize config (non-nil when Renderer == RendererKustomize).
+	Kustomize *ArgoKustomizeSource `json:"kustomize,omitempty"`
+	// Directory config (non-nil when Renderer == RendererDirectory).
+	Directory *ArgoDirectorySource `json:"directory,omitempty"`
+	// Plugin config (non-nil when Renderer == RendererPlugin).
+	Plugin *ArgoPluginSource `json:"plugin,omitempty"`
+}
+
+// ArgoHelmSource holds Helm-specific source configuration.
+type ArgoHelmSource struct {
+	// ValueFiles is a list of values files to use.
+	ValueFiles []string `json:"valueFiles,omitempty"`
+	// ValuesObject is inline values (from spec.source.helm.valuesObject).
+	ValuesObject map[string]interface{} `json:"valuesObject,omitempty"`
+	// Values is the raw values string (from spec.source.helm.values).
+	Values string `json:"values,omitempty"`
+	// ReleaseName overrides the Helm release name.
+	ReleaseName string `json:"releaseName,omitempty"`
+	// Parameters are individual Helm parameter overrides.
+	Parameters []ArgoHelmParam `json:"parameters,omitempty"`
+}
+
+// ArgoHelmParam is a single Helm parameter override.
+type ArgoHelmParam struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ArgoKustomizeSource holds Kustomize-specific source configuration.
+type ArgoKustomizeSource struct {
+	// NamePrefix adds a prefix to all resource names.
+	NamePrefix string `json:"namePrefix,omitempty"`
+	// NameSuffix adds a suffix to all resource names.
+	NameSuffix string `json:"nameSuffix,omitempty"`
+	// Images overrides container images.
+	Images []string `json:"images,omitempty"`
+	// CommonLabels to add to all resources.
+	CommonLabels map[string]string `json:"commonLabels,omitempty"`
+	// CommonAnnotations to add to all resources.
+	CommonAnnotations map[string]string `json:"commonAnnotations,omitempty"`
+}
+
+// ArgoDirectorySource holds directory-specific source configuration.
+type ArgoDirectorySource struct {
+	// Recurse enables recursive directory scanning.
+	Recurse bool `json:"recurse,omitempty"`
+	// Exclude is a glob pattern to exclude files.
+	Exclude string `json:"exclude,omitempty"`
+	// Include is a glob pattern to include files.
+	Include string `json:"include,omitempty"`
+}
+
+// ArgoPluginSource holds plugin-specific source configuration.
+type ArgoPluginSource struct {
+	// Name is the plugin name.
+	Name string `json:"name"`
+	// Env are environment variables passed to the plugin.
+	Env []ArgoPluginEnv `json:"env,omitempty"`
+}
+
+// ArgoPluginEnv is an environment variable for a plugin.
+type ArgoPluginEnv struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ArgoDestination is where an Application deploys to.
+type ArgoDestination struct {
+	// Server is the cluster API server URL.
+	Server string `json:"server,omitempty"`
+	// Name is the cluster name (alternative to Server).
+	Name string `json:"name,omitempty"`
+	// Namespace is the target namespace.
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ArgoSyncPolicy describes the sync policy for an Application.
+type ArgoSyncPolicy struct {
+	// Automated is non-nil if automated sync is enabled.
+	Automated *ArgoAutomatedSync `json:"automated,omitempty"`
+	// SyncOptions is the list of sync options as typed fields.
+	SyncOptions ArgoSyncOptions `json:"syncOptions"`
+	// Retry configures sync retry behavior.
+	Retry *ArgoRetryPolicy `json:"retry,omitempty"`
+}
+
+// ArgoAutomatedSync describes automated sync settings.
+type ArgoAutomatedSync struct {
+	Prune    bool `json:"prune"`
+	SelfHeal bool `json:"selfHeal"`
+}
+
+// ArgoSyncOptions holds every sync option as a typed field.
+// Each field corresponds to a sync option string like "Replace=true".
+type ArgoSyncOptions struct {
+	// Replace deletes-then-creates instead of patching.
+	Replace bool `json:"replace,omitempty"`
+	// ServerSideApply uses server-side apply instead of client-side.
+	ServerSideApply bool `json:"serverSideApply,omitempty"`
+	// Prune allows deletion of resources absent from source.
+	Prune bool `json:"prune,omitempty"`
+	// PruneLast orders prunes after all other operations.
+	PruneLast bool `json:"pruneLast,omitempty"`
+	// CreateNamespace creates the target namespace if missing.
+	CreateNamespace bool `json:"createNamespace,omitempty"`
+	// ApplyOutOfSyncOnly skips resources whose live state matches.
+	ApplyOutOfSyncOnly bool `json:"applyOutOfSyncOnly,omitempty"`
+	// Validate enables/disables kubectl validation.
+	Validate bool `json:"validate,omitempty"`
+	// FailOnSharedResource fails sync if another app manages the same resource.
+	FailOnSharedResource bool `json:"failOnSharedResource,omitempty"`
+	// RespectIgnoreDifferences uses ignoreDifferences during sync.
+	RespectIgnoreDifferences bool `json:"respectIgnoreDifferences,omitempty"`
+}
+
+// ArgoRetryPolicy describes sync retry behavior.
+type ArgoRetryPolicy struct {
+	Limit   int `json:"limit,omitempty"`
+	BackoffDurationSec int `json:"backoffDurationSec,omitempty"`
+	BackoffMaxDurationSec int `json:"backoffMaxDurationSec,omitempty"`
+	BackoffFactor int `json:"backoffFactor,omitempty"`
+}
+
+// ArgoIgnoreDiff describes a field to ignore during Argo CD diff.
+type ArgoIgnoreDiff struct {
+	// Group is the API group (empty matches all).
+	Group string `json:"group,omitempty"`
+	// Kind is the resource kind (empty matches all).
+	Kind string `json:"kind,omitempty"`
+	// Name is the resource name (empty matches all).
+	Name string `json:"name,omitempty"`
+	// Namespace is the resource namespace (empty matches all).
+	Namespace string `json:"namespace,omitempty"`
+	// JSONPointers are JSON pointer paths to ignore.
+	JSONPointers []string `json:"jsonPointers,omitempty"`
+	// JQPathExpressions are JQ expressions for fields to ignore.
+	JQPathExpressions []string `json:"jqPathExpressions,omitempty"`
+	// ManagedFieldsManagers are field managers whose fields to ignore.
+	ManagedFieldsManagers []string `json:"managedFieldsManagers,omitempty"`
+}
+
+// ArgoHook represents a sync hook annotation on a resource.
+type ArgoHook struct {
+	// Phase is the hook phase (PreSync, Sync, PostSync, SyncFail, PostDelete).
+	Phase string `json:"phase"`
+	// DeletePolicy is the hook delete policy (HookSucceeded, HookFailed, BeforeHookCreation).
+	DeletePolicy string `json:"deletePolicy,omitempty"`
+	// Resource identifies the hook resource.
+	Resource ResourceRef `json:"resource"`
+	// Wave is the hook's sync wave.
+	Wave int `json:"wave"`
+}
+
+// ResourceRef is a lightweight reference to a resource by GVK + name + namespace.
+type ResourceRef struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
+}
+
+// --- AppProject ---
+
+// ArgoAppProject represents an Argo CD AppProject.
+type ArgoAppProject struct {
+	Name   string         `json:"name"`
+	Source SourceLocation `json:"source"`
+
+	// SourceRepos is the allow-list of repository URLs.
+	// Supports wildcards ("*" matches all).
+	SourceRepos []string `json:"sourceRepos,omitempty"`
+
+	// Destinations is the allow-list of (server, namespace) pairs.
+	Destinations []ArgoProjectDestination `json:"destinations,omitempty"`
+
+	// ClusterResourceWhitelist allows specific cluster-scoped kinds.
+	ClusterResourceWhitelist []ArgoGroupKind `json:"clusterResourceWhitelist,omitempty"`
+	// ClusterResourceBlacklist denies specific cluster-scoped kinds.
+	ClusterResourceBlacklist []ArgoGroupKind `json:"clusterResourceBlacklist,omitempty"`
+	// NamespaceResourceWhitelist allows specific namespace-scoped kinds.
+	NamespaceResourceWhitelist []ArgoGroupKind `json:"namespaceResourceWhitelist,omitempty"`
+	// NamespaceResourceBlacklist denies specific namespace-scoped kinds.
+	NamespaceResourceBlacklist []ArgoGroupKind `json:"namespaceResourceBlacklist,omitempty"`
+
+	// SyncWindows restricts when syncs are permitted.
+	SyncWindows []ArgoSyncWindow `json:"syncWindows,omitempty"`
+
+	// SignatureKeys are required GPG key IDs for commit verification.
+	SignatureKeys []string `json:"signatureKeys,omitempty"`
+}
+
+// ArgoProjectDestination is an allowed (server, namespace) pair in an AppProject.
+type ArgoProjectDestination struct {
+	Server    string `json:"server,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ArgoGroupKind identifies a resource group + kind for project whitelists.
+type ArgoGroupKind struct {
+	Group string `json:"group"`
+	Kind  string `json:"kind"`
+}
+
+// ArgoSyncWindow restricts sync timing.
+type ArgoSyncWindow struct {
+	// Kind is "allow" or "deny".
+	Kind string `json:"kind"`
+	// Schedule is a cron expression.
+	Schedule string `json:"schedule"`
+	// Duration is the window duration (e.g., "1h", "30m").
+	Duration string `json:"duration"`
+	// Applications is the list of Application patterns this window applies to.
+	Applications []string `json:"applications,omitempty"`
+	// Namespaces is the list of namespace patterns.
+	Namespaces []string `json:"namespaces,omitempty"`
+	// Clusters is the list of cluster patterns.
+	Clusters []string `json:"clusters,omitempty"`
+}
+
+// --- ApplicationSet ---
+
+// ArgoApplicationSet represents an Argo CD ApplicationSet.
+type ArgoApplicationSet struct {
+	Name   string         `json:"name"`
+	Source SourceLocation `json:"source"`
+
+	// Generators produce the parameter sets for templating.
+	Generators []ArgoAppSetGenerator `json:"generators"`
+
+	// Template is the Application template to instantiate per generator element.
+	Template ArgoAppSetTemplate `json:"template"`
+}
+
+// ArgoAppSetGeneratorKind identifies the type of ApplicationSet generator.
+type ArgoAppSetGeneratorKind string
+
+const (
+	AppSetGenList        ArgoAppSetGeneratorKind = "list"
+	AppSetGenCluster     ArgoAppSetGeneratorKind = "cluster"
+	AppSetGenGit         ArgoAppSetGeneratorKind = "git"
+	AppSetGenMatrix      ArgoAppSetGeneratorKind = "matrix"
+	AppSetGenMerge       ArgoAppSetGeneratorKind = "merge"
+	AppSetGenSCMProvider ArgoAppSetGeneratorKind = "scmProvider"
+	AppSetGenPullRequest ArgoAppSetGeneratorKind = "pullRequest"
+)
+
+// ArgoAppSetGenerator is one generator in an ApplicationSet.
+// This is a tagged union: Kind identifies which config fields are populated.
+type ArgoAppSetGenerator struct {
+	// Kind identifies the generator type.
+	Kind ArgoAppSetGeneratorKind `json:"kind"`
+
+	// List generator elements (when Kind == "list").
+	ListElements []map[string]string `json:"listElements,omitempty"`
+
+	// Cluster generator selector (when Kind == "cluster").
+	ClusterSelector map[string]string `json:"clusterSelector,omitempty"`
+
+	// Git generator config (when Kind == "git").
+	Git *ArgoAppSetGitGenerator `json:"git,omitempty"`
+
+	// Matrix sub-generators (when Kind == "matrix").
+	MatrixGenerators []ArgoAppSetGenerator `json:"matrixGenerators,omitempty"`
+
+	// Merge sub-generators (when Kind == "merge").
+	MergeGenerators []ArgoAppSetGenerator `json:"mergeGenerators,omitempty"`
+	MergeKeys       []string              `json:"mergeKeys,omitempty"`
+}
+
+// ArgoAppSetGitGenerator configures a git-based ApplicationSet generator.
+type ArgoAppSetGitGenerator struct {
+	RepoURL  string `json:"repoURL"`
+	Revision string `json:"revision,omitempty"`
+	// Directories to scan for apps.
+	Directories []ArgoAppSetGitDir `json:"directories,omitempty"`
+	// Files to scan for parameters.
+	Files []ArgoAppSetGitFile `json:"files,omitempty"`
+}
+
+// ArgoAppSetGitDir is a directory entry in a git generator.
+type ArgoAppSetGitDir struct {
+	Path    string `json:"path"`
+	Exclude bool   `json:"exclude,omitempty"`
+}
+
+// ArgoAppSetGitFile is a file entry in a git generator.
+type ArgoAppSetGitFile struct {
+	Path string `json:"path"`
+}
+
+// ArgoAppSetTemplate is the Application template in an ApplicationSet.
+type ArgoAppSetTemplate struct {
+	// Name is the template for the Application name (may contain {{parameters}}).
+	Name string `json:"name,omitempty"`
+	// Namespace for the generated Application.
+	Namespace string `json:"namespace,omitempty"`
+	// Project for the generated Application.
+	Project string `json:"project,omitempty"`
+	// Source template.
+	Source *ArgoSource `json:"source,omitempty"`
+	// Sources for multi-source templates.
+	Sources []ArgoSource `json:"sources,omitempty"`
+	// Destination template.
+	Destination ArgoDestination `json:"destination"`
+	// SyncPolicy template.
+	SyncPolicy ArgoSyncPolicy `json:"syncPolicy"`
 }
 
 // SyncWaveEntry represents a resource's sync wave assignment.
@@ -186,14 +545,16 @@ type SchemaInfo struct {
 
 // World is the complete typed representation of a set of manifests.
 type World struct {
-	CRDs           []CRDInfo          `json:"crds"`
-	XRDs           []CRDInfo          `json:"xrds"`
-	Compositions   []CompositionInfo  `json:"compositions"`
-	Functions      []FunctionInfo     `json:"functions"`
-	Providers      []ProviderInfo     `json:"providers"`
-	Configurations []ConfigurationInfo `json:"configurations"`
-	Resources      []ResourceInfo     `json:"resources"`
-	ArgoApps       []ArgoApplication  `json:"argoApps"`
+	CRDs           []CRDInfo            `json:"crds"`
+	XRDs           []CRDInfo            `json:"xrds"`
+	Compositions   []CompositionInfo    `json:"compositions"`
+	Functions      []FunctionInfo       `json:"functions"`
+	Providers      []ProviderInfo       `json:"providers"`
+	Configurations []ConfigurationInfo  `json:"configurations"`
+	Resources      []ResourceInfo       `json:"resources"`
+	ArgoApps       []ArgoApplication    `json:"argoApps"`
+	ArgoProjects   []ArgoAppProject     `json:"argoProjects,omitempty"`
+	ArgoAppSets    []ArgoApplicationSet `json:"argoAppSets,omitempty"`
 	Schemas        map[string]SchemaInfo `json:"schemas"`
 }
 
