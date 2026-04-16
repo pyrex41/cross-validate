@@ -1,16 +1,16 @@
 \* check.shen — top-level entry point for the xpc type checker kernel
 
-   Reads the IR (as Shen data structures) from stdin, runs all rules,
-   and writes judgments to stdout as s-expressions.
+   The Go binary converts the World to Shen values, calls check-world
+   directly via the in-process Shen runtime, and reads the judgment list
+   back as Shen values.
 
-   Usage: the Go binary serializes the World to Shen-readable s-expressions,
-   pipes them in, and reads the judgment list back.
-
-   Protocol:
-     stdin:  a single s-expression (world CRDs XRDs Compositions Functions
-             Providers Configurations Resources ArgoApps Schemas)
-     stdout: a list of judgment s-expressions
-             (judgments [(judgment Code Severity Source Message Detail Fix Related) ...]) *\
+   Protocol (in-process):
+     input:  a Shen value representing the world
+             [world [crds ...] [xrds ...] [compositions ...] [functions ...]
+              [providers ...] [configurations ...] [resources ...]
+              [argo-apps ...] [schemas ...]]
+     output: a list of judgment values
+             [[judgment Code Severity Source Message Detail Fix Related] ...] *\
 
 \* Load all rule files *\
 (load "prelude.shen")
@@ -23,20 +23,22 @@
 (load "r7-owner-refs.shen")
 (load "r8-v1v2-machinery.shen")
 (load "r9-bootstrap.shen")
+(load "r10-secret-taint.shen")
+(load "r11-temporal.shen")
 
 \* ===== IR reading ===== *\
 
 \* The world is expected as:
-   (world
-     (crds ...)
-     (xrds ...)
-     (compositions ...)
-     (functions ...)
-     (providers ...)
-     (configurations ...)
-     (resources ...)
-     (argo-apps ...)
-     (schemas ...)) *\
+   [world
+     [crds ...]
+     [xrds ...]
+     [compositions ...]
+     [functions ...]
+     [providers ...]
+     [configurations ...]
+     [resources ...]
+     [argo-apps ...]
+     [schemas ...]] *\
 
 (define extract-section
   {symbol --> (list A) --> (list A)}
@@ -60,20 +62,23 @@
          Schemas      (extract-section schemas Sections)
 
          \* Run all rules *\
-         R1 (check-r1 CRDs XRDs)
-         R2 (check-r2 Resources CRDs)
-         R3 (check-r3 Compositions XRDs)
-         R4 (check-r4 Compositions Functions)
-         R5 (check-r5 Compositions XRDs Schemas)
-         R6 (check-r6 ArgoApps Compositions XRDs Functions)
-         R7 (check-r7 ArgoApps Compositions)
-         R8 (check-r8 Resources XRDs)
-         R9 (check-r9 Compositions Resources)
+         R1  (check-r1 CRDs XRDs)
+         R2  (check-r2 Resources CRDs)
+         R3  (check-r3 Compositions XRDs)
+         R4  (check-r4 Compositions Functions)
+         R5  (check-r5 Compositions XRDs Schemas)
+         R6  (check-r6 ArgoApps Compositions XRDs Functions)
+         R7  (check-r7 ArgoApps Compositions)
+         R8  (check-r8 Resources XRDs)
+         R9  (check-r9 Compositions Resources)
+         R10 (check-r10 Compositions)
+         R11 (check-r11 Resources Compositions Providers CRDs)
 
       (append R1 (append R2 (append R3 (append R4 (append R5
-        (append R6 (append R7 (append R8 R9))))))))))
+        (append R6 (append R7 (append R8 (append R9
+          (append R10 R11))))))))))))
 
-\* ===== Stdin/stdout protocol ===== *\
+\* ===== Stdin/stdout protocol (legacy, kept for compatibility) ===== *\
 
 \* Read the world from stdin, run checks, write judgments to stdout *\
 (define run-checker

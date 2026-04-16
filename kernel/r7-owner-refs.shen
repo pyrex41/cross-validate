@@ -16,7 +16,7 @@
 \* Warn about a specific Composition when label tracking is active *\
 (define check-r7-composition-conflict
   {string --> source-loc --> (list A) --> (list judgment)}
-  AppName AppSrc [composition-fact CompName _ _ _ CompSrc] ->
+  AppName AppSrc [composition-fact CompName _ _ _ _ CompSrc] ->
     [(make-warning "XPC007"
       AppSrc
       (cn "Argo CD label tracking conflicts with Crossplane Composition " (cn CompName ""))

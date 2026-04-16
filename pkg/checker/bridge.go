@@ -1,26 +1,24 @@
 // Package checker bridges the Go side with the Shen type-checking kernel.
-// It serializes the World to Shen-readable s-expressions, invokes the
-// Shen kernel over stdin/stdout, and parses the judgment results back
-// into Go diagnostics.
+// The Shen kernel runs in-process via the embedded shen runtime — no
+// subprocess, no external binary.
 package checker
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
+	"path/filepath"
 	"strings"
 
+	"github.com/pyrex41/cross-validate-/pkg/ir"
+	"github.com/pyrex41/cross-validate-/pkg/schemas"
+	"github.com/pyrex41/cross-validate-/pkg/shen"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
 // Config holds checker configuration.
 type Config struct {
 	// KernelPath is the path to the Shen kernel directory.
+	// Defaults to "kernel" relative to the executable.
 	KernelPath string
-
-	// ShenBinary is the path to the shen-cl binary.
-	// If empty, falls back to the built-in Go checker.
-	ShenBinary string
 
 	// StrictConversions refuses webhook conversions entirely
 	// instead of allowing them with an opt-in annotation.
@@ -28,260 +26,504 @@ type Config struct {
 }
 
 // Check runs all type-checking rules against the World.
-// If a Shen binary is available, it invokes the Shen kernel.
-// Otherwise, it uses the built-in Go checker.
+// The Shen kernel is loaded in-process and called directly.
 func Check(w *types.World, cfg Config) ([]types.Diagnostic, error) {
-	if cfg.ShenBinary != "" {
-		return checkWithShen(w, cfg)
+	rt := shen.NewRuntime()
+
+	// Set configuration globals the kernel can read.
+	rt.SetGlobal("*strict-conversions*", shen.Bool(cfg.StrictConversions))
+
+	// Resolve kernel directory.
+	kernelDir := cfg.KernelPath
+	if kernelDir == "" {
+		kernelDir = "kernel"
 	}
-	return checkWithGo(w, cfg)
-}
 
-// checkWithShen invokes the Shen kernel process.
-func checkWithShen(w *types.World, cfg Config) ([]types.Diagnostic, error) {
-	ir := worldToShenIR(w)
+	// Load the kernel entry point (which loads all rule files).
+	checkPath := filepath.Join(kernelDir, "check.shen")
+	if _, err := rt.LoadFile(checkPath); err != nil {
+		return nil, fmt.Errorf("loading kernel: %w", err)
+	}
 
-	cmd := exec.Command(cfg.ShenBinary, "--eval", fmt.Sprintf(
-		`(do (cd "%s") (load "check.shen") (check-world (read-from-string "%s")))`,
-		cfg.KernelPath, escapeShen(ir)))
+	// Enrich the world data with pre-computed information the kernel needs.
+	enrichSyncWaves(w)
+	resolvePatchTypes(w)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// Convert the World to a Shen value and call check-world.
+	worldVal := worldToShenValue(w)
+	result, err := rt.Call("check-world", worldVal)
 	if err != nil {
-		return nil, fmt.Errorf("shen kernel failed: %w\nstderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("running checker: %w", err)
 	}
 
-	return parseShenJudgments(stdout.String())
+	return valueToDiagnostics(result), nil
 }
 
-// checkWithGo is the built-in Go implementation of the type-checking rules.
-// This provides the same checks as the Shen kernel but is available when
-// no Shen runtime is installed.
-func checkWithGo(w *types.World, cfg Config) ([]types.Diagnostic, error) {
-	var diags []types.Diagnostic
+// ---------------------------------------------------------------------------
+// World enrichment — pre-compute data the kernel expects
+// ---------------------------------------------------------------------------
 
-	diags = append(diags, checkR1(w)...)
-	diags = append(diags, checkR2(w, cfg.StrictConversions)...)
-	diags = append(diags, checkR3(w)...)
-	diags = append(diags, checkR4(w)...)
-	diags = append(diags, checkR5(w)...)
-	diags = append(diags, checkR6(w)...)
-	diags = append(diags, checkR7(w)...)
-	diags = append(diags, checkR8(w)...)
-	diags = append(diags, checkR9(w)...)
-	diags = append(diags, checkR10(w)...)
-	diags = append(diags, checkR11(w)...)
-
-	return diags, nil
+// enrichSyncWaves adds sync wave entries derived from resource annotations
+// to ArgoApps so the kernel can check wave ordering.
+func enrichSyncWaves(w *types.World) {
+	for i := range w.ArgoApps {
+		existing := make(map[string]bool)
+		for _, sw := range w.ArgoApps[i].SyncWaves {
+			existing[sw.Kind+"/"+sw.Name] = true
+		}
+		// Add XRDs
+		for _, xrd := range w.XRDs {
+			key := "CompositeResourceDefinition/" + xrd.Kind
+			if !existing[key] {
+				wave := 0
+				// XRDs might be in resources with annotations
+				for _, res := range w.Resources {
+					if res.Kind == "CompositeResourceDefinition" && res.Name == xrd.Kind {
+						wave = ir.ParseSyncWave(res.Annotations)
+					}
+				}
+				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
+					Kind: "CompositeResourceDefinition", Name: xrd.Kind, Wave: wave,
+				})
+				existing[key] = true
+			}
+		}
+		// Add all resources
+		for _, res := range w.Resources {
+			key := res.Kind + "/" + res.Name
+			if !existing[key] {
+				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
+					Kind: res.Kind, Name: res.Name, Wave: ir.ParseSyncWave(res.Annotations),
+				})
+				existing[key] = true
+			}
+		}
+		// Add compositions and functions
+		for _, comp := range w.Compositions {
+			key := "Composition/" + comp.Name
+			if !existing[key] {
+				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
+					Kind: "Composition", Name: comp.Name, Wave: 0,
+				})
+				existing[key] = true
+			}
+		}
+		for _, fn := range w.Functions {
+			key := "Function/" + fn.Name
+			if !existing[key] {
+				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
+					Kind: "Function", Name: fn.Name, Wave: 0,
+				})
+				existing[key] = true
+			}
+		}
+	}
 }
 
-// worldToShenIR serializes the World to Shen-readable s-expressions.
-func worldToShenIR(w *types.World) string {
-	var sb strings.Builder
-	sb.WriteString("(world\n")
+// resolvePatchTypes resolves field types for patches in Resources-mode compositions
+// using the world's schema data.
+func resolvePatchTypes(w *types.World) {
+	xrdSchemaMap := make(map[string]map[string]interface{})
+	for _, xrd := range w.XRDs {
+		for _, v := range xrd.Versions {
+			if v.Referenceable && v.SchemaDigest != "" {
+				if si, ok := w.Schemas[v.SchemaDigest]; ok {
+					xrdSchemaMap[xrd.Group+"/"+xrd.Kind] = si.Schema
+				}
+			}
+		}
+	}
+	crdSchemaMap := make(map[string]map[string]interface{})
+	for _, crd := range w.CRDs {
+		for _, v := range crd.Versions {
+			if v.Storage && v.SchemaDigest != "" {
+				if si, ok := w.Schemas[v.SchemaDigest]; ok {
+					crdSchemaMap[crd.Group+"/"+crd.Kind] = si.Schema
+				}
+			}
+		}
+	}
+
+	for ci, comp := range w.Compositions {
+		xrdKey := comp.CompositeTypeRef.Group + "/" + comp.CompositeTypeRef.Kind
+		xrdSchema := xrdSchemaMap[xrdKey]
+		for ri, res := range comp.Resources {
+			crdKey := ""
+			if parts := strings.SplitN(res.Base.APIVersion, "/", 2); len(parts) == 2 {
+				crdKey = parts[0] + "/" + res.Base.Kind
+			}
+			crdSchema := crdSchemaMap[crdKey]
+			for pi, patch := range res.Patches {
+				if patch.FromFieldPath == "" || patch.ToFieldPath == "" {
+					continue
+				}
+				fromType := "unknown"
+				toType := "unknown"
+				if xrdSchema != nil {
+					ft := schemas.ResolveFieldType(xrdSchema, patch.FromFieldPath)
+					if ft != schemas.FieldTypeUnknown {
+						fromType = string(ft)
+					}
+				}
+				if crdSchema != nil {
+					tt := schemas.ResolveFieldType(crdSchema, patch.ToFieldPath)
+					if tt != schemas.FieldTypeUnknown {
+						toType = string(tt)
+					}
+				}
+				// Store resolved types in Transforms metadata for kernel use
+				w.Compositions[ci].Resources[ri].Patches[pi].Transforms = append(
+					w.Compositions[ci].Resources[ri].Patches[pi].Transforms,
+					types.TransformInfo{Type: "__resolved_types", Convert: fromType + "→" + toType},
+				)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// World → Shen value
+// ---------------------------------------------------------------------------
+
+func worldToShenValue(w *types.World) shen.Value {
+	sections := []shen.Value{shen.Sym("world")}
 
 	// CRDs
-	sb.WriteString("  (crds\n")
+	var crds []shen.Value
 	for _, crd := range w.CRDs {
-		sb.WriteString(fmt.Sprintf("    (crd-fact %q %q %q (",
-			crd.Group, crd.Kind, crd.Scope))
-		for i, v := range crd.Versions {
-			if i > 0 {
-				sb.WriteString(" ")
-			}
-			sb.WriteString(fmt.Sprintf("(%q %t %t %q)",
-				v.Name, v.Served, v.Storage, v.SchemaDigest))
-		}
-		sb.WriteString(fmt.Sprintf(") (%q %s %q) (source %q %d))\n",
-			crd.Conversion.Strategy, strings.ToLower(string(crd.Conversion.CostClass)),
-			crd.Conversion.WebhookService,
-			crd.Source.File, crd.Source.Line))
+		crds = append(crds, crdToValue(crd))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("crds")}, crds...)))
 
 	// XRDs
-	sb.WriteString("  (xrds\n")
+	var xrds []shen.Value
 	for _, xrd := range w.XRDs {
-		sb.WriteString(fmt.Sprintf("    (xrd-fact %q %q %q %q (",
-			xrd.Group, xrd.Kind, xrd.Scope, xrd.APIVersion))
-		for i, v := range xrd.Versions {
-			if i > 0 {
-				sb.WriteString(" ")
-			}
-			sb.WriteString(fmt.Sprintf("(%q %t %t %q)",
-				v.Name, v.Served, v.Referenceable, v.SchemaDigest))
-		}
-		sb.WriteString(fmt.Sprintf(") (source %q %d))\n",
-			xrd.Source.File, xrd.Source.Line))
+		xrds = append(xrds, xrdToValue(xrd))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("xrds")}, xrds...)))
 
 	// Compositions
-	sb.WriteString("  (compositions\n")
+	var comps []shen.Value
 	for _, comp := range w.Compositions {
-		sb.WriteString(fmt.Sprintf("    (composition-fact %q (gvk %q %q %q) %q (",
-			comp.Name,
-			comp.CompositeTypeRef.Group, comp.CompositeTypeRef.Version,
-			comp.CompositeTypeRef.Kind,
-			comp.Mode))
-		for i, step := range comp.Pipeline {
-			if i > 0 {
-				sb.WriteString(" ")
-			}
-			sb.WriteString(fmt.Sprintf("(%q %q %q %q)",
-				step.Name, step.FunctionRef, step.InputAPIVersion, step.InputKind))
-		}
-		sb.WriteString(fmt.Sprintf(") (source %q %d))\n",
-			comp.Source.File, comp.Source.Line))
+		comps = append(comps, compositionToValue(comp))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("compositions")}, comps...)))
 
 	// Functions
-	sb.WriteString("  (functions\n")
+	var fns []shen.Value
 	for _, fn := range w.Functions {
-		sb.WriteString(fmt.Sprintf("    (function-fact %q %q (", fn.Name, fn.Package))
-		for i, v := range fn.InputVersions {
-			if i > 0 {
-				sb.WriteString(" ")
-			}
-			sb.WriteString(fmt.Sprintf("%q", v))
-		}
-		sb.WriteString(fmt.Sprintf(") (source %q %d))\n",
-			fn.Source.File, fn.Source.Line))
+		fns = append(fns, functionToValue(fn))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("functions")}, fns...)))
 
 	// Providers
-	sb.WriteString("  (providers\n")
-	for _, prov := range w.Providers {
-		sb.WriteString(fmt.Sprintf("    (provider-fact %q %q (source %q %d))\n",
-			prov.Name, prov.Package, prov.Source.File, prov.Source.Line))
+	var provs []shen.Value
+	for _, p := range w.Providers {
+		provs = append(provs, providerToValue(p))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("providers")}, provs...)))
 
 	// Configurations
-	sb.WriteString("  (configurations\n")
-	for _, cfg := range w.Configurations {
-		sb.WriteString(fmt.Sprintf("    (configuration-fact %q %q (source %q %d))\n",
-			cfg.Name, cfg.Package, cfg.Source.File, cfg.Source.Line))
+	var cfgs []shen.Value
+	for _, c := range w.Configurations {
+		cfgs = append(cfgs, configToValue(c))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("configurations")}, cfgs...)))
 
 	// Resources
-	sb.WriteString("  (resources\n")
+	var ress []shen.Value
 	for _, res := range w.Resources {
-		sb.WriteString(fmt.Sprintf("    (resource-fact %q %q %q %q (",
-			res.APIVersion, res.Kind, res.Name, res.Namespace))
-		for k, v := range res.Annotations {
-			sb.WriteString(fmt.Sprintf("(%q %q) ", k, v))
-		}
-		sb.WriteString(fmt.Sprintf(") (source %q %d))\n",
-			res.Source.File, res.Source.Line))
+		ress = append(ress, resourceToValue(res))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("resources")}, ress...)))
 
 	// Argo Apps
-	sb.WriteString("  (argo-apps\n")
+	var apps []shen.Value
 	for _, app := range w.ArgoApps {
-		sb.WriteString(fmt.Sprintf("    (argo-app-fact %q %q (",
-			app.Name, app.TrackingMode))
-		for _, sw := range app.SyncWaves {
-			sb.WriteString(fmt.Sprintf("(%q %q %d) ", sw.Kind, sw.Name, sw.Wave))
-		}
-		sb.WriteString(fmt.Sprintf(") (source %q %d))\n",
-			app.Source.File, app.Source.Line))
+		apps = append(apps, argoAppToValue(app))
 	}
-	sb.WriteString("  )\n")
+	sections = append(sections, shen.FromSlice(append([]shen.Value{shen.Sym("argo-apps")}, apps...)))
 
 	// Schemas
-	sb.WriteString("  (schemas)\n")
-	sb.WriteString(")\n")
+	sections = append(sections, shen.FromSlice([]shen.Value{shen.Sym("schemas")}))
 
-	return sb.String()
+	return shen.FromSlice(sections)
 }
 
-func escapeShen(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
+func crdToValue(crd types.CRDInfo) shen.Value {
+	// [crd-fact Group Kind Scope Versions Conversion Source]
+	var vers []shen.Value
+	for _, v := range crd.Versions {
+		vers = append(vers, shen.FromSlice([]shen.Value{
+			shen.Str(v.Name),
+			shen.Bool(v.Served),
+			shen.Bool(v.Storage),
+			shen.Str(v.SchemaDigest),
+		}))
+	}
+	costSym := shen.Sym(strings.ToLower(string(crd.Conversion.CostClass)))
+	conv := shen.FromSlice([]shen.Value{
+		shen.Str(crd.Conversion.Strategy),
+		costSym,
+		shen.Str(crd.Conversion.WebhookService),
+	})
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("crd-fact"),
+		shen.Str(crd.Group),
+		shen.Str(crd.Kind),
+		shen.Str(crd.Scope),
+		shen.FromSlice(vers),
+		conv,
+		sourceToValue(crd.Source),
+	})
 }
 
-// parseShenJudgments parses the Shen kernel's stdout output.
-func parseShenJudgments(output string) ([]types.Diagnostic, error) {
-	// The Shen kernel outputs:
-	// (judgments (judgment Code Sev (source File Line) Msg Detail Fix Related) ...)
-	// For now, parse it loosely. A more robust parser would use a proper s-expr parser.
-	var diags []types.Diagnostic
+func xrdToValue(xrd types.CRDInfo) shen.Value {
+	// [xrd-fact Group Kind Scope APIVersion Versions Source]
+	var vers []shen.Value
+	for _, v := range xrd.Versions {
+		vers = append(vers, shen.FromSlice([]shen.Value{
+			shen.Str(v.Name),
+			shen.Bool(v.Served),
+			shen.Bool(v.Referenceable),
+			shen.Str(v.SchemaDigest),
+		}))
+	}
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("xrd-fact"),
+		shen.Str(xrd.Group),
+		shen.Str(xrd.Kind),
+		shen.Str(xrd.Scope),
+		shen.Str(xrd.APIVersion),
+		shen.FromSlice(vers),
+		sourceToValue(xrd.Source),
+	})
+}
 
-	// Split by "(judgment " and parse each
-	parts := strings.Split(output, "(judgment ")
-	for _, part := range parts[1:] { // skip first empty part
-		diag, err := parseSingleJudgment(part)
-		if err != nil {
-			continue // skip malformed judgments
-		}
-		diags = append(diags, diag)
+func compositionToValue(comp types.CompositionInfo) shen.Value {
+	// [composition-fact Name GVK Mode Pipeline Resources Source]
+	gvk := shen.FromSlice([]shen.Value{
+		shen.Sym("gvk"),
+		shen.Str(comp.CompositeTypeRef.Group),
+		shen.Str(comp.CompositeTypeRef.Version),
+		shen.Str(comp.CompositeTypeRef.Kind),
+	})
+
+	var steps []shen.Value
+	for _, step := range comp.Pipeline {
+		steps = append(steps, shen.FromSlice([]shen.Value{
+			shen.Str(step.Name),
+			shen.Str(step.FunctionRef),
+			shen.Str(step.InputAPIVersion),
+			shen.Str(step.InputKind),
+		}))
 	}
 
-	return diags, nil
-}
-
-func parseSingleJudgment(s string) (types.Diagnostic, error) {
-	// Very simplified parser — in production, use a proper s-expr parser
-	// Format: Code Sev (source File Line) Msg Detail Fix Related)
-	var d types.Diagnostic
-	// Extract quoted strings
-	quotes := extractQuoted(s)
-	if len(quotes) < 4 {
-		return d, fmt.Errorf("too few fields in judgment")
-	}
-
-	d.Code = quotes[0]
-	d.Message = quotes[1]
-	d.Detail = quotes[2]
-	d.Fix = quotes[3]
-
-	if strings.Contains(s, "error") {
-		d.Severity = types.SeverityError
-	} else if strings.Contains(s, "warn") {
-		d.Severity = types.SeverityWarning
-	} else {
-		d.Severity = types.SeverityInfo
-	}
-
-	return d, nil
-}
-
-func extractQuoted(s string) []string {
-	var results []string
-	inQuote := false
-	var current strings.Builder
-	escaped := false
-
-	for _, r := range s {
-		if escaped {
-			current.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' && inQuote {
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			if inQuote {
-				results = append(results, current.String())
-				current.Reset()
+	var resources []shen.Value
+	for _, res := range comp.Resources {
+		var patches []shen.Value
+		for _, p := range res.Patches {
+			fromType := shen.Str("unknown")
+			toType := shen.Str("unknown")
+			for _, t := range p.Transforms {
+				if t.Type == "__resolved_types" {
+					parts := strings.SplitN(t.Convert, "→", 2)
+					if len(parts) == 2 {
+						fromType = shen.Str(parts[0])
+						toType = shen.Str(parts[1])
+					}
+				}
 			}
-			inQuote = !inQuote
+			patches = append(patches, shen.FromSlice([]shen.Value{
+				shen.Sym("patch"),
+				shen.Str(p.Type),
+				shen.Str(p.FromFieldPath),
+				shen.Str(p.ToFieldPath),
+				fromType,
+				toType,
+			}))
+		}
+		resources = append(resources, shen.FromSlice([]shen.Value{
+			shen.Sym("composed-resource"),
+			shen.Str(res.Name),
+			shen.Str(res.Base.APIVersion),
+			shen.Str(res.Base.Kind),
+			shen.FromSlice(patches),
+		}))
+	}
+
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("composition-fact"),
+		shen.Str(comp.Name),
+		gvk,
+		shen.Str(comp.Mode),
+		shen.FromSlice(steps),
+		shen.FromSlice(resources),
+		sourceToValue(comp.Source),
+	})
+}
+
+func functionToValue(fn types.FunctionInfo) shen.Value {
+	var vers []shen.Value
+	for _, v := range fn.InputVersions {
+		vers = append(vers, shen.Str(v))
+	}
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("function-fact"),
+		shen.Str(fn.Name),
+		shen.Str(fn.Package),
+		shen.FromSlice(vers),
+		sourceToValue(fn.Source),
+	})
+}
+
+func providerToValue(p types.ProviderInfo) shen.Value {
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("provider-fact"),
+		shen.Str(p.Name),
+		shen.Str(p.Package),
+		sourceToValue(p.Source),
+	})
+}
+
+func configToValue(c types.ConfigurationInfo) shen.Value {
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("configuration-fact"),
+		shen.Str(c.Name),
+		shen.Str(c.Package),
+		sourceToValue(c.Source),
+	})
+}
+
+func resourceToValue(res types.ResourceInfo) shen.Value {
+	var anns []shen.Value
+	for k, v := range res.Annotations {
+		anns = append(anns, shen.FromSlice([]shen.Value{shen.Str(k), shen.Str(v)}))
+	}
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("resource-fact"),
+		shen.Str(res.APIVersion),
+		shen.Str(res.Kind),
+		shen.Str(res.Name),
+		shen.Str(res.Namespace),
+		shen.FromSlice(anns),
+		sourceToValue(res.Source),
+	})
+}
+
+func argoAppToValue(app types.ArgoApplication) shen.Value {
+	var waves []shen.Value
+	for _, sw := range app.SyncWaves {
+		waves = append(waves, shen.FromSlice([]shen.Value{
+			shen.Str(sw.Kind),
+			shen.Str(sw.Name),
+			shen.Num(float64(sw.Wave)),
+		}))
+	}
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("argo-app-fact"),
+		shen.Str(app.Name),
+		shen.Str(app.TrackingMode),
+		shen.FromSlice(waves),
+		sourceToValue(app.Source),
+	})
+}
+
+func sourceToValue(src types.SourceLocation) shen.Value {
+	return shen.FromSlice([]shen.Value{
+		shen.Sym("source"),
+		shen.Str(src.File),
+		shen.Num(float64(src.Line)),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Shen result → Diagnostics
+// ---------------------------------------------------------------------------
+
+func valueToDiagnostics(result shen.Value) []types.Diagnostic {
+	var diags []types.Diagnostic
+	elems := shen.ToSlice(result)
+	for _, elem := range elems {
+		parts := shen.ToSlice(elem)
+		if len(parts) < 8 {
 			continue
 		}
-		if inQuote {
-			current.WriteRune(r)
+		// [judgment Code Severity Source Message Detail Fix Related]
+		if s, ok := parts[0].(shen.Sym); !ok || string(s) != "judgment" {
+			continue
+		}
+
+		code := shenStr(parts[1])
+		sev := parseSeverity(parts[2])
+		src := parseSource(parts[3])
+		msg := shenStr(parts[4])
+		detail := shenStr(parts[5])
+		fix := shenStr(parts[6])
+		related := parseRelated(parts[7])
+
+		diags = append(diags, types.Diagnostic{
+			Code:     code,
+			Severity: sev,
+			Source:   src,
+			Message:  msg,
+			Detail:   detail,
+			Fix:      fix,
+			Related:  related,
+		})
+	}
+	return diags
+}
+
+func parseSeverity(v shen.Value) types.Severity {
+	switch s := v.(type) {
+	case shen.Sym:
+		switch string(s) {
+		case "error":
+			return types.SeverityError
+		case "warn":
+			return types.SeverityWarning
+		case "info":
+			return types.SeverityInfo
 		}
 	}
-	return results
+	return types.SeverityError
+}
+
+func parseSource(v shen.Value) types.SourceLocation {
+	parts := shen.ToSlice(v)
+	if len(parts) < 3 {
+		return types.SourceLocation{}
+	}
+	return types.SourceLocation{
+		File: shenStr(parts[1]),
+		Line: shenInt(parts[2]),
+	}
+}
+
+func parseRelated(v shen.Value) []types.SourceLocation {
+	elems := shen.ToSlice(v)
+	var result []types.SourceLocation
+	for _, e := range elems {
+		result = append(result, parseSource(e))
+	}
+	return result
+}
+
+func shenStr(v shen.Value) string {
+	switch s := v.(type) {
+	case shen.Str:
+		return string(s)
+	case shen.Sym:
+		return string(s)
+	default:
+		return shen.PrintValue(v)
+	}
+}
+
+func shenInt(v shen.Value) int {
+	if n, ok := v.(shen.Num); ok {
+		return int(n)
+	}
+	return 0
 }

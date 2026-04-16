@@ -60,7 +60,7 @@
 
 (define check-r6b-for-composition
   {(list A) --> (list (list A)) --> (list (list A)) --> source-loc --> (list judgment)}
-  [composition-fact CompName _ _ Pipeline CompSrc] SyncWaves Functions AppSrc ->
+  [composition-fact CompName _ _ Pipeline _ CompSrc] SyncWaves Functions AppSrc ->
     (let CompWave (find-wave "Composition" CompName SyncWaves)
          FnRefs (extract-fn-refs Pipeline)
       (flatten (map (/. FnRef
@@ -89,7 +89,7 @@
 
 (define check-r6d-for-composition
   {(list A) --> (list (list A)) --> source-loc --> (list judgment)}
-  [composition-fact CompName [gvk Group Version Kind] _ _ CompSrc] SyncWaves AppSrc ->
+  [composition-fact CompName [gvk Group Version Kind] _ _ _ CompSrc] SyncWaves AppSrc ->
     (let CompWave (find-wave "Composition" CompName SyncWaves)
          XrEntries (filter (/. SW (sync-wave-kind-matches? SW Kind)) SyncWaves)
       (flatten (map (/. XrEntry
