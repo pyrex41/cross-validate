@@ -45,17 +45,12 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 		return
 	}
 
-	if saName, ok := podSpec["serviceAccountName"].(string); ok && saName != "" {
-		w.SARefs = append(w.SARefs, types.SARef{
-			OwnerKind:      owner.Kind,
-			OwnerName:      owner.Name,
-			OwnerNamespace: owner.Namespace,
-			SAName:         saName,
-			SANamespace:    owner.Namespace,
-			Source:         owner.Source,
-		})
-	} else if saName, ok := podSpec["serviceAccount"].(string); ok && saName != "" {
-		// Deprecated alias, but still honored.
+	// serviceAccount is the deprecated alias for serviceAccountName; honor either.
+	saName, _ := podSpec["serviceAccountName"].(string)
+	if saName == "" {
+		saName, _ = podSpec["serviceAccount"].(string)
+	}
+	if saName != "" {
 		w.SARefs = append(w.SARefs, types.SARef{
 			OwnerKind:      owner.Kind,
 			OwnerName:      owner.Name,
@@ -248,26 +243,12 @@ func extractRBACRules(w *types.World, res types.ResourceInfo) {
 			OwnerKind:      res.Kind,
 			OwnerName:      res.Name,
 			OwnerNamespace: res.Namespace,
-			APIGroups:      toStringSlice(getSlice(rm, "apiGroups")),
-			Resources:      toStringSlice(getSlice(rm, "resources")),
-			Verbs:          toStringSlice(getSlice(rm, "verbs")),
-			ResourceNames:  toStringSlice(getSlice(rm, "resourceNames")),
+			APIGroups:      getStringSlice(rm, "apiGroups"),
+			Resources:      getStringSlice(rm, "resources"),
+			Verbs:          getStringSlice(rm, "verbs"),
+			ResourceNames:  getStringSlice(rm, "resourceNames"),
 			Source:         res.Source,
 		}
 		w.RBACRules = append(w.RBACRules, rule)
 	}
 }
-
-func toStringSlice(items []interface{}) []string {
-	if items == nil {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, v := range items {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-

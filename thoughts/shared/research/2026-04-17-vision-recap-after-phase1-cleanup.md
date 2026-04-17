@@ -65,7 +65,7 @@ State at this point: dual implementation. Shen is canonical for production; Go r
 
 State at this point: triple implementation on disk. Production `Check()` routes through the obligation framework. The Shen kernel files (`kernel/*.shen` and `pkg/shen`) are still in the repo but no longer loaded. The legacy Go functions in `pkg/checker/rules.go` are still in the repo but only exercised by unit tests.
 
-This is the state thoroughly documented in `thoughts/shared/research/2026-04-16-project-review-pr3.md`.
+This pre-cleanup state is recorded in the commits `9cd1765` and `91becc0`.
 
 ### Phase 3 — Shen reasserted as the spec (current branch `claude/phase1-cleanup`)
 
@@ -185,7 +185,7 @@ cross-validate/
 │
 ├── skills/                       LLM agent playbooks (xpc-edit, xpc-commit, xpc-review)
 ├── testdata/fixtures/            R-trigger fixtures: basic, webhook-conversion, patch-mismatch, wave-ordering
-└── thoughts/shared/research/     research docs (this one + 2026-04-16-project-review-pr3.md)
+└── thoughts/shared/research/     research docs (this one + 2026-04-17-full-codebase-review.md)
 ```
 
 What used to be there but is being removed (working tree of this branch):
@@ -317,7 +317,6 @@ Codes outside this table return `nil` from `obligationRefForCode` — i.e. the d
 - [`pkg/types/types.go`](pkg/types/types.go) — IR types including `Diagnostic.Obligation *ObligationRef`
 - [`go.mod`](go.mod) — `require github.com/tiancaiamao/shen-go v0.0.0-20251114030759-7a6a67ac131d`
 - [`cmd/xpc/main.go`](cmd/xpc/main.go) — CLI surface (the `pkg/obligation/*` blank imports were removed in this branch's working tree)
-- [`thoughts/shared/research/2026-04-16-project-review-pr3.md`](thoughts/shared/research/2026-04-16-project-review-pr3.md) — the prior, deeply-detailed PR #3 review (pre-`phase1-cleanup`)
 
 ---
 
@@ -333,15 +332,9 @@ Codes outside this table return `nil` from `obligationRefForCode` — i.e. the d
 
 ---
 
-## Historical Context (from thoughts/)
-
-- [`thoughts/shared/research/2026-04-16-project-review-pr3.md`](thoughts/shared/research/2026-04-16-project-review-pr3.md) — extremely detailed Phase 0 + Phase 2 documentation. Most of "Part 1 — Project As-Is (base branch)" still holds; the section "Part 2 — Review of PR #3" describes the obligation framework that is now being torn out. Use this doc to understand what PR #3 *did* and what trade-offs it introduced; use the present document to understand why the team backed out of it.
-
----
-
 ## Related Research
 
-- `thoughts/shared/research/2026-04-16-project-review-pr3.md` — predecessor, written one day before this one, while the obligation framework was still the canonical Go-side rule implementation.
+- [`thoughts/shared/research/2026-04-17-full-codebase-review.md`](2026-04-17-full-codebase-review.md) — post-pivot snapshot of the full codebase with ADR-002 and the trajectory simulator in place.
 
 ---
 

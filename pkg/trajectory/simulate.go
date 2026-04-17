@@ -10,21 +10,19 @@ import (
 // Simulate produces the full trajectory for a World, one slice of Steps per
 // Argo Application, ordered by (AppName, Wave).
 //
-// The current algorithm:
+// Algorithm:
 //  1. Each ArgoApplication scopes to its Destination.Namespace (if set);
 //     otherwise all resources in the world are considered in scope.
 //  2. Resources are grouped by their sync-wave annotation (default 0). A
 //     resource whose hook-delete-policy annotation is HookSucceeded or
 //     HookFailed is marked for deletion at the end of its own wave.
-//  3. PruneLast=true promotes pruned deletions to an extra step at
-//     max(wave)+1; without it, no extra step is emitted.
-//  4. State at step N is the cumulative cluster contents after the N-th
+//  3. State at step N is the cumulative cluster contents after the N-th
 //     wave has been applied and its hook-deletions processed.
-//  5. Delta.Updated is always empty in this phase — the simulator consumes
-//     a single snapshot per resource, so there is nothing to diff.
+//  4. Delta.Updated is always nil: the simulator consumes a single snapshot
+//     per resource, so there is nothing to diff.
 //
-// The algorithm is deterministic: slices are sorted by (AppName, Wave)
-// and ResourceKeys are sorted lexically within each delta.
+// Output is deterministic: steps sort by (AppName, Wave) and ResourceKeys
+// sort lexically within each delta.
 func Simulate(w *types.World) []Step {
 	if w == nil {
 		return nil
@@ -59,12 +57,6 @@ func simulateApp(app types.ArgoApplication, resources []types.ResourceInfo) []St
 		}
 	}
 
-	// PruneLast promotes in-scope resources that are *not* hook-deleted into
-	// an extra deletion-only step at max(wave)+1. The plan's semantics are
-	// conservative: without a second snapshot we don't know what the cluster
-	// had before, so PruneLast-marked deletions live in the out-of-scope
-	// extension ticket. Track max(wave) for the eventual extension; for now
-	// we only emit the bucketed waves above.
 	var sorted []int
 	for w := range waves {
 		sorted = append(sorted, w)

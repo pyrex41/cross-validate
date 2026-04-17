@@ -171,8 +171,6 @@ type ArgoApplication struct {
 	SyncWaves    []SyncWaveEntry     `json:"syncWaves"`
 	Source       SourceLocation      `json:"source"`
 
-	// --- Phase 1 extensions ---
-
 	// Project is the AppProject this Application belongs to (spec.project).
 	// Empty string means "default".
 	Project string `json:"project,omitempty"`

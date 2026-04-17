@@ -37,28 +37,6 @@
   _ _ _ -> [])
 
 
-\* Extract deleted resource-key entries from a (delta (created ...) (updated ...) (deleted ...)) form. *\
-(define delta-deleted-keys
-  {(list A) --> (list (list A))}
-  [delta _ _ [deleted | Keys]] -> Keys
-  _ -> [])
-
-
-\* Extract state resource-key entries from a (state ...) section. *\
-(define state-keys
-  {(list A) --> (list (list A))}
-  [state | Keys] -> Keys
-  _ -> [])
-
-
-\* key-in? — does (resource-key _ Kind Ns Name) appear in the list of keys? *\
-(define key-in?
-  {string --> string --> string --> (list (list A)) --> boolean}
-  _ _ _ [] -> false
-  Kind Name Ns [[resource-key _ Kind Ns Name] | _] -> true
-  Kind Name Ns [_ | Rest] -> (key-in? Kind Name Ns Rest))
-
-
 \* Top-level R12 check *\
 (define check-r12
   {(list (list A)) --> (list (list A)) --> (list judgment)}

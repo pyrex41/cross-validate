@@ -140,8 +140,6 @@ func Check(w *types.World, cfg Config) ([]types.Diagnostic, error) {
 }
 
 // CheckWithObligations runs the Shen kernel and returns a RunResult.
-// The shape of RunResult is preserved from the (deleted) obligation-framework
-// output so callers don't need to change.
 func CheckWithObligations(w *types.World, cfg Config) RunResult {
 	if err := initShen(cfg.KernelPath); err != nil {
 		return RunResult{Diagnostics: []types.Diagnostic{{
@@ -155,7 +153,7 @@ func CheckWithObligations(w *types.World, cfg Config) RunResult {
 	resolvePatchTypes(w)
 	trajectories := trajectory.Simulate(w)
 
-	worldObj := worldToShenObj(w, cfg.StrictConversions, trajectories)
+	worldObj := worldToShenObj(w, trajectories)
 	checkWorld := kl.PrimFunc(kl.MakeSymbol("check-world"))
 	result := kl.Call(&shenCF, checkWorld, worldObj)
 	if kl.IsError(result) {
@@ -171,7 +169,7 @@ func CheckWithObligations(w *types.World, cfg Config) RunResult {
 }
 
 // ---------------------------------------------------------------------------
-// World enrichment (restored verbatim from git show 94ab3fb:pkg/checker/bridge.go)
+// World enrichment
 // ---------------------------------------------------------------------------
 
 // enrichSyncWaves adds sync wave entries derived from resource annotations
@@ -326,7 +324,7 @@ func section(tag string, facts []kl.Obj) kl.Obj {
 	return makeList(append([]kl.Obj{sym(tag)}, facts...))
 }
 
-func worldToShenObj(w *types.World, _strict bool, trajectories []trajectory.Step) kl.Obj {
+func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 	// Copy and sort each slice so the serialized world is deterministic.
 
 	crds := append([]types.CRDInfo(nil), w.CRDs...)
@@ -402,9 +400,8 @@ func worldToShenObj(w *types.World, _strict bool, trajectories []trajectory.Step
 		appObjs = append(appObjs, argoAppToObj(a))
 	}
 
-	// Pre-compute resolved patch facts so Shen R5 can do type-assignability
-	// checks without needing schema-walking primitives. The resolvePatchTypes
-	// pass above stamped __resolved_types onto each patch's Transforms.
+	// Resolved patch facts let Shen R5 do type-assignability checks without
+	// needing schema-walking primitives.
 	var patchObjs []kl.Obj
 	for _, c := range comps {
 		for _, res := range c.Resources {
@@ -837,9 +834,8 @@ func objToDiagnostics(o kl.Obj) []types.Diagnostic {
 	return diags
 }
 
-// obligationRefForCode maps an XPC code to its obligation provenance, derived
-// from the (now-being-deleted) Go obligation framework's Generator/Category
-// fields. Codes outside the table return nil — legacy/unclassified diagnostics.
+// obligationRefForCode maps an XPC code to its (Category, Generator) provenance.
+// Codes outside the table return nil — legacy/unclassified diagnostics.
 func obligationRefForCode(code string) *types.ObligationRef {
 	type entry struct {
 		category, generator string

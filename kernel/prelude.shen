@@ -1,15 +1,5 @@
 \* prelude.shen — shared datatypes and helper predicates for the xpc kernel *\
 
-\* ===== Datatypes =====
-   Phase 3a: the datatype declaration is disabled because shen-go's parser
-   rejects constant rules with no hypothesis above the line. The declarations
-   were documentation + type-check metadata; none of them are required at
-   runtime. Phase 3b will restore them (possibly in a parser-friendly form).
-
-(datatype xpc-types
-  ...)
-*\
-
 
 \* ===== World database — asserted by the IR loader ===== *\
 
@@ -181,3 +171,37 @@
 (define less-than?
   {number --> number --> boolean}
   X Y -> (< X Y))
+
+
+\* ===== Trajectory-section accessors =====
+   Every trajectory-facing rule (R12/R13/R14) reads resource keys out of a
+   (delta (created ...) (updated ...) (deleted ...)) form and a (state ...)
+   section. Keep the accessors here so load-order between rule files does
+   not matter. *\
+
+(define delta-created-keys
+  {(list A) --> (list (list A))}
+  [delta [created | Keys] _ _] -> Keys
+  _ -> [])
+
+(define delta-updated-keys
+  {(list A) --> (list (list A))}
+  [delta _ [updated | Keys] _] -> Keys
+  _ -> [])
+
+(define delta-deleted-keys
+  {(list A) --> (list (list A))}
+  [delta _ _ [deleted | Keys]] -> Keys
+  _ -> [])
+
+(define state-keys
+  {(list A) --> (list (list A))}
+  [state | Keys] -> Keys
+  _ -> [])
+
+\* key-in? — does (resource-key _ Kind Ns Name) appear in the list of keys? *\
+(define key-in?
+  {string --> string --> string --> (list (list A)) --> boolean}
+  _ _ _ [] -> false
+  Kind Name Ns [[resource-key _ Kind Ns Name] | _] -> true
+  Kind Name Ns [_ | Rest] -> (key-in? Kind Name Ns Rest))

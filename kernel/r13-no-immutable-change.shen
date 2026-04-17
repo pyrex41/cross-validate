@@ -1,11 +1,8 @@
-\* r13-no-immutable-change.shen — XPC013 no-immutable-change (framework only)
+\* r13-no-immutable-change.shen — XPC013 no-immutable-change
 
    Emits a diagnostic when a resource in a step's Updated set has a
-   field path listed in the immutable-fields registry. In the current
-   phase the trajectory simulator does not detect updates (every
-   Delta.Updated is empty), so this rule is framework-only and always
-   returns no judgments on real input. A follow-up ticket will
-   populate Delta.Updated and this rule will fire without changes. *\
+   field path listed in the immutable-fields registry. Dormant until the
+   trajectory simulator starts populating Delta.Updated. *\
 
 
 (define check-r13-step
@@ -14,12 +11,6 @@
     (let Updated (delta-updated-keys Delta)
       (flatten (map (/. K (check-r13-key K ImmutableFields)) Updated)))
   _ _ -> [])
-
-
-(define delta-updated-keys
-  {(list A) --> (list (list A))}
-  [delta _ [updated | Keys] _] -> Keys
-  _ -> [])
 
 
 (define check-r13-key
