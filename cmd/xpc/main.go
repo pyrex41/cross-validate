@@ -84,8 +84,7 @@ Check flags:
   --strict-conversions Refuse webhook conversions entirely
   --proof              Generate a proof file alongside the check
   --snapshot=<path>    Use a specific snapshot file
-  --shen=<path>        Path to shen-cl binary (uses built-in Go checker if absent)
-  --kernel=<path>      Path to kernel directory (default: embedded)
+  --kernel=<path>      Path to kernel directory (default: auto-detected)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -120,7 +119,6 @@ Examples:
 func runCheck(args []string) int {
 	format := report.FormatAgent
 	strictConversions := false
-	shenBinary := ""
 	kernelPath := ""
 	generateProof := false
 	snapshotPath := ""
@@ -134,8 +132,6 @@ func runCheck(args []string) int {
 			generateProof = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
-		case len(arg) > 7 && arg[:7] == "--shen=":
-			shenBinary = arg[7:]
 		case len(arg) > 9 && arg[:9] == "--kernel=":
 			kernelPath = arg[9:]
 		case len(arg) > 11 && arg[:11] == "--snapshot=":
@@ -220,7 +216,6 @@ func runCheck(args []string) int {
 	// Run checker
 	cfg := checker.Config{
 		KernelPath:        kernelPath,
-		ShenBinary:        shenBinary,
 		StrictConversions: strictConversions,
 	}
 

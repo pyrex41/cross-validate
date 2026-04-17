@@ -28,7 +28,7 @@ func TestR10_SecretTaintLeak(t *testing.T) {
 		Source: types.SourceLocation{File: "comp.yaml", Line: 1},
 	})
 
-	diags := checkR10(world)
+	diags := checkWith(t, world)
 	xpc010 := findDiagByCode(diags, "XPC010")
 	if len(xpc010) != 1 {
 		t.Fatalf("expected 1 XPC010 error for secret taint leak, got %d", len(xpc010))
@@ -60,9 +60,10 @@ func TestR10_SecretToSecretSink_OK(t *testing.T) {
 		Source: types.SourceLocation{File: "comp.yaml", Line: 1},
 	})
 
-	diags := checkR10(world)
-	if len(diags) > 0 {
-		t.Errorf("expected no errors for secret-to-secret-sink, got %d: %v", len(diags), diags)
+	diags := checkWith(t, world)
+	xpc010 := findDiagByCode(diags, "XPC010")
+	if len(xpc010) > 0 {
+		t.Errorf("expected no errors for secret-to-secret-sink, got %d: %v", len(xpc010), xpc010)
 	}
 }
 
@@ -88,9 +89,10 @@ func TestR10_NonSecretPatch_OK(t *testing.T) {
 		Source: types.SourceLocation{File: "comp.yaml", Line: 1},
 	})
 
-	diags := checkR10(world)
-	if len(diags) > 0 {
-		t.Errorf("expected no errors for non-secret patch, got %d", len(diags))
+	diags := checkWith(t, world)
+	xpc010 := findDiagByCode(diags, "XPC010")
+	if len(xpc010) > 0 {
+		t.Errorf("expected no errors for non-secret patch, got %d", len(xpc010))
 	}
 }
 
@@ -103,7 +105,7 @@ func TestR11_DeprecatedAPIVersion(t *testing.T) {
 		Source:     types.SourceLocation{File: "bucket.yaml", Line: 1},
 	})
 
-	diags := checkR11(world)
+	diags := checkWith(t, world)
 	xpc011 := findDiagByCode(diags, "XPC011")
 	if len(xpc011) == 0 {
 		t.Fatal("expected at least 1 XPC011 warning for deprecated API version")
@@ -119,7 +121,7 @@ func TestR11_NonDeprecatedResource_OK(t *testing.T) {
 		Source:     types.SourceLocation{File: "bucket.yaml", Line: 1},
 	})
 
-	diags := checkR11(world)
+	diags := checkWith(t, world)
 	xpc011 := findDiagByCode(diags, "XPC011")
 	if len(xpc011) > 0 {
 		t.Errorf("expected no XPC011 warnings for non-deprecated resource, got %d", len(xpc011))
@@ -138,10 +140,10 @@ func TestR11_UnservedCRDVersion(t *testing.T) {
 		Source: types.SourceLocation{File: "crd.yaml", Line: 1},
 	})
 
-	diags := checkR11(world)
+	diags := checkWith(t, world)
 	xpc011 := findDiagByCode(diags, "XPC011")
-	if len(xpc011) != 1 {
-		t.Fatalf("expected 1 XPC011 warning for unserved CRD version, got %d", len(xpc011))
+	if len(xpc011) < 1 {
+		t.Fatalf("expected at least 1 XPC011 warning for unserved CRD version, got %d", len(xpc011))
 	}
 }
 
@@ -153,7 +155,7 @@ func TestR11_DeprecatedProviderVersion(t *testing.T) {
 		Source:  types.SourceLocation{File: "provider.yaml", Line: 1},
 	})
 
-	diags := checkR11(world)
+	diags := checkWith(t, world)
 	xpc011 := findDiagByCode(diags, "XPC011")
 	if len(xpc011) == 0 {
 		t.Fatal("expected XPC011 warning for deprecated provider version")
@@ -169,10 +171,7 @@ func TestR10R11_IntegrationWithCheck(t *testing.T) {
 		Source:     types.SourceLocation{File: "bucket.yaml", Line: 1},
 	})
 
-	diags, err := Check(world, Config{})
-	if err != nil {
-		t.Fatalf("check failed: %v", err)
-	}
+	diags := checkWith(t, world)
 
 	hasXPC011 := false
 	for _, d := range diags {

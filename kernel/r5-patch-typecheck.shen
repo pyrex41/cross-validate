@@ -7,7 +7,7 @@
 \* Check patches in a Composition against schemas *\
 (define check-r5-composition
   {(list A) --> (list (list A)) --> (list (list A)) --> (list judgment)}
-  [composition-fact Name [gvk Group Version Kind] Mode Pipeline Src] XRDs Schemas ->
+  [composition-fact Name [gvk Group Version Kind] Mode Pipeline _ Src] XRDs Schemas ->
     (let XrdSchema (find-xrd-schema Group Kind Version XRDs Schemas)
       (if (= XrdSchema [])
           [] \* can't typecheck without schema *\
@@ -98,11 +98,49 @@
       (cn "Step \"" (cn StepName (cn "\": field " (cn FromPath (cn " has type " (cn FromType
         (cn " but target field " (cn ToPath (cn " has type " (cn ToType
           ". These types are not compatible without an explicit transform."))))))))))
-      (cn "Add a transform (e.g., convert: { toType: " (cn ToType " }) to the patch.")
+      (cn "Add a transform (e.g., convert: { toType: " (cn ToType " }) to the patch."))
       []))
+
+\* ===== Resources mode checks ===== *\
+
+\* Check a single patch with pre-resolved field types *\
+(define check-r5-resolved-patch
+  {string --> source-loc --> (list A) --> (list judgment)}
+  CompName CompSrc [patch Type FromPath ToPath FromType ToType] ->
+    (if (or (= FromPath "") (= ToPath ""))
+        []
+        (if (or (= FromType "unknown") (= ToType "unknown"))
+            []
+            (if (type-assignable? FromType ToType)
+                []
+                [(make-error "XPC005"
+                  CompSrc
+                  (cn "patch type mismatch in Composition " (cn CompName ""))
+                  (cn "Field " (cn FromPath (cn " has type " (cn FromType
+                    (cn " but target field " (cn ToPath (cn " has type " (cn ToType
+                      ". These types are not compatible without an explicit transform."))))))))
+                  (cn "Add a transform (e.g., convert: { toType: " (cn ToType " }) to the patch."))
+                  [])])))
+  _ _ _ -> [])
+
+\* Check all patches in a composed resource *\
+(define check-r5-composed-resource
+  {string --> source-loc --> (list A) --> (list judgment)}
+  CompName CompSrc [composed-resource _ _ _ Patches] ->
+    (flatten (map (/. P (check-r5-resolved-patch CompName CompSrc P)) Patches))
+  _ _ _ -> [])
+
+\* Check a Composition's Resources mode patches *\
+(define check-r5-resources
+  {(list A) --> (list judgment)}
+  [composition-fact CompName _ _ _ Resources CompSrc] ->
+    (flatten (map (/. R (check-r5-composed-resource CompName CompSrc R)) Resources))
+  _ -> [])
 
 \* Top-level R5 check *\
 (define check-r5
   {(list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
   Compositions XRDs Schemas ->
-    (flatten (map (/. C (check-r5-composition C XRDs Schemas)) Compositions)))
+    (append
+      (flatten (map (/. C (check-r5-composition C XRDs Schemas)) Compositions))
+      (flatten (map (/. C (check-r5-resources C)) Compositions))))

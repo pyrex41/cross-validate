@@ -6,7 +6,7 @@
 \* Check a Composition's pipeline for required resource availability *\
 (define check-r9-composition
   {(list A) --> (list (list A)) --> (list judgment)}
-  [composition-fact CompName CTR _ Pipeline CompSrc] Resources ->
+  [composition-fact CompName CTR _ Pipeline _ CompSrc] Resources ->
     (flatten (map (/. Step (check-r9-step CompName CompSrc Step Pipeline Resources))
                   Pipeline))
   _ _ -> [])
