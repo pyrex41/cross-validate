@@ -22,9 +22,11 @@ type Delta struct {
 	Deleted []ResourceKey
 }
 
-// State is the synthesized cluster contents AT a step.
+// State is the synthesized cluster contents AT a step. Only keys are retained —
+// full ResourceInfo payload is already carried by the world's resources section,
+// so carrying it again here would duplicate memory with no reader.
 type State struct {
-	Resources map[ResourceKey]types.ResourceInfo
+	Resources map[ResourceKey]struct{}
 }
 
 // ResourceKey is the canonical (kind, namespace, name) tuple used as a

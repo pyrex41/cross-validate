@@ -750,9 +750,6 @@ func deltaToObj(d trajectory.Delta) kl.Obj {
 }
 
 func stepToObj(s trajectory.Step) kl.Obj {
-	// State carries just its resource keys — full ResourceInfo is already in
-	// the top-level (resources ...) section, so we avoid duplicating the
-	// payload. The Shen rules index by key and fetch the fact lazily.
 	var stateKeys []trajectory.ResourceKey
 	for k := range s.State.Resources {
 		stateKeys = append(stateKeys, k)

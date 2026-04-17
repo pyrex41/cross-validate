@@ -43,8 +43,8 @@ func TestBridge_TrajectorySerialization(t *testing.T) {
 			Created: []trajectory.ResourceKey{{APIVersion: "v1", Kind: "ConfigMap", Namespace: "ns", Name: "cfg"}},
 			Deleted: []trajectory.ResourceKey{{APIVersion: "v1", Kind: "Secret", Namespace: "ns", Name: "old"}},
 		},
-		State: trajectory.State{Resources: map[trajectory.ResourceKey]types.ResourceInfo{
-			{APIVersion: "v1", Kind: "ConfigMap", Namespace: "ns", Name: "cfg"}: {Name: "cfg"},
+		State: trajectory.State{Resources: map[trajectory.ResourceKey]struct{}{
+			{APIVersion: "v1", Kind: "ConfigMap", Namespace: "ns", Name: "cfg"}: {},
 		}},
 	}}
 

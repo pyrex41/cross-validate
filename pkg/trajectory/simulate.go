@@ -1,6 +1,7 @@
 package trajectory
 
 import (
+	"maps"
 	"sort"
 
 	"github.com/pyrex41/cross-validate-/pkg/ir"
@@ -64,7 +65,7 @@ func simulateApp(app types.ArgoApplication, resources []types.ResourceInfo) []St
 	sort.Ints(sorted)
 
 	var steps []Step
-	state := State{Resources: map[ResourceKey]types.ResourceInfo{}}
+	state := State{Resources: map[ResourceKey]struct{}{}}
 	for _, w := range sorted {
 		b := buckets[w]
 		var createdKeys []ResourceKey
@@ -73,7 +74,7 @@ func simulateApp(app types.ArgoApplication, resources []types.ResourceInfo) []St
 			if _, ok := state.Resources[key]; !ok {
 				createdKeys = append(createdKeys, key)
 			}
-			state.Resources[key] = r
+			state.Resources[key] = struct{}{}
 		}
 		var deletedKeys []ResourceKey
 		for _, r := range b.deletes {
@@ -130,11 +131,7 @@ func orNew(b *waveBucket) *waveBucket {
 }
 
 func cloneState(s State) State {
-	copy := State{Resources: make(map[ResourceKey]types.ResourceInfo, len(s.Resources))}
-	for k, v := range s.Resources {
-		copy.Resources[k] = v
-	}
-	return copy
+	return State{Resources: maps.Clone(s.Resources)}
 }
 
 func sortKeys(keys []ResourceKey) {
