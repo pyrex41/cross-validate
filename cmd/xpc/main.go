@@ -213,7 +213,6 @@ func runCheck(args []string) int {
 			TotalObligations: result.TotalObligations,
 			Satisfied:        result.Satisfied,
 			Violated:         result.Violated,
-			Unknown:          result.Unknown,
 			ObligationIDs:    result.ObligationIDs,
 		}
 		p := audit.Generate(diags, summary, irDigest, snapDigest)

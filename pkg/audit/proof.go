@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +49,6 @@ type RunSummary struct {
 	TotalObligations int      `json:"totalObligations"`
 	Satisfied        int      `json:"satisfied"`
 	Violated         int      `json:"violated"`
-	Unknown          int      `json:"unknown"`
 	ObligationIDs    []string `json:"obligationIds,omitempty"`
 }
 
@@ -130,7 +129,7 @@ const RulesetVersion = "2026.04"
 // Merkle root so the proof attests to run completeness, not just violations.
 func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest string) *Proof {
 	p := &Proof{
-		Version: 2,
+		Version: 3,
 		Metadata: ProofMetadata{
 			IRDigest:       irDigest,
 			SnapshotDigest: snapshotDigest,
@@ -226,7 +225,7 @@ func (p *Proof) buildMerkleTree() {
 	for id := range p.RuleSubtrees {
 		ruleIDs = append(ruleIDs, id)
 	}
-	sort.Strings(ruleIDs)
+	slices.Sort(ruleIDs)
 	for _, id := range ruleIDs {
 		leaves = append(leaves, p.RuleSubtrees[id].Digest)
 	}
@@ -236,7 +235,7 @@ func (p *Proof) buildMerkleTree() {
 	for key := range p.ResourceSubtrees {
 		resKeys = append(resKeys, key)
 	}
-	sort.Strings(resKeys)
+	slices.Sort(resKeys)
 	for _, key := range resKeys {
 		leaves = append(leaves, p.ResourceSubtrees[key].Digest)
 	}
@@ -393,7 +392,7 @@ func DiffProofs(a, b *Proof) string {
 	for id := range allRules {
 		ruleIDs = append(ruleIDs, id)
 	}
-	sort.Strings(ruleIDs)
+	slices.Sort(ruleIDs)
 
 	var changes []string
 	for _, id := range ruleIDs {
@@ -478,10 +477,9 @@ func hashJudgment(j Judgment) string {
 
 func hashRunSummary(s *RunSummary) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%d|%d|%d|%d|", s.TotalObligations, s.Satisfied, s.Violated, s.Unknown)
-	ids := make([]string, len(s.ObligationIDs))
-	copy(ids, s.ObligationIDs)
-	sort.Strings(ids)
+	fmt.Fprintf(h, "%d|%d|%d|", s.TotalObligations, s.Satisfied, s.Violated)
+	ids := slices.Clone(s.ObligationIDs)
+	slices.Sort(ids)
 	for _, id := range ids {
 		h.Write([]byte(id))
 		h.Write([]byte("|"))

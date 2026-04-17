@@ -16,9 +16,6 @@ type RunResult struct {
 	// Violated is the count of obligations that failed.
 	Violated int
 
-	// Unknown is the count of obligations that could not be determined.
-	Unknown int
-
 	// ObligationIDs lists every obligation ID that was checked (for audit).
 	ObligationIDs []string
 }
