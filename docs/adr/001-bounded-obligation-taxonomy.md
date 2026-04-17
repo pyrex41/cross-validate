@@ -1,6 +1,6 @@
 # ADR-001: Bounded Obligation Taxonomy
 
-**Status**: Accepted
+**Status**: Accepted; §3 superseded by [ADR-002](002-shen-as-canonical-spec-and-trajectory-simulator.md) (2026-04-17)
 **Date**: 2026-04-12
 **Author**: xpc team
 

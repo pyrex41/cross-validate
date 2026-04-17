@@ -103,11 +103,11 @@ Simulate the sync trajectory (wave ordering, hook phases, PruneLast) and
 verify temporal invariants hold at every step.
 
 **Generators**:
-- `no-dangling-mount` -- no Pod references a deleted ConfigMap/Secret mid-sync
-- `no-immutable-change` -- no update touches an immutable field
-- `no-rbac-regression` -- SA permissions hold across steps
-- `trajectory-wave-order` -- dependency ordering (absorbs R6)
-- `trajectory-bootstrap` -- required resources exist at step 0 (absorbs R9)
+- `no-dangling-mount` → `XPC012` — no Pod references a pruned ConfigMap/Secret mid-sync *(implemented)*
+- `no-immutable-change` → `XPC013` — no update touches an immutable field *(framework present; update detection pending follow-up — the simulator's `Delta.Updated` is empty until a multi-snapshot extension lands)*
+- `no-rbac-regression` → `XPC014` — ServiceAccount permissions hold across steps *(implemented)*
+- `trajectory-wave-order` → `XPC006` — dependency ordering, including R6a (XRD<XR), R6b (Function<Composition), R6c (Provider<MR), R6d (Composition≤XR) *(absorbs R6)*
+- `trajectory-bootstrap` → `XPC009` — required resources exist at step 0 *(absorbs R9)*
 
 **Absorbs**: R6, R9
 
@@ -196,8 +196,15 @@ versions marked not-served.
 
 ## Error codes
 
-Legacy codes `XPC001`-`XPC011` remain as aliases. New obligations use
-structured codes:
+Legacy codes `XPC001`-`XPC014` remain as aliases. `XPC012`, `XPC013`, and
+`XPC014` are the trajectory-invariant codes added in
+[ADR-002](adr/002-shen-as-canonical-spec-and-trajectory-simulator.md):
+
+- `XPC012` — `no-dangling-mount`
+- `XPC013` — `no-immutable-change` (framework-only until update detection lands)
+- `XPC014` — `no-rbac-regression`
+
+New obligations use structured codes:
 
 ```
 XPC.<Category>.<Generator>[.<Instance>]
