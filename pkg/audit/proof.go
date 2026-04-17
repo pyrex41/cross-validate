@@ -1,6 +1,7 @@
-// Package proof implements the Merkle tree proof system for xpc.
-// Proofs are content-addressed, signed, and verifiable offline.
-package proof
+// Package audit implements the Merkle tree audit log for xpc.
+// Audit logs are content-addressed, signed, and verifiable offline.
+// (Renamed from "proof" to reserve that term for type-theoretic derivations.)
+package audit
 
 import (
 	"crypto/sha256"

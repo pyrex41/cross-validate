@@ -132,6 +132,10 @@ func ClassifyDocument(doc LoadedDocument) string {
 		return "configuration"
 	case doc.Kind == "Application" && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
 		return "argo-application"
+	case doc.Kind == "AppProject" && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
+		return "argo-appproject"
+	case doc.Kind == "ApplicationSet" && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
+		return "argo-applicationset"
 	default:
 		return "resource"
 	}
