@@ -1,0 +1,56 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: provider-wave
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+# CRD that serves Widget — this is what makes Widget a "managed resource" for R6c.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  group: example.com
+  names:
+    kind: Widget
+    plural: widgets
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+---
+# Provider at wave 3 — should be at a lower wave than any of its managed resources.
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-example
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  package: xpkg.upbound.io/example/provider:v0.1.0
+---
+# Widget at wave 2 — wave(Provider)=3 ≥ wave(Widget)=2 → XPC006.
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: my-widget
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  foo: bar

@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dangling-mount
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+# ConfigMap is a hook that gets pruned at end of wave 0.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+data:
+  key: value
+---
+# Pod in the same wave with a non-optional mount of the ConfigMap.
+# After wave 0 settles, the ConfigMap is gone but the Pod still references it → XPC012.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: consumer
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      volumeMounts:
+        - name: cfg
+          mountPath: /etc/cfg
+  volumes:
+    - name: cfg
+      configMap:
+        name: app-config

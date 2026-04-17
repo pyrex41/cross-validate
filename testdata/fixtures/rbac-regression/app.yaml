@@ -1,0 +1,55 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rbac-regression
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+---
+# RoleBinding is annotated as a hook that gets deleted at end of wave 0.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-binding
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-role
+---
+# Pod pins the ServiceAccount. Once the binding is pruned, the workload
+# loses its RBAC permissions → XPC014.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker-pod
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceAccountName: worker
+  containers:
+    - name: app
+      image: busybox:1.36

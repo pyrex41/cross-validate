@@ -204,6 +204,65 @@ func TestEndToEnd_NoIssues(t *testing.T) {
 	}
 }
 
+func TestR6c_ProviderWave(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/provider-wave")
+	diags := checkFixture(t, world, Config{})
+
+	xpc006 := findDiagByCode(diags, "XPC006")
+	if len(xpc006) == 0 {
+		t.Fatal("expected at least 1 XPC006 error for provider-wave violation")
+	}
+
+	found := false
+	for _, d := range xpc006 {
+		if d.Severity == types.SeverityError {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error severity on XPC006 from R6c, none found")
+	}
+}
+
+func TestR12_DanglingMount(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/dangling-mount")
+	diags := checkFixture(t, world, Config{})
+
+	xpc012 := findDiagByCode(diags, "XPC012")
+	if len(xpc012) != 1 {
+		t.Fatalf("expected exactly 1 XPC012 error for dangling mount, got %d: %+v",
+			len(xpc012), xpc012)
+	}
+	if xpc012[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc012[0].Severity)
+	}
+}
+
+func TestR13_RuleLoaded(t *testing.T) {
+	// R13 is framework-only in this phase — Delta.Updated is always empty so
+	// it never fires on real input. This test just verifies the rule loads
+	// and runs without panicking against a non-trivial fixture.
+	world := loadFixture(t, "../../testdata/fixtures/basic")
+	diags := checkFixture(t, world, Config{})
+	if xpc013 := findDiagByCode(diags, "XPC013"); len(xpc013) > 0 {
+		t.Errorf("expected no XPC013 errors in phase 1 (Delta.Updated is empty), got %d", len(xpc013))
+	}
+}
+
+func TestR14_RbacRegression(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/rbac-regression")
+	diags := checkFixture(t, world, Config{})
+
+	xpc014 := findDiagByCode(diags, "XPC014")
+	if len(xpc014) == 0 {
+		t.Fatalf("expected at least 1 XPC014 error for RBAC regression, got %+v", diags)
+	}
+	if xpc014[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc014[0].Severity)
+	}
+}
+
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
 	diags := checkFixture(t, world, Config{})

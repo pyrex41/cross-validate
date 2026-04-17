@@ -25,6 +25,10 @@
 (load "r9-bootstrap.shen")
 (load "r10-secret-taint.shen")
 (load "r11-api-deprecation.shen")
+(load "r6c-provider-wave.shen")
+(load "r12-no-dangling-mount.shen")
+(load "r13-no-immutable-change.shen")
+(load "r14-no-rbac-regression.shen")
 
 \* ===== IR reading ===== *\
 
@@ -78,14 +82,19 @@
          R4 (mark-rule "XPC004" (check-r4 Compositions Functions))
          R5 (mark-rule "XPC005" (check-r5 ResolvedPatches))
          R6 (mark-rule "XPC006" (check-r6 ArgoApps Compositions XRDs Functions))
+         R6c (mark-rule "XPC006" (check-r6c ArgoApps CRDs))
          R7 (mark-rule "XPC007" (check-r7 ArgoApps Compositions))
          R8 (mark-rule "XPC008" (check-r8 Resources XRDs))
          R9 (mark-rule "XPC009" (check-r9 Compositions Resources))
          R10 (mark-rule "XPC010" (check-r10 ResolvedPatches))
          R11 (mark-rule "XPC011" (check-r11 Resources Compositions Providers CRDs))
+         R12 (mark-rule "XPC012" (check-r12 Trajectory MountRefs))
+         R13 (mark-rule "XPC013" (check-r13 Trajectory ImmutableFields))
+         R14 (mark-rule "XPC014" (check-r14 Trajectory SARefs RBACBindings))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
-        (append R6 (append R7 (append R8 (append R9 (append R10 R11))))))))))))
+        (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
+          (append R11 (append R12 (append R13 R14))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
