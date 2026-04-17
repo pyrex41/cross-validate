@@ -17,16 +17,6 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/report"
 	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
-
-	// Register all obligation generators. Each blank import triggers init()
-	// which registers generators into the default registry.
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/conversion"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/crossapp"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/deprecation"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/refs"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/secretflow"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/trajectory"
-	_ "github.com/pyrex41/cross-validate-/pkg/obligation/versions"
 )
 
 const version = "0.1.0"
