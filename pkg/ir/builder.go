@@ -58,6 +58,7 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 				doc.Kind, getName(doc.Raw), doc.Source.File, doc.Source.Line, err)
 		}
 	}
+	EnrichTrajectoryData(b.world)
 	return b.world, nil
 }
 
@@ -354,13 +355,22 @@ func (b *Builder) addProvider(doc loader.LoadedDocument) error {
 	metadata := getMap(doc.Raw, "metadata")
 
 	name := ""
+	annotations := map[string]string{}
 	if metadata != nil {
 		name, _ = metadata["name"].(string)
+		if ann := getMap(metadata, "annotations"); ann != nil {
+			for k, v := range ann {
+				if vs, ok := v.(string); ok {
+					annotations[k] = vs
+				}
+			}
+		}
 	}
 
 	prov := types.ProviderInfo{
-		Name:   name,
-		Source: doc.Source,
+		Name:        name,
+		Annotations: annotations,
+		Source:      doc.Source,
 	}
 
 	if spec != nil {

@@ -138,9 +138,10 @@ type FunctionInfo struct {
 
 // ProviderInfo represents an installed Crossplane Provider.
 type ProviderInfo struct {
-	Name    string         `json:"name"`
-	Package string         `json:"package"`
-	Source  SourceLocation `json:"source"`
+	Name        string            `json:"name"`
+	Package     string            `json:"package"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Source      SourceLocation    `json:"source"`
 }
 
 // ConfigurationInfo represents an installed Crossplane Configuration.
@@ -543,6 +544,64 @@ type SchemaInfo struct {
 	Schema map[string]interface{} `json:"schema"`
 }
 
+// MountRef records that a workload resource (Pod-bearing kind) mounts a
+// ConfigMap or Secret as a volume, projected volume, or envFrom.
+type MountRef struct {
+	OwnerKind       string         `json:"ownerKind"`
+	OwnerName       string         `json:"ownerName"`
+	OwnerNamespace  string         `json:"ownerNamespace,omitempty"`
+	TargetKind      string         `json:"targetKind"` // ConfigMap | Secret
+	TargetName      string         `json:"targetName"`
+	TargetNamespace string         `json:"targetNamespace,omitempty"`
+	MountKind       string         `json:"mountKind"` // volume | envFrom | projected
+	Optional        bool           `json:"optional,omitempty"`
+	Source          SourceLocation `json:"source"`
+}
+
+// SARef records that a workload resource pins to a ServiceAccount.
+type SARef struct {
+	OwnerKind      string         `json:"ownerKind"`
+	OwnerName      string         `json:"ownerName"`
+	OwnerNamespace string         `json:"ownerNamespace,omitempty"`
+	SAName         string         `json:"saName"`
+	SANamespace    string         `json:"saNamespace,omitempty"`
+	Source         SourceLocation `json:"source"`
+}
+
+// RBACBinding records a (Cluster)RoleBinding subject → role edge.
+type RBACBinding struct {
+	BindingKind      string         `json:"bindingKind"` // RoleBinding | ClusterRoleBinding
+	BindingName      string         `json:"bindingName"`
+	BindingNamespace string         `json:"bindingNamespace,omitempty"`
+	SubjectKind      string         `json:"subjectKind"` // ServiceAccount | User | Group
+	SubjectName      string         `json:"subjectName"`
+	SubjectNamespace string         `json:"subjectNamespace,omitempty"`
+	RoleKind         string         `json:"roleKind"` // Role | ClusterRole
+	RoleName         string         `json:"roleName"`
+	Source           SourceLocation `json:"source"`
+}
+
+// RBACRule is a single (verbs, resources, apiGroups) entry inside a Role / ClusterRole.
+type RBACRule struct {
+	OwnerKind      string         `json:"ownerKind"` // Role | ClusterRole
+	OwnerName      string         `json:"ownerName"`
+	OwnerNamespace string         `json:"ownerNamespace,omitempty"`
+	APIGroups      []string       `json:"apiGroups,omitempty"`
+	Resources      []string       `json:"resources,omitempty"`
+	Verbs          []string       `json:"verbs,omitempty"`
+	ResourceNames  []string       `json:"resourceNames,omitempty"`
+	Source         SourceLocation `json:"source"`
+}
+
+// ImmutableField is one entry in the registry of "field paths that must not change
+// after create" per (Group, Kind). Populated from a static table; not extracted from YAML.
+type ImmutableField struct {
+	Group     string `json:"group"`
+	Kind      string `json:"kind"`
+	FieldPath string `json:"fieldPath"` // dotted path, e.g. "spec.clusterIP"
+	Reason    string `json:"reason"`
+}
+
 // World is the complete typed representation of a set of manifests.
 type World struct {
 	CRDs           []CRDInfo            `json:"crds"`
@@ -556,6 +615,12 @@ type World struct {
 	ArgoProjects   []ArgoAppProject     `json:"argoProjects,omitempty"`
 	ArgoAppSets    []ArgoApplicationSet `json:"argoAppSets,omitempty"`
 	Schemas        map[string]SchemaInfo `json:"schemas"`
+
+	MountRefs       []MountRef       `json:"mountRefs,omitempty"`
+	SARefs          []SARef          `json:"saRefs,omitempty"`
+	RBACBindings    []RBACBinding    `json:"rbacBindings,omitempty"`
+	RBACRules       []RBACRule       `json:"rbacRules,omitempty"`
+	ImmutableFields []ImmutableField `json:"-"`
 }
 
 // NewWorld creates an empty World.
