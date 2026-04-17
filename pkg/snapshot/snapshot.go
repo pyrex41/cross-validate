@@ -4,11 +4,12 @@
 package snapshot
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -98,60 +99,39 @@ func (s *Snapshot) ComputeDigest() string {
 	h.Write([]byte(s.ClusterName))
 	h.Write([]byte(s.KubernetesVersion))
 
-	// CRDs sorted by group+kind
-	sortedCRDs := make([]types.CRDInfo, len(s.CRDs))
-	copy(sortedCRDs, s.CRDs)
-	sort.Slice(sortedCRDs, func(i, j int) bool {
-		ki := sortedCRDs[i].Group + "/" + sortedCRDs[i].Kind
-		kj := sortedCRDs[j].Group + "/" + sortedCRDs[j].Kind
-		return ki < kj
-	})
+	crdKey := func(c types.CRDInfo) string { return c.Group + "/" + c.Kind }
+	crdByKey := func(a, b types.CRDInfo) int { return cmp.Compare(crdKey(a), crdKey(b)) }
+
+	sortedCRDs := slices.Clone(s.CRDs)
+	slices.SortFunc(sortedCRDs, crdByKey)
 	for _, crd := range sortedCRDs {
 		data, _ := json.Marshal(crd)
 		h.Write(data)
 	}
 
-	// XRDs sorted
-	sortedXRDs := make([]types.CRDInfo, len(s.XRDs))
-	copy(sortedXRDs, s.XRDs)
-	sort.Slice(sortedXRDs, func(i, j int) bool {
-		ki := sortedXRDs[i].Group + "/" + sortedXRDs[i].Kind
-		kj := sortedXRDs[j].Group + "/" + sortedXRDs[j].Kind
-		return ki < kj
-	})
+	sortedXRDs := slices.Clone(s.XRDs)
+	slices.SortFunc(sortedXRDs, crdByKey)
 	for _, xrd := range sortedXRDs {
 		data, _ := json.Marshal(xrd)
 		h.Write(data)
 	}
 
-	// Providers sorted
-	sortedProviders := make([]ProviderStatus, len(s.Providers))
-	copy(sortedProviders, s.Providers)
-	sort.Slice(sortedProviders, func(i, j int) bool {
-		return sortedProviders[i].Name < sortedProviders[j].Name
-	})
+	sortedProviders := slices.Clone(s.Providers)
+	slices.SortFunc(sortedProviders, func(a, b ProviderStatus) int { return cmp.Compare(a.Name, b.Name) })
 	for _, p := range sortedProviders {
 		data, _ := json.Marshal(p)
 		h.Write(data)
 	}
 
-	// Functions sorted
-	sortedFunctions := make([]FunctionStatus, len(s.Functions))
-	copy(sortedFunctions, s.Functions)
-	sort.Slice(sortedFunctions, func(i, j int) bool {
-		return sortedFunctions[i].Name < sortedFunctions[j].Name
-	})
+	sortedFunctions := slices.Clone(s.Functions)
+	slices.SortFunc(sortedFunctions, func(a, b FunctionStatus) int { return cmp.Compare(a.Name, b.Name) })
 	for _, f := range sortedFunctions {
 		data, _ := json.Marshal(f)
 		h.Write(data)
 	}
 
-	// Compositions sorted
-	sortedComps := make([]types.CompositionInfo, len(s.Compositions))
-	copy(sortedComps, s.Compositions)
-	sort.Slice(sortedComps, func(i, j int) bool {
-		return sortedComps[i].Name < sortedComps[j].Name
-	})
+	sortedComps := slices.Clone(s.Compositions)
+	slices.SortFunc(sortedComps, func(a, b types.CompositionInfo) int { return cmp.Compare(a.Name, b.Name) })
 	for _, c := range sortedComps {
 		data, _ := json.Marshal(c)
 		h.Write(data)

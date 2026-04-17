@@ -4,10 +4,12 @@
 package checker
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -324,80 +326,27 @@ func section(tag string, facts []kl.Obj) kl.Obj {
 	return makeList(append([]kl.Obj{sym(tag)}, facts...))
 }
 
+// sortedSection copies src, sorts it with less, maps each element via toObj,
+// and wraps the result as `(tag obj1 obj2 ...)`.
+func sortedSection[T any](tag string, src []T, less func(a, b T) int, toObj func(T) kl.Obj) kl.Obj {
+	cp := slices.Clone(src)
+	slices.SortFunc(cp, less)
+	objs := make([]kl.Obj, 0, len(cp))
+	for _, x := range cp {
+		objs = append(objs, toObj(x))
+	}
+	return section(tag, objs)
+}
+
 func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
-	// Copy and sort each slice so the serialized world is deterministic.
+	// Compositions sort once and feed both the `compositions` section and the
+	// `resolved-patches` section, so patches follow the composition ordering.
+	comps := slices.Clone(w.Compositions)
+	slices.SortFunc(comps, compositionCmp)
 
-	crds := append([]types.CRDInfo(nil), w.CRDs...)
-	sort.Slice(crds, func(i, j int) bool {
-		if crds[i].Group != crds[j].Group {
-			return crds[i].Group < crds[j].Group
-		}
-		return crds[i].Kind < crds[j].Kind
-	})
-
-	xrds := append([]types.CRDInfo(nil), w.XRDs...)
-	sort.Slice(xrds, func(i, j int) bool {
-		if xrds[i].Group != xrds[j].Group {
-			return xrds[i].Group < xrds[j].Group
-		}
-		return xrds[i].Kind < xrds[j].Kind
-	})
-
-	comps := append([]types.CompositionInfo(nil), w.Compositions...)
-	sort.Slice(comps, func(i, j int) bool { return comps[i].Name < comps[j].Name })
-
-	fns := append([]types.FunctionInfo(nil), w.Functions...)
-	sort.Slice(fns, func(i, j int) bool { return fns[i].Name < fns[j].Name })
-
-	provs := append([]types.ProviderInfo(nil), w.Providers...)
-	sort.Slice(provs, func(i, j int) bool { return provs[i].Name < provs[j].Name })
-
-	cfgs := append([]types.ConfigurationInfo(nil), w.Configurations...)
-	sort.Slice(cfgs, func(i, j int) bool { return cfgs[i].Name < cfgs[j].Name })
-
-	ress := append([]types.ResourceInfo(nil), w.Resources...)
-	sort.Slice(ress, func(i, j int) bool {
-		if ress[i].Kind != ress[j].Kind {
-			return ress[i].Kind < ress[j].Kind
-		}
-		return ress[i].Name < ress[j].Name
-	})
-
-	apps := append([]types.ArgoApplication(nil), w.ArgoApps...)
-	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
-
-	// Build section facts.
-	var crdObjs []kl.Obj
-	for _, c := range crds {
-		crdObjs = append(crdObjs, crdToObj(c))
-	}
-	var xrdObjs []kl.Obj
-	for _, x := range xrds {
-		xrdObjs = append(xrdObjs, xrdToObj(x))
-	}
-	var compObjs []kl.Obj
+	compObjs := make([]kl.Obj, 0, len(comps))
 	for _, c := range comps {
 		compObjs = append(compObjs, compositionToObj(c))
-	}
-	var fnObjs []kl.Obj
-	for _, f := range fns {
-		fnObjs = append(fnObjs, functionToObj(f))
-	}
-	var provObjs []kl.Obj
-	for _, p := range provs {
-		provObjs = append(provObjs, providerToObj(p))
-	}
-	var cfgObjs []kl.Obj
-	for _, c := range cfgs {
-		cfgObjs = append(cfgObjs, configToObj(c))
-	}
-	var resObjs []kl.Obj
-	for _, r := range ress {
-		resObjs = append(resObjs, resourceToObj(r))
-	}
-	var appObjs []kl.Obj
-	for _, a := range apps {
-		appObjs = append(appObjs, argoAppToObj(a))
 	}
 
 	// Resolved patch facts let Shen R5 do type-assignability checks without
@@ -440,121 +389,108 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		}
 	}
 
-	mounts := append([]types.MountRef(nil), w.MountRefs...)
-	sort.Slice(mounts, func(i, j int) bool { return mountRefLess(mounts[i], mounts[j]) })
-	var mountObjs []kl.Obj
-	for _, m := range mounts {
-		mountObjs = append(mountObjs, mountRefToObj(m))
-	}
-
-	sas := append([]types.SARef(nil), w.SARefs...)
-	sort.Slice(sas, func(i, j int) bool { return saRefLess(sas[i], sas[j]) })
-	var saObjs []kl.Obj
-	for _, s := range sas {
-		saObjs = append(saObjs, saRefToObj(s))
-	}
-
-	bindings := append([]types.RBACBinding(nil), w.RBACBindings...)
-	sort.Slice(bindings, func(i, j int) bool { return rbacBindingLess(bindings[i], bindings[j]) })
-	var bindingObjs []kl.Obj
-	for _, b := range bindings {
-		bindingObjs = append(bindingObjs, rbacBindingToObj(b))
-	}
-
-	rules := append([]types.RBACRule(nil), w.RBACRules...)
-	sort.Slice(rules, func(i, j int) bool { return rbacRuleLess(rules[i], rules[j]) })
-	var ruleObjs []kl.Obj
-	for _, r := range rules {
-		ruleObjs = append(ruleObjs, rbacRuleToObj(r))
-	}
-
-	immutables := append([]types.ImmutableField(nil), w.ImmutableFields...)
-	sort.Slice(immutables, func(i, j int) bool {
-		if immutables[i].Group != immutables[j].Group {
-			return immutables[i].Group < immutables[j].Group
-		}
-		if immutables[i].Kind != immutables[j].Kind {
-			return immutables[i].Kind < immutables[j].Kind
-		}
-		return immutables[i].FieldPath < immutables[j].FieldPath
-	})
-	var immutableObjs []kl.Obj
-	for _, f := range immutables {
-		immutableObjs = append(immutableObjs, immutableFieldToObj(f))
-	}
-
 	sections := []kl.Obj{
 		sym("world"),
-		section("crds", crdObjs),
-		section("xrds", xrdObjs),
+		sortedSection("crds", w.CRDs, crdCmp, crdToObj),
+		sortedSection("xrds", w.XRDs, crdCmp, xrdToObj),
 		section("compositions", compObjs),
-		section("functions", fnObjs),
-		section("providers", provObjs),
-		section("configurations", cfgObjs),
-		section("resources", resObjs),
-		section("argo-apps", appObjs),
+		sortedSection("functions", w.Functions, functionCmp, functionToObj),
+		sortedSection("providers", w.Providers, providerCmp, providerToObj),
+		sortedSection("configurations", w.Configurations, configCmp, configToObj),
+		sortedSection("resources", w.Resources, resourceCmp, resourceToObj),
+		sortedSection("argo-apps", w.ArgoApps, argoAppCmp, argoAppToObj),
 		section("schemas", nil),
 		section("resolved-patches", patchObjs),
-		section("mount-refs", mountObjs),
-		section("sa-refs", saObjs),
-		section("rbac-bindings", bindingObjs),
-		section("rbac-rules", ruleObjs),
-		section("immutable-fields", immutableObjs),
+		sortedSection("mount-refs", w.MountRefs, mountRefCmp, mountRefToObj),
+		sortedSection("sa-refs", w.SARefs, saRefCmp, saRefToObj),
+		sortedSection("rbac-bindings", w.RBACBindings, rbacBindingCmp, rbacBindingToObj),
+		sortedSection("rbac-rules", w.RBACRules, rbacRuleCmp, rbacRuleToObj),
+		sortedSection("immutable-fields", w.ImmutableFields, immutableFieldCmp, immutableFieldToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
 }
 
-func mountRefLess(a, b types.MountRef) bool {
-	if a.OwnerKind != b.OwnerKind {
-		return a.OwnerKind < b.OwnerKind
+func crdCmp(a, b types.CRDInfo) int {
+	if c := cmp.Compare(a.Group, b.Group); c != 0 {
+		return c
 	}
-	if a.OwnerName != b.OwnerName {
-		return a.OwnerName < b.OwnerName
-	}
-	if a.TargetKind != b.TargetKind {
-		return a.TargetKind < b.TargetKind
-	}
-	if a.TargetName != b.TargetName {
-		return a.TargetName < b.TargetName
-	}
-	return a.MountKind < b.MountKind
+	return cmp.Compare(a.Kind, b.Kind)
 }
 
-func saRefLess(a, b types.SARef) bool {
-	if a.OwnerKind != b.OwnerKind {
-		return a.OwnerKind < b.OwnerKind
+func compositionCmp(a, b types.CompositionInfo) int { return cmp.Compare(a.Name, b.Name) }
+func functionCmp(a, b types.FunctionInfo) int       { return cmp.Compare(a.Name, b.Name) }
+func providerCmp(a, b types.ProviderInfo) int       { return cmp.Compare(a.Name, b.Name) }
+func configCmp(a, b types.ConfigurationInfo) int    { return cmp.Compare(a.Name, b.Name) }
+func argoAppCmp(a, b types.ArgoApplication) int     { return cmp.Compare(a.Name, b.Name) }
+
+func resourceCmp(a, b types.ResourceInfo) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
 	}
-	if a.OwnerName != b.OwnerName {
-		return a.OwnerName < b.OwnerName
-	}
-	return a.SAName < b.SAName
+	return cmp.Compare(a.Name, b.Name)
 }
 
-func rbacBindingLess(a, b types.RBACBinding) bool {
-	if a.BindingKind != b.BindingKind {
-		return a.BindingKind < b.BindingKind
+func immutableFieldCmp(a, b types.ImmutableField) int {
+	if c := cmp.Compare(a.Group, b.Group); c != 0 {
+		return c
 	}
-	if a.BindingName != b.BindingName {
-		return a.BindingName < b.BindingName
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
 	}
-	if a.SubjectKind != b.SubjectKind {
-		return a.SubjectKind < b.SubjectKind
-	}
-	return a.SubjectName < b.SubjectName
+	return cmp.Compare(a.FieldPath, b.FieldPath)
 }
 
-func rbacRuleLess(a, b types.RBACRule) bool {
-	if a.OwnerKind != b.OwnerKind {
-		return a.OwnerKind < b.OwnerKind
+func mountRefCmp(a, b types.MountRef) int {
+	if c := cmp.Compare(a.OwnerKind, b.OwnerKind); c != 0 {
+		return c
 	}
-	if a.OwnerName != b.OwnerName {
-		return a.OwnerName < b.OwnerName
+	if c := cmp.Compare(a.OwnerName, b.OwnerName); c != 0 {
+		return c
 	}
-	if len(a.Verbs) != len(b.Verbs) {
-		return len(a.Verbs) < len(b.Verbs)
+	if c := cmp.Compare(a.TargetKind, b.TargetKind); c != 0 {
+		return c
 	}
-	return strings.Join(a.Verbs, ",") < strings.Join(b.Verbs, ",")
+	if c := cmp.Compare(a.TargetName, b.TargetName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.MountKind, b.MountKind)
+}
+
+func saRefCmp(a, b types.SARef) int {
+	if c := cmp.Compare(a.OwnerKind, b.OwnerKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.OwnerName, b.OwnerName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.SAName, b.SAName)
+}
+
+func rbacBindingCmp(a, b types.RBACBinding) int {
+	if c := cmp.Compare(a.BindingKind, b.BindingKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.BindingName, b.BindingName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.SubjectKind, b.SubjectKind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.SubjectName, b.SubjectName)
+}
+
+func rbacRuleCmp(a, b types.RBACRule) int {
+	if c := cmp.Compare(a.OwnerKind, b.OwnerKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.OwnerName, b.OwnerName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(len(a.Verbs), len(b.Verbs)); c != 0 {
+		return c
+	}
+	return cmp.Compare(strings.Join(a.Verbs, ","), strings.Join(b.Verbs, ","))
 }
 
 func crdToObj(crd types.CRDInfo) kl.Obj {
@@ -645,11 +581,7 @@ func configToObj(c types.ConfigurationInfo) kl.Obj {
 }
 
 func resourceToObj(res types.ResourceInfo) kl.Obj {
-	keys := make([]string, 0, len(res.Annotations))
-	for k := range res.Annotations {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(res.Annotations))
 	var anns []kl.Obj
 	for _, k := range keys {
 		anns = append(anns, makeList([]kl.Obj{str(k), str(res.Annotations[k])}))
@@ -772,14 +704,14 @@ func trajectoryToObj(steps []trajectory.Step) kl.Obj {
 }
 
 func sortResourceKeys(keys []trajectory.ResourceKey) {
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Kind != keys[j].Kind {
-			return keys[i].Kind < keys[j].Kind
+	slices.SortFunc(keys, func(a, b trajectory.ResourceKey) int {
+		if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+			return c
 		}
-		if keys[i].Namespace != keys[j].Namespace {
-			return keys[i].Namespace < keys[j].Namespace
+		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+			return c
 		}
-		return keys[i].Name < keys[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 }
 
@@ -953,7 +885,7 @@ func buildRunResult(all []types.Diagnostic) RunResult {
 			violated++
 		}
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return RunResult{
 		Diagnostics:      visible,
 		TotalObligations: len(ids),
