@@ -20,6 +20,32 @@ const (
 	SeverityInfo    Severity = "info"
 )
 
+// Well-known Kubernetes kind strings used in switch dispatch and field values.
+// Defined here as a single source of truth; Kind-typed fields remain plain string.
+const (
+	KindPod                         = "Pod"
+	KindDeployment                  = "Deployment"
+	KindStatefulSet                 = "StatefulSet"
+	KindDaemonSet                   = "DaemonSet"
+	KindReplicaSet                  = "ReplicaSet"
+	KindJob                         = "Job"
+	KindCronJob                     = "CronJob"
+	KindConfigMap                   = "ConfigMap"
+	KindSecret                      = "Secret"
+	KindServiceAccount              = "ServiceAccount"
+	KindRole                        = "Role"
+	KindClusterRole                 = "ClusterRole"
+	KindRoleBinding                 = "RoleBinding"
+	KindClusterRoleBinding          = "ClusterRoleBinding"
+	KindCustomResourceDefinition    = "CustomResourceDefinition"
+	KindCompositeResourceDefinition = "CompositeResourceDefinition"
+	KindComposition                 = "Composition"
+	KindFunction                    = "Function"
+	KindProvider                    = "Provider"
+	KindConfiguration               = "Configuration"
+	KindApplication                 = "Application"
+)
+
 // SourceLocation points back to the original file/line that produced a resource.
 type SourceLocation struct {
 	File   string `json:"file"`

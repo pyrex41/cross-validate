@@ -118,19 +118,19 @@ func LoadStdin() ([]LoadedDocument, error) {
 // ClassifyDocument returns the category of a loaded document.
 func ClassifyDocument(doc LoadedDocument) string {
 	switch {
-	case doc.Kind == "CustomResourceDefinition":
+	case doc.Kind == types.KindCustomResourceDefinition:
 		return "crd"
-	case doc.Kind == "CompositeResourceDefinition":
+	case doc.Kind == types.KindCompositeResourceDefinition:
 		return "xrd"
-	case doc.Kind == "Composition":
+	case doc.Kind == types.KindComposition:
 		return "composition"
-	case doc.Kind == "Function" && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
+	case doc.Kind == types.KindFunction && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
 		return "function"
-	case doc.Kind == "Provider" && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
+	case doc.Kind == types.KindProvider && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
 		return "provider"
-	case doc.Kind == "Configuration" && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
+	case doc.Kind == types.KindConfiguration && strings.HasPrefix(doc.APIVersion, "pkg.crossplane.io/"):
 		return "configuration"
-	case doc.Kind == "Application" && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
+	case doc.Kind == types.KindApplication && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
 		return "argo-application"
 	case doc.Kind == "AppProject" && strings.HasPrefix(doc.APIVersion, "argoproj.io/"):
 		return "argo-appproject"

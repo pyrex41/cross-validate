@@ -14,13 +14,13 @@ func ImmutableFieldRegistry() []types.ImmutableField {
 			Reason: "PVC StorageClassName is immutable after create"},
 		{Group: "", Kind: "PersistentVolumeClaim", FieldPath: "spec.accessModes",
 			Reason: "PVC AccessModes are immutable after create"},
-		{Group: "batch", Kind: "Job", FieldPath: "spec.selector",
+		{Group: "batch", Kind: types.KindJob, FieldPath: "spec.selector",
 			Reason: "Job Selector is immutable after create"},
-		{Group: "batch", Kind: "Job", FieldPath: "spec.template",
+		{Group: "batch", Kind: types.KindJob, FieldPath: "spec.template",
 			Reason: "Job Template is immutable after create"},
-		{Group: "apps", Kind: "StatefulSet", FieldPath: "spec.serviceName",
+		{Group: "apps", Kind: types.KindStatefulSet, FieldPath: "spec.serviceName",
 			Reason: "StatefulSet ServiceName is immutable after create"},
-		{Group: "apps", Kind: "StatefulSet", FieldPath: "spec.volumeClaimTemplates",
+		{Group: "apps", Kind: types.KindStatefulSet, FieldPath: "spec.volumeClaimTemplates",
 			Reason: "StatefulSet VolumeClaimTemplates are immutable after create"},
 	}
 }

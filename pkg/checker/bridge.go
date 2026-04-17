@@ -182,16 +182,16 @@ func enrichSyncWaves(w *types.World) {
 		}
 		// Add XRDs
 		for _, xrd := range w.XRDs {
-			key := "CompositeResourceDefinition/" + xrd.Kind
+			key := types.KindCompositeResourceDefinition + "/" + xrd.Kind
 			if !existing[key] {
 				wave := 0
 				for _, res := range w.Resources {
-					if res.Kind == "CompositeResourceDefinition" && res.Name == xrd.Kind {
+					if res.Kind == types.KindCompositeResourceDefinition && res.Name == xrd.Kind {
 						wave = ir.ParseSyncWave(res.Annotations)
 					}
 				}
 				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
-					Kind: "CompositeResourceDefinition", Name: xrd.Kind, Wave: wave,
+					Kind: types.KindCompositeResourceDefinition, Name: xrd.Kind, Wave: wave,
 				})
 				existing[key] = true
 			}
@@ -206,28 +206,28 @@ func enrichSyncWaves(w *types.World) {
 			}
 		}
 		for _, comp := range w.Compositions {
-			key := "Composition/" + comp.Name
+			key := types.KindComposition + "/" + comp.Name
 			if !existing[key] {
 				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
-					Kind: "Composition", Name: comp.Name, Wave: 0,
+					Kind: types.KindComposition, Name: comp.Name, Wave: 0,
 				})
 				existing[key] = true
 			}
 		}
 		for _, fn := range w.Functions {
-			key := "Function/" + fn.Name
+			key := types.KindFunction + "/" + fn.Name
 			if !existing[key] {
 				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
-					Kind: "Function", Name: fn.Name, Wave: 0,
+					Kind: types.KindFunction, Name: fn.Name, Wave: 0,
 				})
 				existing[key] = true
 			}
 		}
 		for _, prov := range w.Providers {
-			key := "Provider/" + prov.Name
+			key := types.KindProvider + "/" + prov.Name
 			if !existing[key] {
 				w.ArgoApps[i].SyncWaves = append(w.ArgoApps[i].SyncWaves, types.SyncWaveEntry{
-					Kind: "Provider", Name: prov.Name, Wave: ir.ParseSyncWave(prov.Annotations),
+					Kind: types.KindProvider, Name: prov.Name, Wave: ir.ParseSyncWave(prov.Annotations),
 				})
 				existing[key] = true
 			}

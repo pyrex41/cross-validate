@@ -15,21 +15,21 @@ func EnrichTrajectoryData(w *types.World) {
 	}
 	for _, res := range w.Resources {
 		switch res.Kind {
-		case "Pod":
+		case types.KindPod:
 			extractFromPodSpec(w, res, getMap(res.Raw, "spec"))
-		case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job":
+		case types.KindDeployment, types.KindStatefulSet, types.KindDaemonSet, types.KindReplicaSet, types.KindJob:
 			spec := getMap(res.Raw, "spec")
 			template := getMap(spec, "template")
 			extractFromPodSpec(w, res, getMap(template, "spec"))
-		case "CronJob":
+		case types.KindCronJob:
 			spec := getMap(res.Raw, "spec")
 			jobTemplate := getMap(spec, "jobTemplate")
 			jobSpec := getMap(jobTemplate, "spec")
 			template := getMap(jobSpec, "template")
 			extractFromPodSpec(w, res, getMap(template, "spec"))
-		case "RoleBinding", "ClusterRoleBinding":
+		case types.KindRoleBinding, types.KindClusterRoleBinding:
 			extractRBACBinding(w, res)
-		case "Role", "ClusterRole":
+		case types.KindRole, types.KindClusterRole:
 			extractRBACRules(w, res)
 		}
 	}
@@ -74,7 +74,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 					OwnerKind:       owner.Kind,
 					OwnerName:       owner.Name,
 					OwnerNamespace:  owner.Namespace,
-					TargetKind:      "ConfigMap",
+					TargetKind:      types.KindConfigMap,
 					TargetName:      name,
 					TargetNamespace: owner.Namespace,
 					MountKind:       "volume",
@@ -91,7 +91,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 					OwnerKind:       owner.Kind,
 					OwnerName:       owner.Name,
 					OwnerNamespace:  owner.Namespace,
-					TargetKind:      "Secret",
+					TargetKind:      types.KindSecret,
 					TargetName:      name,
 					TargetNamespace: owner.Namespace,
 					MountKind:       "volume",
@@ -114,7 +114,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 							OwnerKind:       owner.Kind,
 							OwnerName:       owner.Name,
 							OwnerNamespace:  owner.Namespace,
-							TargetKind:      "ConfigMap",
+							TargetKind:      types.KindConfigMap,
 							TargetName:      name,
 							TargetNamespace: owner.Namespace,
 							MountKind:       "projected",
@@ -131,7 +131,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 							OwnerKind:       owner.Kind,
 							OwnerName:       owner.Name,
 							OwnerNamespace:  owner.Namespace,
-							TargetKind:      "Secret",
+							TargetKind:      types.KindSecret,
 							TargetName:      name,
 							TargetNamespace: owner.Namespace,
 							MountKind:       "projected",
@@ -163,7 +163,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 							OwnerKind:       owner.Kind,
 							OwnerName:       owner.Name,
 							OwnerNamespace:  owner.Namespace,
-							TargetKind:      "ConfigMap",
+							TargetKind:      types.KindConfigMap,
 							TargetName:      name,
 							TargetNamespace: owner.Namespace,
 							MountKind:       "envFrom",
@@ -180,7 +180,7 @@ func extractFromPodSpec(w *types.World, owner types.ResourceInfo, podSpec map[st
 							OwnerKind:       owner.Kind,
 							OwnerName:       owner.Name,
 							OwnerNamespace:  owner.Namespace,
-							TargetKind:      "Secret",
+							TargetKind:      types.KindSecret,
 							TargetName:      name,
 							TargetNamespace: owner.Namespace,
 							MountKind:       "envFrom",
