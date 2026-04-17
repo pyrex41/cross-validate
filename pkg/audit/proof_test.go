@@ -23,13 +23,13 @@ func TestGenerate(t *testing.T) {
 		},
 	}
 
-	p := Generate(diags, "sha256:abc123", "sha256:def456")
+	p := Generate(diags, nil, "sha256:abc123", "sha256:def456")
 
 	if p.RootDigest == "" {
 		t.Error("expected non-empty root digest")
 	}
-	if p.Version != 1 {
-		t.Errorf("expected version 1, got %d", p.Version)
+	if p.Version != 2 {
+		t.Errorf("expected version 2, got %d", p.Version)
 	}
 	if p.Metadata.IRDigest != "sha256:abc123" {
 		t.Errorf("expected IR digest sha256:abc123, got %s", p.Metadata.IRDigest)
@@ -61,7 +61,7 @@ func TestVerify(t *testing.T) {
 		},
 	}
 
-	p := Generate(diags, "sha256:ir1", "sha256:snap1")
+	p := Generate(diags, nil, "sha256:ir1", "sha256:snap1")
 
 	if !p.Verify() {
 		t.Error("expected verification to pass")
@@ -81,7 +81,7 @@ func TestSaveAndLoad(t *testing.T) {
 		},
 	}
 
-	p := Generate(diags, "sha256:ir2", "sha256:snap2")
+	p := Generate(diags, nil, "sha256:ir2", "sha256:snap2")
 	if err := p.Save(path); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestVerifyInclusion(t *testing.T) {
 		},
 	}
 
-	p := Generate(diags, "sha256:ir3", "sha256:snap3")
+	p := Generate(diags, nil, "sha256:ir3", "sha256:snap3")
 
 	if !p.VerifyInclusion("XPC002", "bucket.yaml:1") {
 		t.Error("expected inclusion of XPC002 for bucket.yaml:1")
@@ -138,7 +138,7 @@ func TestSummary(t *testing.T) {
 		},
 	}
 
-	p := Generate(diags, "sha256:ir4", "sha256:snap4")
+	p := Generate(diags, nil, "sha256:ir4", "sha256:snap4")
 	summary := p.Summary()
 
 	if summary == "" {
@@ -157,8 +157,8 @@ func TestDiffProofs(t *testing.T) {
 	}
 	diagsB := []types.Diagnostic{} // no errors
 
-	a := Generate(diagsA, "sha256:ir5", "sha256:snap5")
-	b := Generate(diagsB, "sha256:ir6", "sha256:snap6")
+	a := Generate(diagsA, nil, "sha256:ir5", "sha256:snap5")
+	b := Generate(diagsB, nil, "sha256:ir6", "sha256:snap6")
 
 	diff := DiffProofs(a, b)
 	if diff == "" {
@@ -167,7 +167,7 @@ func TestDiffProofs(t *testing.T) {
 }
 
 func TestEmptyProof(t *testing.T) {
-	p := Generate(nil, "sha256:ir7", "sha256:snap7")
+	p := Generate(nil, nil, "sha256:ir7", "sha256:snap7")
 
 	if p.RootDigest == "" {
 		t.Error("expected non-empty root digest for empty proof")
@@ -179,6 +179,77 @@ func TestEmptyProof(t *testing.T) {
 	summary := p.Summary()
 	if summary == "" {
 		t.Error("expected non-empty summary for empty proof")
+	}
+}
+
+func TestRunSummaryInRoot(t *testing.T) {
+	// A proof with a RunSummary and one without must have different roots even
+	// when the diagnostics are identical — the summary is committed.
+	diags := []types.Diagnostic{
+		{
+			Code:     "XPC002",
+			Severity: types.SeverityError,
+			Message:  "webhook conversion not acknowledged",
+			Source:   types.SourceLocation{File: "bucket.yaml", Line: 1},
+		},
+	}
+
+	summary := &RunSummary{
+		TotalObligations: 3,
+		Satisfied:        2,
+		Violated:         1,
+		ObligationIDs:    []string{"XPC.J.x.a", "XPC.B.y.b", "XPC.C.z.c"},
+	}
+
+	withSummary := Generate(diags, summary, "sha256:ir", "sha256:snap")
+	withoutSummary := Generate(diags, nil, "sha256:ir", "sha256:snap")
+
+	if withSummary.RootDigest == withoutSummary.RootDigest {
+		t.Error("expected different root digests when summary is committed vs absent")
+	}
+	if withSummary.Run == nil || withSummary.Run.TotalObligations != 3 {
+		t.Errorf("expected run summary in proof, got %+v", withSummary.Run)
+	}
+	if !withSummary.Verify() {
+		t.Error("expected proof with run summary to verify")
+	}
+
+	// Different obligation IDs must produce a different root even with identical diagnostics.
+	altSummary := &RunSummary{
+		TotalObligations: 3,
+		Satisfied:        2,
+		Violated:         1,
+		ObligationIDs:    []string{"XPC.J.x.a", "XPC.B.y.different", "XPC.C.z.c"},
+	}
+	alt := Generate(diags, altSummary, "sha256:ir", "sha256:snap")
+	if alt.RootDigest == withSummary.RootDigest {
+		t.Error("expected different root for different obligation IDs")
+	}
+}
+
+func TestJudgmentProvenance(t *testing.T) {
+	diags := []types.Diagnostic{
+		{
+			Code:     "XPC003",
+			Severity: types.SeverityError,
+			Message:  "missing XRD",
+			Source:   types.SourceLocation{File: "comp.yaml", Line: 1},
+			Obligation: &types.ObligationRef{
+				ID:        "XPC.B.comp-xrd-ref.xbucket-default",
+				Category:  "B",
+				Generator: "comp-xrd-ref",
+			},
+		},
+	}
+
+	p := Generate(diags, nil, "sha256:ir", "sha256:snap")
+	st := p.RuleSubtrees["XPC003"]
+	if st == nil || len(st.Judgments) != 1 {
+		t.Fatalf("expected 1 XPC003 judgment, got subtree %+v", st)
+	}
+	j := st.Judgments[0]
+	if j.ObligationID != "XPC.B.comp-xrd-ref.xbucket-default" || j.Category != "B" || j.Generator != "comp-xrd-ref" {
+		t.Errorf("expected provenance fields populated, got %+v", j)
 	}
 }
 
@@ -199,8 +270,8 @@ func TestProofDeterminism(t *testing.T) {
 		},
 	}
 
-	p1 := Generate(diags, "sha256:same", "sha256:same")
-	p2 := Generate(diags, "sha256:same", "sha256:same")
+	p1 := Generate(diags, nil, "sha256:same", "sha256:same")
+	p2 := Generate(diags, nil, "sha256:same", "sha256:same")
 
 	// Root digests may differ due to timestamp, but rule subtree digests should match
 	if p1.RuleSubtrees["XPC001"].Digest != p2.RuleSubtrees["XPC001"].Digest {

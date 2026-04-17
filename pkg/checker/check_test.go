@@ -8,8 +8,6 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
-const testKernelPath = "../../kernel"
-
 func loadFixture(t *testing.T, path string) *types.World {
 	t.Helper()
 	docs, err := loader.LoadDirectory(path)
@@ -24,6 +22,15 @@ func loadFixture(t *testing.T, path string) *types.World {
 	return world
 }
 
+func checkFixture(t *testing.T, world *types.World, cfg Config) []types.Diagnostic {
+	t.Helper()
+	diags, err := Check(world, cfg)
+	if err != nil {
+		t.Fatalf("check failed: %v", err)
+	}
+	return diags
+}
+
 func findDiagByCode(diags []types.Diagnostic, code string) []types.Diagnostic {
 	var result []types.Diagnostic
 	for _, d := range diags {
@@ -34,38 +41,25 @@ func findDiagByCode(diags []types.Diagnostic, code string) []types.Diagnostic {
 	return result
 }
 
-func checkWith(t *testing.T, w *types.World) []types.Diagnostic {
-	t.Helper()
-	diags, err := Check(w, Config{KernelPath: testKernelPath})
-	if err != nil {
-		t.Fatalf("check failed: %v", err)
-	}
-	return diags
-}
-
 func TestR1_VersionCoherence(t *testing.T) {
-	// Test: CRD with proper versions should not error
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
-	diags := checkWith(t, world)
-	xpc001 := findDiagByCode(diags, "XPC001")
-	if len(xpc001) > 0 {
-		t.Errorf("expected no R1 errors for webhook-conversion fixture, got %d: %v",
+	diags := checkFixture(t, world, Config{})
+	if xpc001 := findDiagByCode(diags, "XPC001"); len(xpc001) > 0 {
+		t.Errorf("expected no XPC001 errors for webhook-conversion fixture, got %d: %v",
 			len(xpc001), xpc001)
 	}
 
-	// Test: XRD with proper versions should not error
 	world = loadFixture(t, "../../testdata/fixtures/basic")
-	diags = checkWith(t, world)
-	xpc001 = findDiagByCode(diags, "XPC001")
-	if len(xpc001) > 0 {
-		t.Errorf("expected no R1 errors for basic fixture, got %d: %v",
+	diags = checkFixture(t, world, Config{})
+	if xpc001 := findDiagByCode(diags, "XPC001"); len(xpc001) > 0 {
+		t.Errorf("expected no XPC001 errors for basic fixture, got %d: %v",
 			len(xpc001), xpc001)
 	}
 }
 
 func TestR2_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{StrictConversions: false})
 
 	xpc002 := findDiagByCode(diags, "XPC002")
 	if len(xpc002) != 1 {
@@ -76,20 +70,20 @@ func TestR2_WebhookConversion(t *testing.T) {
 	if d.Severity != types.SeverityError {
 		t.Errorf("expected error severity, got %s", d.Severity)
 	}
+	if d.Source.File != "../../testdata/fixtures/webhook-conversion/bucket.yaml" {
+		t.Errorf("expected source file bucket.yaml, got %s", d.Source.File)
+	}
 	if d.Message != "webhook conversion not acknowledged" {
 		t.Errorf("unexpected message: %s", d.Message)
+	}
+	if d.Obligation == nil || d.Obligation.Generator != "conversion-cost-opt-in" {
+		t.Errorf("expected Obligation.Generator=conversion-cost-opt-in, got %+v", d.Obligation)
 	}
 }
 
 func TestR2_WebhookConversion_StrictMode(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
-	diags, err := Check(world, Config{
-		KernelPath:        testKernelPath,
-		StrictConversions: true,
-	})
-	if err != nil {
-		t.Fatalf("check failed: %v", err)
-	}
+	diags := checkFixture(t, world, Config{StrictConversions: true})
 
 	xpc002 := findDiagByCode(diags, "XPC002")
 	if len(xpc002) != 1 {
@@ -99,20 +93,18 @@ func TestR2_WebhookConversion_StrictMode(t *testing.T) {
 
 func TestR3_CompositionResolves(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/basic")
-	diags := checkWith(t, world)
-	xpc003 := findDiagByCode(diags, "XPC003")
-	if len(xpc003) > 0 {
-		t.Errorf("expected no R3 errors for basic fixture, got %d: %v",
+	diags := checkFixture(t, world, Config{})
+	if xpc003 := findDiagByCode(diags, "XPC003"); len(xpc003) > 0 {
+		t.Errorf("expected no XPC003 errors for basic fixture, got %d: %v",
 			len(xpc003), xpc003)
 	}
 }
 
 func TestR4_PipelineFunctions(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/basic")
-	diags := checkWith(t, world)
-	xpc004 := findDiagByCode(diags, "XPC004")
-	if len(xpc004) > 0 {
-		t.Errorf("expected no R4 errors for basic fixture, got %d: %v",
+	diags := checkFixture(t, world, Config{})
+	if xpc004 := findDiagByCode(diags, "XPC004"); len(xpc004) > 0 {
+		t.Errorf("expected no XPC004 errors for basic fixture, got %d: %v",
 			len(xpc004), xpc004)
 	}
 }
@@ -130,7 +122,7 @@ func TestR4_MissingFunction(t *testing.T) {
 		Source: types.SourceLocation{File: "test.yaml", Line: 1},
 	})
 
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 	xpc004 := findDiagByCode(diags, "XPC004")
 	if len(xpc004) != 1 {
 		t.Fatalf("expected 1 XPC004 error for missing function, got %d", len(xpc004))
@@ -139,7 +131,7 @@ func TestR4_MissingFunction(t *testing.T) {
 
 func TestR5_PatchTypeMismatch(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/patch-mismatch")
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 
 	xpc005 := findDiagByCode(diags, "XPC005")
 	if len(xpc005) != 1 {
@@ -154,7 +146,7 @@ func TestR5_PatchTypeMismatch(t *testing.T) {
 
 func TestR6_WaveOrdering(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/wave-ordering")
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 
 	xpc006 := findDiagByCode(diags, "XPC006")
 	if len(xpc006) == 0 {
@@ -174,7 +166,7 @@ func TestR7_LabelTracking(t *testing.T) {
 		Source: types.SourceLocation{File: "comp.yaml", Line: 1},
 	})
 
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 	xpc007 := findDiagByCode(diags, "XPC007")
 	if len(xpc007) != 1 {
 		t.Fatalf("expected 1 XPC007 warning for label tracking, got %d", len(xpc007))
@@ -196,16 +188,15 @@ func TestR7_AnnotationTracking_NoWarning(t *testing.T) {
 		Source: types.SourceLocation{File: "comp.yaml", Line: 1},
 	})
 
-	diags := checkWith(t, world)
-	xpc007 := findDiagByCode(diags, "XPC007")
-	if len(xpc007) > 0 {
-		t.Errorf("expected no warnings for annotation tracking, got %d", len(xpc007))
+	diags := checkFixture(t, world, Config{})
+	if xpc007 := findDiagByCode(diags, "XPC007"); len(xpc007) > 0 {
+		t.Errorf("expected no XPC007 warnings for annotation tracking, got %d", len(xpc007))
 	}
 }
 
 func TestEndToEnd_NoIssues(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/basic")
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 	for _, d := range diags {
 		if d.Severity == types.SeverityError {
 			t.Errorf("unexpected error: %s: %s", d.Code, d.Message)
@@ -215,7 +206,7 @@ func TestEndToEnd_NoIssues(t *testing.T) {
 
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
-	diags := checkWith(t, world)
+	diags := checkFixture(t, world, Config{})
 
 	hasXPC002 := false
 	for _, d := range diags {

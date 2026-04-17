@@ -7,7 +7,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -84,7 +83,6 @@ Check flags:
   --strict-conversions Refuse webhook conversions entirely
   --proof              Generate a proof file alongside the check
   --snapshot=<path>    Use a specific snapshot file
-  --kernel=<path>      Path to kernel directory (default: auto-detected)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -119,7 +117,6 @@ Examples:
 func runCheck(args []string) int {
 	format := report.FormatAgent
 	strictConversions := false
-	kernelPath := ""
 	generateProof := false
 	snapshotPath := ""
 	var paths []string
@@ -132,8 +129,6 @@ func runCheck(args []string) int {
 			generateProof = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
-		case len(arg) > 9 && arg[:9] == "--kernel=":
-			kernelPath = arg[9:]
 		case len(arg) > 11 && arg[:11] == "--snapshot=":
 			snapshotPath = arg[11:]
 		case arg == "--help" || arg == "-h":
@@ -199,31 +194,13 @@ func runCheck(args []string) int {
 		mergeSnapshotIntoWorld(world, snap)
 	}
 
-	// Auto-detect kernel path
-	if kernelPath == "" {
-		exe, _ := os.Executable()
-		if exe != "" {
-			candidate := filepath.Join(filepath.Dir(exe), "..", "kernel")
-			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-				kernelPath = candidate
-			}
-		}
-		if kernelPath == "" {
-			kernelPath = "kernel"
-		}
-	}
-
 	// Run checker
 	cfg := checker.Config{
-		KernelPath:        kernelPath,
 		StrictConversions: strictConversions,
 	}
 
-	diags, err := checker.Check(world, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error running checker: %v\n", err)
-		return 1
-	}
+	result := checker.CheckWithObligations(world, cfg)
+	diags := result.Diagnostics
 
 	// Report
 	if err := report.ReportStdout(diags, format); err != nil {
@@ -242,7 +219,14 @@ func runCheck(args []string) int {
 			}
 		}
 
-		p := audit.Generate(diags, irDigest, snapDigest)
+		summary := &audit.RunSummary{
+			TotalObligations: result.TotalObligations,
+			Satisfied:        result.Satisfied,
+			Violated:         result.Violated,
+			Unknown:          result.Unknown,
+			ObligationIDs:    result.ObligationIDs,
+		}
+		p := audit.Generate(diags, summary, irDigest, snapDigest)
 		proofPath := "check.xpcproof"
 		if err := p.Save(proofPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving proof: %v\n", err)

@@ -27,6 +27,12 @@ type Proof struct {
 	// Metadata about this proof.
 	Metadata ProofMetadata `json:"metadata"`
 
+	// Run summarizes the obligation framework run, including counts and IDs
+	// of every obligation that was evaluated (satisfied + violated + unknown).
+	// Committed to the Merkle root so that a proof attests to completeness,
+	// not just the violations.
+	Run *RunSummary `json:"run,omitempty"`
+
 	// RuleSubtrees contains per-rule judgment subtrees.
 	RuleSubtrees map[string]*RuleSubtree `json:"ruleSubtrees"`
 
@@ -35,6 +41,16 @@ type Proof struct {
 
 	// Tree is the full Merkle tree (leaf hashes for verification).
 	Tree []string `json:"tree"`
+}
+
+// RunSummary captures obligation framework totals and the full list of
+// obligation IDs evaluated during a check run.
+type RunSummary struct {
+	TotalObligations int      `json:"totalObligations"`
+	Satisfied        int      `json:"satisfied"`
+	Violated         int      `json:"violated"`
+	Unknown          int      `json:"unknown"`
+	ObligationIDs    []string `json:"obligationIds,omitempty"`
 }
 
 // ProofMetadata holds the metadata block of a proof.
@@ -93,7 +109,14 @@ type Judgment struct {
 	RuleID   string `json:"ruleId"`
 	Resource string `json:"resource"`
 	Message  string `json:"message,omitempty"`
-	Digest   string `json:"digest"`
+	// ObligationID is the structured obligation ID (e.g. "XPC.B.comp-xrd-ref.xbucket-default").
+	// Empty for diagnostics produced outside the obligation framework.
+	ObligationID string `json:"obligationId,omitempty"`
+	// Category is the obligation category letter (A–L), empty if no obligation provenance.
+	Category string `json:"category,omitempty"`
+	// Generator is the obligation generator name, empty if no obligation provenance.
+	Generator string `json:"generator,omitempty"`
+	Digest    string `json:"digest"`
 }
 
 // KernelVersion is the current kernel version.
@@ -102,10 +125,12 @@ const KernelVersion = "0.1.0"
 // RulesetVersion is the current rule set version.
 const RulesetVersion = "2026.04"
 
-// Generate creates a proof from diagnostics and metadata.
-func Generate(diags []types.Diagnostic, irDigest, snapshotDigest string) *Proof {
+// Generate creates a proof from diagnostics, optional run summary, and metadata.
+// When summary is non-nil, the obligation counts and IDs are committed to the
+// Merkle root so the proof attests to run completeness, not just violations.
+func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest string) *Proof {
 	p := &Proof{
-		Version: 1,
+		Version: 2,
 		Metadata: ProofMetadata{
 			IRDigest:       irDigest,
 			SnapshotDigest: snapshotDigest,
@@ -114,6 +139,7 @@ func Generate(diags []types.Diagnostic, irDigest, snapshotDigest string) *Proof 
 			RulesetDigest:  computeRulesetDigest(),
 			Timestamp:      time.Now().UTC(),
 		},
+		Run:              summary,
 		RuleSubtrees:     make(map[string]*RuleSubtree),
 		ResourceSubtrees: make(map[string]*ResourceSubtree),
 	}
@@ -125,6 +151,11 @@ func Generate(diags []types.Diagnostic, irDigest, snapshotDigest string) *Proof 
 			RuleID:   d.Code,
 			Resource: fmt.Sprintf("%s:%d", d.Source.File, d.Source.Line),
 			Message:  d.Message,
+		}
+		if d.Obligation != nil {
+			j.ObligationID = d.Obligation.ID
+			j.Category = d.Obligation.Category
+			j.Generator = d.Obligation.Generator
 		}
 		switch d.Severity {
 		case types.SeverityError:
@@ -184,6 +215,11 @@ func (p *Proof) buildMerkleTree() {
 	// Metadata leaf
 	metaData, _ := json.Marshal(p.Metadata)
 	leaves = append(leaves, hashBytes(metaData))
+
+	// Run summary leaf (committed so the proof attests to completeness)
+	if p.Run != nil {
+		leaves = append(leaves, hashRunSummary(p.Run))
+	}
 
 	// Rule subtree leaves (sorted by rule ID)
 	ruleIDs := make([]string, 0, len(p.RuleSubtrees))
@@ -434,8 +470,23 @@ func truncDigest(s string) string {
 }
 
 func hashJudgment(j Judgment) string {
-	data := fmt.Sprintf("%s|%s|%s|%s", j.Status, j.RuleID, j.Resource, j.Message)
+	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s",
+		j.Status, j.RuleID, j.Resource, j.Message,
+		j.ObligationID, j.Category, j.Generator)
 	return hashBytes([]byte(data))
+}
+
+func hashRunSummary(s *RunSummary) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%d|%d|%d|%d|", s.TotalObligations, s.Satisfied, s.Violated, s.Unknown)
+	ids := make([]string, len(s.ObligationIDs))
+	copy(ids, s.ObligationIDs)
+	sort.Strings(ids)
+	for _, id := range ids {
+		h.Write([]byte(id))
+		h.Write([]byte("|"))
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
 func hashRuleSubtree(st *RuleSubtree) string {
