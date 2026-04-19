@@ -103,7 +103,7 @@
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 R16)))))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 (append R15 R16))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
