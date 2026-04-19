@@ -29,6 +29,7 @@
 (load "r12-no-dangling-mount.shen")
 (load "r13-no-immutable-change.shen")
 (load "r14-no-rbac-regression.shen")
+(load "r15-appproject-whitelist.shen")
 
 \* ===== IR reading ===== *\
 
@@ -63,6 +64,8 @@
          Configs      (extract-section configurations Sections)
          Resources    (extract-section resources Sections)
          ArgoApps     (extract-section argo-apps Sections)
+         ArgoAppProjLinks (extract-section argo-app-proj-links Sections)
+         ArgoAppProjects (extract-section argo-appprojects Sections)
          Schemas      (extract-section schemas Sections)
          ResolvedPatches (extract-section resolved-patches Sections)
          MountRefs    (extract-section mount-refs Sections)
@@ -91,10 +94,11 @@
          R12 (mark-rule "XPC012" (check-r12 Trajectory MountRefs))
          R13 (mark-rule "XPC013" (check-r13 Trajectory ImmutableFields))
          R14 (mark-rule "XPC014" (check-r14 Trajectory SARefs RBACBindings))
+         R15 (mark-rule "XPC.D.kind-whitelisted" (check-r15 ArgoApps ArgoAppProjLinks ArgoAppProjects Resources CRDs))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 R14))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 R15)))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
