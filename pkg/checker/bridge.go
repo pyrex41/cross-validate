@@ -408,6 +408,9 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("rbac-bindings", w.RBACBindings, rbacBindingCmp, rbacBindingToObj),
 		sortedSection("rbac-rules", w.RBACRules, rbacRuleCmp, rbacRuleToObj),
 		sortedSection("immutable-fields", w.ImmutableFields, immutableFieldCmp, immutableFieldToObj),
+		sortedSection("selector-mappings", w.SelectorMappings, selectorMappingCmp, selectorMappingToObj),
+		sortedSection("selector-usages", w.SelectorUsages, selectorUsageCmp, selectorUsageToObj),
+		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -697,6 +700,105 @@ func immutableFieldToObj(f types.ImmutableField) kl.Obj {
 	return makeList([]kl.Obj{
 		sym("immutable-field-fact"),
 		str(f.Group), str(f.Kind), str(f.FieldPath), str(f.Reason),
+	})
+}
+
+func selectorMappingCmp(a, b types.SelectorMapping) int {
+	if c := cmp.Compare(a.Group, b.Group); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.SelectorPath, b.SelectorPath); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ResolvedPath, b.ResolvedPath)
+}
+
+func selectorMappingToObj(m types.SelectorMapping) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("selector-mapping-fact"),
+		str(m.Group), str(m.Kind), str(m.SelectorPath), str(m.ResolvedPath), str(m.Reason),
+	})
+}
+
+func selectorUsageCmp(a, b types.SelectorUsage) int {
+	if c := cmp.Compare(a.ResourceKind, b.ResourceKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.ResourceName, b.ResourceName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.SelectorPath, b.SelectorPath)
+}
+
+func selectorUsageToObj(u types.SelectorUsage) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("selector-usage-fact"),
+		str(u.ResourceGroup), str(u.ResourceKind), str(u.ResourceName), str(u.ResourceNamespace),
+		str(u.SelectorPath), str(u.ResolvedPath),
+		sourceToObj(u.Source),
+	})
+}
+
+// buildIgnoreDiffEntries flattens the ignoreDifferences of all ArgoApplications
+// into a list of IgnoreDiffEntry values, one per JSONPointer and one per
+// JQPathExpression. If both are empty, a single entry with empty strings is
+// emitted so the kernel can still see the group/kind scope.
+func buildIgnoreDiffEntries(apps []types.ArgoApplication) []types.IgnoreDiffEntry {
+	var out []types.IgnoreDiffEntry
+	for _, app := range apps {
+		for _, diff := range app.IgnoreDifferences {
+			emitted := false
+			for _, jp := range diff.JSONPointers {
+				out = append(out, types.IgnoreDiffEntry{
+					AppName:     app.Name,
+					Group:       diff.Group,
+					Kind:        diff.Kind,
+					JSONPointer: jp,
+					JQPath:      "",
+				})
+				emitted = true
+			}
+			for _, jq := range diff.JQPathExpressions {
+				out = append(out, types.IgnoreDiffEntry{
+					AppName:     app.Name,
+					Group:       diff.Group,
+					Kind:        diff.Kind,
+					JSONPointer: "",
+					JQPath:      jq,
+				})
+				emitted = true
+			}
+			if !emitted {
+				// Preserve the scope entry even when no path expressions are set.
+				out = append(out, types.IgnoreDiffEntry{
+					AppName: app.Name,
+					Group:   diff.Group,
+					Kind:    diff.Kind,
+				})
+			}
+		}
+	}
+	return out
+}
+
+func ignoreDiffEntryCmp(a, b types.IgnoreDiffEntry) int {
+	if c := cmp.Compare(a.AppName, b.AppName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.JSONPointer, b.JSONPointer); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.JQPath, b.JQPath)
+}
+
+func ignoreDiffEntryToObj(e types.IgnoreDiffEntry) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("ignore-diff-entry"),
+		str(e.AppName), str(e.Group), str(e.Kind),
+		str(e.JSONPointer), str(e.JQPath),
 	})
 }
 
