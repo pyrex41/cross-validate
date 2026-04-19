@@ -399,6 +399,8 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("configurations", w.Configurations, configCmp, configToObj),
 		sortedSection("resources", w.Resources, resourceCmp, resourceToObj),
 		sortedSection("argo-apps", w.ArgoApps, argoAppCmp, argoAppToObj),
+		sortedSection("argo-app-proj-links", w.ArgoApps, argoAppCmp, argoAppProjLinkToObj),
+		sortedSection("argo-appprojects", w.ArgoProjects, argoAppProjectCmp, argoAppProjectToObj),
 		section("schemas", nil),
 		section("resolved-patches", patchObjs),
 		sortedSection("mount-refs", w.MountRefs, mountRefCmp, mountRefToObj),
@@ -606,6 +608,47 @@ func argoAppToObj(app types.ArgoApplication) kl.Obj {
 		str(app.Name), str(app.TrackingMode),
 		makeList(waves),
 		sourceToObj(app.Source),
+	})
+}
+
+func argoAppProjectCmp(a, b types.ArgoAppProject) int {
+	if c := cmp.Compare(a.Source.File, b.Source.File); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Name, b.Name)
+}
+
+func argoGroupKindToObj(gk types.ArgoGroupKind) kl.Obj {
+	return makeList([]kl.Obj{sym("group-kind"), str(gk.Group), str(gk.Kind)})
+}
+
+func argoAppProjectToObj(proj types.ArgoAppProject) kl.Obj {
+	var cwl []kl.Obj
+	for _, gk := range proj.ClusterResourceWhitelist {
+		cwl = append(cwl, argoGroupKindToObj(gk))
+	}
+	var nwl []kl.Obj
+	for _, gk := range proj.NamespaceResourceWhitelist {
+		nwl = append(nwl, argoGroupKindToObj(gk))
+	}
+	return makeList([]kl.Obj{
+		sym("argo-appproject"),
+		str(proj.Name),
+		str(proj.Source.File),
+		makeList(cwl),
+		makeList(nwl),
+	})
+}
+
+func argoAppProjLinkToObj(app types.ArgoApplication) kl.Obj {
+	proj := app.Project
+	if proj == "" {
+		proj = "default"
+	}
+	return makeList([]kl.Obj{
+		sym("argo-app-proj-link"),
+		str(app.Name),
+		str(proj),
 	})
 }
 
