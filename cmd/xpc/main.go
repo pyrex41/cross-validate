@@ -527,7 +527,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.D.kind-whitelisted")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.D.kind-whitelisted, XPC.E.selector-needs-ignore-diff")
 		return 1
 	}
 
@@ -733,6 +733,33 @@ daily snapshots into a continuous compliance evidence stream that warns
 before something expires.
 
 Fix: Migrate to the recommended replacement before the deprecation deadline.`,
+
+	"XPC.E.selector-needs-ignore-diff": `XPC.E.selector-needs-ignore-diff: selector field has no ignoreDifferences coverage
+
+A Crossplane managed resource has a *Selector field set (e.g. vpcIdSelector,
+subnetIdSelector, securityGroupSelector). Crossplane resolves selectors at
+runtime by writing the concrete value into a sibling field — the "resolved path"
+(e.g. vpcId, subnetIds, securityGroupIds). Argo CD sees this late-init write as
+unwanted drift: the resolved field was not in the original Git manifest, so Argo
+treats it as a live-state deviation and will continuously try to remove it on
+every sync. This creates a permanent Crossplane vs. Argo fight.
+
+The fix is to add an ignoreDifferences entry to the owning Application that
+covers the resolved path. Both jsonPointers (JSON Pointer form, e.g.
+/spec/forProvider/vpcId) and jqPathExpressions are supported.
+
+Rule scope: this first pass checks scalar (non-array-indexed) selector paths.
+Array-indexed paths (e.g. launchTemplate[].idSelector) are present in the
+registry but skipped by the enrichment loop pending element-wise walking support
+in a follow-up. The registry covers 53 known selector→resolved-path pairs
+across 14 Crossplane provider groups.
+
+Fix: add an ignoreDifferences block to the owning Application:
+  ignoreDifferences:
+    - group: <provider-group>
+      kind: <resource-kind>
+      jsonPointers:
+        - /spec/forProvider/<resolvedFieldName>`,
 
 	"XPC.D.kind-whitelisted": `XPC.D.kind-whitelisted: resource kind not in AppProject whitelist
 

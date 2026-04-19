@@ -92,6 +92,7 @@ Prune without targets is a no-op.
 - `ssa-field-manager-conflict` -- SSA field managers don't overlap
 - `prune-target-exists` -- Prune has something to prune
 - `createnamespace-not-colliding` -- CreateNamespace doesn't conflict
+- `selector-needs-ignore-diff` -- selector field's resolved path suppressed by ignoreDifferences (**implemented** — R16 / `XPC.E.selector-needs-ignore-diff`, scalar-path first pass; array-indexed paths deferred to follow-up)
 
 **Absorbs**: (new -- no legacy rule)
 
