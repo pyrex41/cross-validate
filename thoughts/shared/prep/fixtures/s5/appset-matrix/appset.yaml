@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-matrix
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - a: one
+                - a: two
+          - list:
+              elements:
+                - b: red
+                - b: blue
+  template:
+    metadata:
+      name: '{{ .a }}-{{ .b }}'
+    spec:
+      project: default
+      source:
+        repoURL: https://example.com/repo.git
+        path: ./charts/{{ .a }}/{{ .b }}
+        targetRevision: HEAD
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ .a }}-{{ .b }}'

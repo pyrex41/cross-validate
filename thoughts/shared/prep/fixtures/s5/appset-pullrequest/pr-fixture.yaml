@@ -1,0 +1,7 @@
+appset-pullrequest:
+  - number: 42
+    branch: feature/x
+    headSha: abc123
+  - number: 43
+    branch: feature/y
+    headSha: def456
