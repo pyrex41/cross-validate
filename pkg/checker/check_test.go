@@ -263,6 +263,19 @@ func TestR14_RbacRegression(t *testing.T) {
 	}
 }
 
+func TestR15_AppProjectWhitelist(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-miss")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.D.kind-whitelisted")
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 XPC.D.kind-whitelisted diagnostic, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+}
+
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
 	diags := checkFixture(t, world, Config{})
