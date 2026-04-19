@@ -73,7 +73,7 @@ managed resource kinds are whitelisted, sync windows are respected.
 **Generators**:
 - `source-repo-allowed` -- Application source repo in project sourceRepos
 - `destination-allowed` -- Application destination in project destinations
-- `kind-whitelisted` -- managed kinds pass project whitelist/blacklist
+- `kind-whitelisted` -- managed kinds pass project whitelist/blacklist (**implemented** — R15 / `XPC.D.kind-whitelisted`, direct-manifest pass; Helm/Kustomize rendering deferred to S4/S5)
 - `sync-window-permitted` -- sync is allowed in current time window
 
 **Absorbs**: (new -- no legacy rule)

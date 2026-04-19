@@ -527,7 +527,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.D.kind-whitelisted")
 		return 1
 	}
 
@@ -733,4 +733,24 @@ daily snapshots into a continuous compliance evidence stream that warns
 before something expires.
 
 Fix: Migrate to the recommended replacement before the deprecation deadline.`,
+
+	"XPC.D.kind-whitelisted": `XPC.D.kind-whitelisted: resource kind not in AppProject whitelist
+
+An Argo CD Application is managed by an AppProject, and that AppProject's
+clusterResourceWhitelist or namespaceResourceWhitelist does not include the
+kind of one of the resources in the Application.
+
+Argo CD enforces project whitelists at sync time: if a resource kind is not
+whitelisted, Argo CD will refuse to create or update that resource. This is a
+hard sync failure, not a warning.
+
+Cluster-scoped resources (e.g. ClusterRole, Namespace, CRD) must be listed in
+clusterResourceWhitelist. Namespace-scoped resources (e.g. Deployment, Service,
+custom resources) must be listed in namespaceResourceWhitelist.
+
+Wildcards: setting group or kind to "*" allows all groups or all kinds
+respectively. The entry {group: "*", kind: "*"} permits everything.
+
+Fix: Add the missing kind to the appropriate whitelist in the AppProject, or
+move the resource to an Application managed by a project that already allows it.`,
 }
