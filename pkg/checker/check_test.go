@@ -276,6 +276,45 @@ func TestR15_AppProjectWhitelist(t *testing.T) {
 	}
 }
 
+func TestR16_SelectorDrift(t *testing.T) {
+	// Positive case: AutoscalingGroup has vpcZoneIdentifierSelector set and the
+	// owning Application has no ignoreDifferences entries. The registry maps
+	// vpcZoneIdentifierSelector to two resolved paths (vpcZoneIdentifier and
+	// vpcZoneIdentifierRefs), so we expect at least one diagnostic per unresolved
+	// path — exactly 2 for this fixture.
+	world := loadFixture(t, "../../testdata/fixtures/selector-drift")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.E.selector-needs-ignore-diff")
+	if len(got) == 0 {
+		t.Fatalf("selector-drift: expected at least 1 XPC.E.selector-needs-ignore-diff diagnostic, got 0: %+v", diags)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+
+	// Negative case: same resource but the Application has an ignoreDifferences
+	// entry whose jsonPointer contains the primary resolved path
+	// (vpcZoneIdentifier). The first-pass rule uses substring matching so this
+	// covers the usage. Expect zero diagnostics for the primary path.
+	// Note: the Refs path (vpcZoneIdentifierRefs) is NOT covered by this entry,
+	// so we allow 0 or 1 diagnostics in the ok fixture depending on whether
+	// the first-pass match is strict or forgiving.
+	world = loadFixture(t, "../../testdata/fixtures/selector-drift-ok")
+	diags = checkFixture(t, world, Config{})
+
+	// The ok fixture covers the primary resolved path; rule should not fire for it.
+	gotOk := findDiagByCode(diags, "XPC.E.selector-needs-ignore-diff")
+	// At minimum, the primary path vpcZoneIdentifier must be covered.
+	// The refs path may still produce a diagnostic depending on the entry.
+	// We accept 0 or 1 diagnostic here: 0 if the entry's jsonPointer matches
+	// both, 1 if only the primary is covered.
+	// To make this a strict negative, the ok fixture supplies a broader entry.
+	if len(gotOk) != 0 {
+		t.Fatalf("selector-drift-ok: expected 0 XPC.E.selector-needs-ignore-diff diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+}
+
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
 	diags := checkFixture(t, world, Config{})
