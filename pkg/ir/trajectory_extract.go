@@ -1,6 +1,10 @@
 package ir
 
-import "github.com/pyrex41/cross-validate-/pkg/types"
+import (
+	"strings"
+
+	"github.com/pyrex41/cross-validate-/pkg/types"
+)
 
 // EnrichTrajectoryData extracts cross-resource references (mount refs,
 // ServiceAccount refs, RBAC bindings and rules) from already-parsed
@@ -35,6 +39,85 @@ func EnrichTrajectoryData(w *types.World) {
 	}
 
 	w.ImmutableFields = ImmutableFieldRegistry()
+	w.SelectorMappings = SelectorRegistry()
+	extractSelectorUsages(w)
+}
+
+// groupFromAPIVersion extracts the API group from an APIVersion string.
+// "autoscaling.aws.upbound.io/v1beta1" → "autoscaling.aws.upbound.io".
+// "v1" (core group) → "".
+func groupFromAPIVersion(apiVersion string) string {
+	parts := strings.SplitN(apiVersion, "/", 2)
+	if len(parts) == 2 {
+		return parts[0]
+	}
+	return ""
+}
+
+// walkScalarPath walks a dotted path (no "[]" segments) in a raw map and
+// reports whether the field exists and is non-nil.
+// e.g. "spec.forProvider.vpcZoneIdentifierSelector" → true when present.
+func walkScalarPath(raw map[string]interface{}, path string) bool {
+	if raw == nil || path == "" {
+		return false
+	}
+	parts := strings.SplitN(path, ".", 2)
+	key := parts[0]
+	val, ok := raw[key]
+	if !ok || val == nil {
+		return false
+	}
+	if len(parts) == 1 {
+		return true
+	}
+	next, ok := val.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	return walkScalarPath(next, parts[1])
+}
+
+// extractSelectorUsages populates w.SelectorUsages by consulting
+// w.SelectorMappings against each resource's Raw map.
+// Array-indexed paths (containing "[]") are skipped with a TODO: the entries
+// are present in the registry for completeness but require element-wise
+// walking which is deferred to a follow-up pass.
+func extractSelectorUsages(w *types.World) {
+	// Build a lookup index: (group, kind) → []SelectorMapping for fast access.
+	type gk struct{ group, kind string }
+	index := make(map[gk][]types.SelectorMapping)
+	for _, m := range w.SelectorMappings {
+		key := gk{m.Group, m.Kind}
+		index[key] = append(index[key], m)
+	}
+
+	for _, res := range w.Resources {
+		resGroup := groupFromAPIVersion(res.APIVersion)
+		key := gk{resGroup, res.Kind}
+		mappings, ok := index[key]
+		if !ok {
+			continue
+		}
+		for _, m := range mappings {
+			// Skip array-indexed paths on first pass; their resolution
+			// requires iterating slice elements which is not yet implemented.
+			// TODO: implement array-path walking (spec step 3 note).
+			if strings.Contains(m.SelectorPath, "[]") {
+				continue
+			}
+			if walkScalarPath(res.Raw, m.SelectorPath) {
+				w.SelectorUsages = append(w.SelectorUsages, types.SelectorUsage{
+					ResourceGroup:     resGroup,
+					ResourceKind:      res.Kind,
+					ResourceName:      res.Name,
+					ResourceNamespace: res.Namespace,
+					SelectorPath:      m.SelectorPath,
+					ResolvedPath:      m.ResolvedPath,
+					Source:            res.Source,
+				})
+			}
+		}
+	}
 }
 
 // extractFromPodSpec walks a PodSpec-shaped map and emits MountRefs for each

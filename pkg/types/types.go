@@ -626,6 +626,55 @@ type ImmutableField struct {
 	Reason    string `json:"reason"`
 }
 
+// SelectorMapping is one entry in the registry of Crossplane selector fields and the
+// concrete resolved paths they populate via late-init. Populated from a static table.
+// SelectorPath is the dotted path of the *Selector field in the manifest;
+// ResolvedPath is the sibling path Crossplane writes after selector resolution.
+// Array-indexed paths use "[]" as a placeholder element, e.g.
+// "spec.forProvider.launchTemplate[].idSelector".
+type SelectorMapping struct {
+	Group        string `json:"group"`
+	Kind         string `json:"kind"`
+	SelectorPath string `json:"selectorPath"`
+	ResolvedPath string `json:"resolvedPath"`
+	Reason       string `json:"reason"`
+}
+
+// SelectorUsage records that a specific resource has a selector field set,
+// along with the resolved path that Crossplane will late-init — and therefore
+// that Argo CD will see as a drift unless suppressed via ignoreDifferences.
+type SelectorUsage struct {
+	// ResourceGroup and ResourceKind identify the resource type.
+	ResourceGroup string `json:"resourceGroup"`
+	ResourceKind  string `json:"resourceKind"`
+	// ResourceName is the metadata.name of the resource.
+	ResourceName string `json:"resourceName"`
+	// ResourceNamespace is the metadata.namespace (empty for cluster-scoped).
+	ResourceNamespace string `json:"resourceNamespace,omitempty"`
+	// SelectorPath is the dotted field path of the *Selector field that is set.
+	SelectorPath string `json:"selectorPath"`
+	// ResolvedPath is the sibling path Crossplane will populate after resolution.
+	ResolvedPath string `json:"resolvedPath"`
+	// Source points to the manifest file containing this resource.
+	Source SourceLocation `json:"source"`
+}
+
+// IgnoreDiffEntry is a flattened view of one ignoreDifferences entry on one
+// Argo CD Application, expanded to one row per JSONPointer or JQPathExpression.
+// When both pointer lists are empty, a single row is emitted with empty strings
+// so the kernel can still inspect the group/kind scope.
+type IgnoreDiffEntry struct {
+	// AppName is the Argo CD Application name.
+	AppName string `json:"appName"`
+	// Group and Kind narrow which resources this entry applies to.
+	Group string `json:"group"`
+	Kind  string `json:"kind"`
+	// JSONPointer is one element from ignoreDifferences[].jsonPointers.
+	JSONPointer string `json:"jsonPointer"`
+	// JQPath is one element from ignoreDifferences[].jqPathExpressions.
+	JQPath string `json:"jqPath"`
+}
+
 // World is the complete typed representation of a set of manifests.
 type World struct {
 	CRDs           []CRDInfo            `json:"crds"`
@@ -645,6 +694,15 @@ type World struct {
 	RBACBindings    []RBACBinding    `json:"rbacBindings,omitempty"`
 	RBACRules       []RBACRule       `json:"rbacRules,omitempty"`
 	ImmutableFields []ImmutableField `json:"-"`
+
+	// SelectorMappings is the static registry of Crossplane selector → resolved-path pairs.
+	// Populated from the static table in pkg/ir/selector_registry.go; not extracted from YAML.
+	SelectorMappings []SelectorMapping `json:"-"`
+
+	// SelectorUsages records every resource that has a selector field set,
+	// cross-referenced with the resolved path from SelectorMappings.
+	// Populated by EnrichTrajectoryData.
+	SelectorUsages []SelectorUsage `json:"-"`
 }
 
 // NewWorld creates an empty World.
