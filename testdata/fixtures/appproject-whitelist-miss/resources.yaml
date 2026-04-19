@@ -1,0 +1,10 @@
+apiVersion: sql.crossplane.io/v1alpha1
+kind: Database
+metadata:
+  name: preview-db
+  namespace: preview
+spec:
+  forProvider:
+    engine: postgres
+    version: "14"
+    storageGB: 20
