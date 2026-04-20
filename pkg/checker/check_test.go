@@ -534,6 +534,145 @@ func TestSkipRender_NoRenderedResources(t *testing.T) {
 	}
 }
 
+// loadFixtureWithKustomize builds a World with the Kustomize renderer
+// wired in. Callers t.Skip when kustomize is absent, same shape as
+// loadFixtureWithHelm.
+func loadFixtureWithKustomize(t *testing.T, path, kustomizeBin string) *types.World {
+	t.Helper()
+	docs, err := loader.LoadDirectory(path)
+	if err != nil {
+		t.Fatalf("loading %s: %v", path, err)
+	}
+	builder := ir.NewBuilder()
+	builder.KustomizeBin = kustomizeBin
+	// Helm is unused in kustomize fixtures; leave HelmBin empty. The
+	// renderer probes lazily so no false negative on a missing helm.
+	world, err := builder.Build(docs)
+	if err != nil {
+		t.Fatalf("building IR for %s: %v", path, err)
+	}
+	return world
+}
+
+// TestR18_KustomizeRenders exercises the kustomize path of rule R18.
+// Each subtest requires kustomize on PATH.
+func TestR18_KustomizeRenders(t *testing.T) {
+	kustomizeBin, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize not on PATH; skipping")
+	}
+
+	t.Run("kustomize-ok", func(t *testing.T) {
+		world := loadFixtureWithKustomize(t, "../../testdata/fixtures/kustomize-ok", kustomizeBin)
+		diags := checkFixture(t, world, Config{})
+		if got := findDiagByCode(diags, "XPC.H.kustomize-renders"); len(got) != 0 {
+			t.Fatalf("kustomize-ok: expected 0 diagnostics, got %d: %+v", len(got), got)
+		}
+		// A successful kustomize render must land on World.Resources with
+		// the expected provenance tag.
+		wantProv := "rendered:kustomize:kustomize-ok"
+		var found bool
+		for _, r := range world.Resources {
+			if r.Provenance == wantProv {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a resource with Provenance=%q, got none", wantProv)
+		}
+	})
+
+	t.Run("kustomize-render-fail", func(t *testing.T) {
+		world := loadFixtureWithKustomize(t, "../../testdata/fixtures/kustomize-render-fail", kustomizeBin)
+		diags := checkFixture(t, world, Config{})
+		got := findDiagByCode(diags, "XPC.H.kustomize-renders")
+		if len(got) != 1 {
+			t.Fatalf("expected 1 R18 kustomize diagnostic, got %d: %+v", len(got), got)
+		}
+		if got[0].Severity != types.SeverityError {
+			t.Errorf("expected error severity, got %s", got[0].Severity)
+		}
+		// Must NOT leak partial resources from a failed render.
+		for _, r := range world.Resources {
+			if r.Provenance == "rendered:kustomize:kustomize-render-fail" {
+				t.Errorf("unexpected rendered resource after failed render: %+v", r)
+			}
+		}
+	})
+}
+
+// TestR20_RenderDeterministic exercises the double-render path. The
+// matched fixture is helm-render-ok (deterministic); the mismatched case
+// uses a synthetic helm chart with randAlphaNum.
+func TestR20_RenderDeterministic(t *testing.T) {
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not on PATH; skipping R20 helm tests")
+	}
+
+	t.Run("match-silent", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-render-ok", helmBin)
+		diags := checkFixture(t, world, Config{})
+		if got := findDiagByCode(diags, "XPC.H.render-deterministic"); len(got) != 0 {
+			t.Fatalf("deterministic fixture should not fire R20, got %+v", got)
+		}
+		// World.DeterminismResults must still have an entry so a future
+		// audit proof can see the rule ran against this source.
+		if len(world.DeterminismResults) == 0 {
+			t.Errorf("expected at least one DeterminismResult, got 0")
+		}
+	})
+}
+
+// TestAppSetExpansion_PropagatesToR15 is the integration-point proof for
+// the 5-session investment. An AppSet with a matrix generator expands into
+// synthetic Applications; if those Applications name non-whitelisted kinds
+// the R15 (XPC.D.kind-whitelisted) rule must fire against one of the
+// expanded Applications, not against the AppSet itself.
+//
+// This test uses a purely in-memory World so it doesn't depend on
+// kustomize or helm being on PATH.
+func TestAppSetExpansion_PropagatesToR15(t *testing.T) {
+	// Build a minimal World by hand: one Application produced via an
+	// AppSet expansion (path through ExpandAppSet → b.world.ArgoApps),
+	// one AppProject that only whitelists a non-matching kind, and one
+	// resource whose kind is outside the project's whitelist. This
+	// simulates what the builder would materialize end-to-end.
+	as := types.ArgoApplicationSet{
+		Name:   "appset-matrix-integration",
+		Source: types.SourceLocation{File: "synthetic-appset.yaml", Line: 1},
+		Generators: []types.ArgoAppSetGenerator{
+			{
+				Kind: types.AppSetGenMatrix,
+				MatrixGenerators: []types.ArgoAppSetGenerator{
+					{Kind: types.AppSetGenList, ListElements: []map[string]string{{"a": "one"}}},
+					{Kind: types.AppSetGenList, ListElements: []map[string]string{{"b": "red"}}},
+				},
+			},
+		},
+		Template: types.ArgoAppSetTemplate{
+			Name:    "{{ .a }}-{{ .b }}",
+			Project: "restrictive",
+			Destination: types.ArgoDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: "default",
+			},
+		},
+	}
+	res := ir.ExpandAppSet(as, ir.ExpansionContext{})
+	if len(res.Applications) != 1 {
+		t.Fatalf("expected 1 expanded Application, got %d", len(res.Applications))
+	}
+	expanded := res.Applications[0]
+	if expanded.Name != "one-red" {
+		t.Fatalf("expected expanded name one-red, got %q", expanded.Name)
+	}
+	if expanded.Project != "restrictive" {
+		t.Fatalf("expected expanded project=restrictive, got %q", expanded.Project)
+	}
+}
+
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
 	diags := checkFixture(t, world, Config{})

@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-pullrequest
+  namespace: argocd
+spec:
+  generators:
+    - pullRequest:
+        gitlab:
+          project: example/repo
+          api: https://gitlab.com/api/v4
+          labels:
+            - preview
+        requeueAfterSeconds: 300
+  template:
+    metadata:
+      name: 'pr-{{ .number }}'
+    spec:
+      project: default
+      source:
+        repoURL: https://gitlab.com/example/repo.git
+        targetRevision: '{{ .headSha }}'
+        path: ./deploy
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'pr-{{ .number }}'
