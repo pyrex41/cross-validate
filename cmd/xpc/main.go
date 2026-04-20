@@ -73,6 +73,8 @@ Check flags:
   --strict-conversions Refuse webhook conversions entirely
   --proof              Generate a proof file alongside the check
   --snapshot=<path>    Use a specific snapshot file
+  --skip-render        Skip Helm/Kustomize rendering (emits one info diagnostic per skipped Application)
+  --helm-bin=<path>    Path to the helm binary (default: first 'helm' on PATH)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -109,6 +111,8 @@ func runCheck(args []string) int {
 	strictConversions := false
 	generateProof := false
 	snapshotPath := ""
+	skipRender := false
+	helmBin := ""
 	var paths []string
 
 	for _, arg := range args {
@@ -117,10 +121,14 @@ func runCheck(args []string) int {
 			strictConversions = true
 		case arg == "--proof":
 			generateProof = true
+		case arg == "--skip-render":
+			skipRender = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
 		case len(arg) > 11 && arg[:11] == "--snapshot=":
 			snapshotPath = arg[11:]
+		case len(arg) > 11 && arg[:11] == "--helm-bin=":
+			helmBin = arg[11:]
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -165,6 +173,8 @@ func runCheck(args []string) int {
 
 	// Build IR
 	builder := ir.NewBuilder()
+	builder.SkipRender = skipRender
+	builder.HelmBin = helmBin
 	world, err := builder.Build(allDocs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
@@ -191,6 +201,26 @@ func runCheck(args []string) int {
 
 	result := checker.CheckWithObligations(world, cfg)
 	diags := result.Diagnostics
+
+	// When rendering is skipped, surface one info diagnostic per
+	// Application that had a Helm source we did not render. CI runs
+	// without helm on PATH use this to know what coverage they missed.
+	if skipRender {
+		for _, app := range world.ArgoApps {
+			for _, src := range app.Sources {
+				if src.Renderer != types.RendererHelm {
+					continue
+				}
+				diags = append(diags, types.Diagnostic{
+					Code:     "XPC.H.helm-renders",
+					Severity: types.SeverityInfo,
+					Message:  fmt.Sprintf("%s: render skipped (--skip-render set)", app.Name),
+					Source:   app.Source,
+				})
+				break
+			}
+		}
+	}
 
 	// Report
 	if err := report.ReportStdout(diags, format); err != nil {
@@ -527,7 +557,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.D.kind-whitelisted, XPC.E.selector-needs-ignore-diff")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.selector-needs-ignore-diff, XPC.H.helm-renders, XPC.H.values-well-typed")
 		return 1
 	}
 
@@ -780,4 +810,37 @@ respectively. The entry {group: "*", kind: "*"} permits everything.
 
 Fix: Add the missing kind to the appropriate whitelist in the AppProject, or
 move the resource to an Application managed by a project that already allows it.`,
+
+	"XPC.H.helm-renders": `XPC.H.helm-renders: Helm rendering failed
+
+An Argo CD Application has a Helm source that xpc could not render. Without
+a successful render, xpc cannot inspect the actual manifests Argo CD will
+apply, so downstream rules (selector coverage, field validation, project
+whitelist) do not see the rendered resources.
+
+Causes:
+- helm binary absent on PATH (severity: warning; install helm or pass
+  --helm-bin=<path>).
+- Template syntax error, missing values, broken dependency (severity: error;
+  reproduce with 'helm template' locally and fix the chart).
+- Render exceeds the 30s timeout (severity: error; simplify the chart).
+
+Fix: Depends on the ErrorKind — see the diagnostic detail for the concrete
+helm failure message.`,
+
+	"XPC.H.values-well-typed": `XPC.H.values-well-typed: Helm values violate values.schema.json
+
+A Helm chart ships a values.schema.json (JSON Schema draft 2020-12), and the
+merged values xpc would pass to 'helm template' do not satisfy it. Causes
+include a scalar of the wrong JSON type (e.g. "three" for an integer field),
+a missing required field, a value outside an enum, or an unknown field when
+the schema sets additionalProperties: false.
+
+xpc's values walker reuses the same schema-walker that validates direct
+Kubernetes manifests against their CRD/XRD schemas, so the violation shapes
+(wrong-type, missing-required, unknown-field, invalid-enum) are the same.
+
+Fix: Either correct the value in the Application's valueFiles / valuesObject /
+inline values, or relax the chart's values.schema.json if the constraint is
+wrong.`,
 }
