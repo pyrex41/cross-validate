@@ -22,16 +22,33 @@ import (
 type Builder struct {
 	world *types.World
 
-	// SkipRender suppresses Helm (and eventually Kustomize) rendering.
-	// Existing tests that only exercise direct-manifest rules stay hermetic
-	// when this is true; callers that want rendered resources in the World
-	// set it to false and provide a HelmBin.
+	// SkipRender suppresses Helm and Kustomize rendering. Existing tests
+	// that only exercise direct-manifest rules stay hermetic when this is
+	// true; callers that want rendered resources in the World set it to
+	// false and provide binaries on PATH.
 	SkipRender bool
 	// HelmBin is the path to the helm binary. Empty means "look up helm on
 	// PATH when first needed".
 	HelmBin string
+	// KustomizeBin is the path to the kustomize binary. Empty means "look
+	// up kustomize on PATH when first needed".
+	KustomizeBin string
+	// SkipAppSetExpand suppresses the ExpandAppSet pass that synthesizes
+	// ArgoApplications from ApplicationSet generators. Default is "expand";
+	// CLI surfaces --skip-appset-expand for opt-out.
+	SkipAppSetExpand bool
+	// AppSetContext provides fixtures for generator kinds that can't be
+	// simulated offline (pullRequest, scmProvider). Nil is fine; only the
+	// PRFixtures-dependent code paths will degrade to an info diag.
+	AppSetContext ExpansionContext
 	// helmRenderer is constructed lazily on first render attempt.
 	helmRenderer *renderer.HelmRenderer
+	// kustomizeRenderer is constructed lazily on first render attempt.
+	kustomizeRenderer *renderer.KustomizeRenderer
+	// ExpansionDiags collects info-level diagnostics produced during
+	// AppSet expansion (e.g. unsupported generator kinds). The caller
+	// merges these into the final diagnostic stream.
+	ExpansionDiags []types.Diagnostic
 }
 
 // NewBuilder creates a new IR builder.
@@ -73,9 +90,40 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 				doc.Kind, getName(doc.Raw), doc.Source.File, doc.Source.Line, err)
 		}
 	}
+	// Expand ApplicationSets into synthetic ArgoApplications BEFORE the
+	// enrichment passes so downstream analysis (trajectory, field
+	// validation, later render hooks) sees the expanded fleet. Rendering
+	// of each synthetic Application happens here too — otherwise the
+	// render-results section would only cover AppSet-authored
+	// Applications rendered on some *later* invocation.
+	if !b.SkipAppSetExpand {
+		b.expandAppSets()
+	}
 	EnrichTrajectoryData(b.world)
 	EnrichFieldValidation(b.world)
+	if !b.SkipRender {
+		b.runDeterminismChecks()
+	}
 	return b.world, nil
+}
+
+// expandAppSets walks every parsed ApplicationSet, expands its generators
+// into concrete ArgoApplications, and runs the normal render hooks on each
+// synthetic Application. Any info-level diagnostics produced by expansion
+// (unsupported generators, unrenderable templates) are stashed on
+// Builder.ExpansionDiags for the caller to merge into the final stream.
+func (b *Builder) expandAppSets() {
+	for _, as := range b.world.ArgoAppSets {
+		res := ExpandAppSet(as, b.AppSetContext)
+		b.ExpansionDiags = append(b.ExpansionDiags, res.Diagnostics...)
+		for _, app := range res.Applications {
+			b.world.ArgoApps = append(b.world.ArgoApps, app)
+			if !b.SkipRender {
+				b.renderHelmSources(app, as.Source.File)
+				b.renderKustomizeSources(app, as.Source.File)
+			}
+		}
+	}
 }
 
 func (b *Builder) addCRD(doc loader.LoadedDocument) error {
@@ -486,12 +534,13 @@ func (b *Builder) addArgoApplication(doc loader.LoadedDocument) error {
 
 	b.world.ArgoApps = append(b.world.ArgoApps, app)
 
-	// Rendering hook: if rendering is enabled, walk every Helm source on
-	// this Application, invoke the renderer, and merge rendered resources
-	// into the World. A RenderResult is always appended so R18/R19 can
-	// emit judgments about the outcome.
+	// Rendering hook: if rendering is enabled, walk every Helm and
+	// Kustomize source on this Application, invoke the renderer, and
+	// merge rendered resources into the World. A RenderResult is always
+	// appended so R18/R19 can emit judgments about the outcome.
 	if !b.SkipRender {
 		b.renderHelmSources(app, doc.Source.File)
+		b.renderKustomizeSources(app, doc.Source.File)
 	}
 	return nil
 }
@@ -575,6 +624,148 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 		}
 		b.world.RenderResults = append(b.world.RenderResults, result)
 	}
+}
+
+// renderKustomizeSources invokes the KustomizeRenderer for each Kustomize
+// source on `app` and appends one RenderResult per source. Successful
+// renders also contribute their rendered resources to World.Resources with
+// a provenance tag keyed on the Application name.
+//
+// Mirrors renderHelmSources intentionally — two renderers do not justify a
+// shared helper, but the on-disk output and the World shape must match.
+func (b *Builder) renderKustomizeSources(app types.ArgoApplication, appFile string) {
+	if len(app.Sources) == 0 {
+		return
+	}
+	cwd := filepath.Dir(appFile)
+	if b.kustomizeRenderer == nil {
+		b.kustomizeRenderer = renderer.NewKustomizeRenderer(b.KustomizeBin)
+	}
+
+	for _, src := range app.Sources {
+		if src.Renderer != types.RendererKustomize {
+			continue
+		}
+		overlayPath, resolveErr := renderer.ResolveChart(src, cwd)
+		if resolveErr != nil {
+			b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
+				AppName:   app.Name,
+				ChartPath: overlayPath,
+				Success:   false,
+				Error:     resolveErr.Error(),
+				ErrorKind: "other",
+				Source:    app.Source,
+			})
+			continue
+		}
+
+		rendered, renderErr := b.kustomizeRenderer.RenderOverlay(overlayPath, src.Kustomize)
+		result := types.RenderResult{
+			AppName:   app.Name,
+			ChartPath: overlayPath,
+			Success:   renderErr == nil,
+			Source:    app.Source,
+		}
+		if renderErr != nil {
+			result.Error = renderErr.Error()
+			result.ErrorKind = classifyKustomizeError(renderErr)
+			b.world.RenderResults = append(b.world.RenderResults, result)
+			continue
+		}
+
+		docs, parseErr := loader.LoadReader(bytes.NewReader(rendered), appFile)
+		if parseErr != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("parsing rendered YAML: %v", parseErr)
+			result.ErrorKind = "other"
+			b.world.RenderResults = append(b.world.RenderResults, result)
+			continue
+		}
+
+		provenance := "rendered:kustomize:" + app.Name
+		for _, d := range docs {
+			res := resourceInfoFromDoc(d)
+			res.Source = app.Source
+			res.Provenance = provenance
+			b.world.Resources = append(b.world.Resources, res)
+		}
+		b.world.RenderResults = append(b.world.RenderResults, result)
+	}
+}
+
+// runDeterminismChecks double-renders every Application source and records
+// the per-source DeterminismResult on the World. Sources whose first render
+// errored are skipped silently — R18 / kustomize-renders already covered
+// them; re-flagging here would be duplicative noise.
+func (b *Builder) runDeterminismChecks() {
+	for _, app := range b.world.ArgoApps {
+		if len(app.Sources) == 0 {
+			continue
+		}
+		cwd := filepath.Dir(app.Source.File)
+		for _, src := range app.Sources {
+			switch src.Renderer {
+			case types.RendererHelm:
+				if b.helmRenderer == nil {
+					b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin)
+				}
+				chartPath, err := renderer.ResolveChart(src, cwd)
+				if err != nil {
+					continue
+				}
+				mismatch, summary, err := renderer.DoubleRenderHelm(b.helmRenderer, chartPath, app.Destination.Namespace, src.Helm)
+				if err != nil {
+					continue
+				}
+				b.world.DeterminismResults = append(b.world.DeterminismResults, types.DeterminismResult{
+					AppName:      app.Name,
+					RendererKind: "helm",
+					Mismatch:     mismatch,
+					DiffSummary:  summary,
+					Source:       app.Source,
+				})
+			case types.RendererKustomize:
+				if b.kustomizeRenderer == nil {
+					b.kustomizeRenderer = renderer.NewKustomizeRenderer(b.KustomizeBin)
+				}
+				overlayPath, err := renderer.ResolveChart(src, cwd)
+				if err != nil {
+					continue
+				}
+				mismatch, summary, err := renderer.DoubleRenderKustomize(b.kustomizeRenderer, overlayPath, src.Kustomize)
+				if err != nil {
+					continue
+				}
+				b.world.DeterminismResults = append(b.world.DeterminismResults, types.DeterminismResult{
+					AppName:      app.Name,
+					RendererKind: "kustomize",
+					Mismatch:     mismatch,
+					DiffSummary:  summary,
+					Source:       app.Source,
+				})
+			}
+		}
+	}
+}
+
+// classifyKustomizeError mirrors classifyRenderError for the Kustomize
+// renderer. Uppercase identifiers in Shen patterns are variables, so every
+// kind stays lowercase-dashed.
+func classifyKustomizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if renderer.IsKustomizeAbsent(err) {
+		return "kustomize-absent"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "timed out") {
+		return "kustomize-timeout"
+	}
+	if strings.Contains(msg, "kustomize build") {
+		return "kustomize-build-failed"
+	}
+	return "other"
 }
 
 // resourceInfoFromDoc projects a LoadedDocument into a ResourceInfo. Mirrors
@@ -1000,6 +1191,10 @@ func (b *Builder) parseAppSetGenerator(m map[string]interface{}) types.ArgoAppSe
 				}
 			}
 		}
+	} else if _, ok := m["pullRequest"]; ok {
+		gen.Kind = types.AppSetGenPullRequest
+	} else if _, ok := m["scmProvider"]; ok {
+		gen.Kind = types.AppSetGenSCMProvider
 	}
 
 	return gen
