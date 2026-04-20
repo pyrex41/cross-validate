@@ -398,6 +398,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("selector-usages", w.SelectorUsages, selectorUsageCmp, selectorUsageToObj),
 		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
 		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
+		sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -774,6 +775,55 @@ func violationSym(v types.ViolationKind) string {
 		return "invalid-enum"
 	}
 	return "unknown"
+}
+
+// renderResultCmp orders RenderResults deterministically so the Shen
+// `render-results` section is stable across runs.
+func renderResultCmp(a, b types.RenderResult) int {
+	if c := cmp.Compare(a.AppName, b.AppName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ChartPath, b.ChartPath)
+}
+
+// renderResultToObj serializes one RenderResult as a Shen s-expression of
+// the shape Shen rule R18/R19 expect to pattern-match. All discriminator
+// tags are lowercase-dashed symbols (uppercase identifiers are Shen
+// variables).
+func renderResultToObj(r types.RenderResult) kl.Obj {
+	successSym := "false"
+	if r.Success {
+		successSym = "true"
+	}
+	errorKind := r.ErrorKind
+	if errorKind == "" {
+		if r.Success {
+			errorKind = "none"
+		} else {
+			errorKind = "other"
+		}
+	}
+
+	issueObjs := make([]kl.Obj, 0, len(r.ValuesIssues))
+	for _, vi := range r.ValuesIssues {
+		issueObjs = append(issueObjs, makeList([]kl.Obj{
+			sym("values-issue"),
+			str(vi.Path),
+			str(vi.Message),
+		}))
+	}
+	issuesList := makeList(append([]kl.Obj{sym("values-issues")}, issueObjs...))
+
+	return makeList([]kl.Obj{
+		sym("render-result"),
+		str(r.AppName),
+		str(r.ChartPath),
+		sym(successSym),
+		sym(errorKind),
+		str(r.Error),
+		issuesList,
+		sourceToObj(r.Source),
+	})
 }
 
 // buildIgnoreDiffEntries flattens the ignoreDifferences of all ArgoApplications
