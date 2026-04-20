@@ -1,0 +1,7 @@
+apiVersion: example.com/v1alpha1
+kind: Widget
+metadata:
+  name: unknown-field-widget
+spec:
+  name: gizmo
+  nonsense: 42

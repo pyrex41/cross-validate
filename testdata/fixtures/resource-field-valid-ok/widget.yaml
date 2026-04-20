@@ -1,0 +1,11 @@
+apiVersion: example.com/v1alpha1
+kind: Widget
+metadata:
+  name: valid-widget
+spec:
+  name: gizmo
+  size: 3
+  color: red
+  tags:
+    - a
+    - b

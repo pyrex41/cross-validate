@@ -1,0 +1,7 @@
+apiVersion: example.com/v1alpha1
+kind: Widget
+metadata:
+  name: invalid-enum-widget
+spec:
+  name: gizmo
+  color: purple
