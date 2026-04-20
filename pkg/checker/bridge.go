@@ -399,6 +399,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
 		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
 		sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj),
+		sortedSection("determinism-results", w.DeterminismResults, determinismResultCmp, determinismResultToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -826,6 +827,35 @@ func renderResultToObj(r types.RenderResult) kl.Obj {
 		str(r.Error),
 		issuesList,
 		sourceToObj(r.Source),
+	})
+}
+
+// determinismResultCmp orders DeterminismResults deterministically so the
+// Shen `determinism-results` section is stable across runs.
+func determinismResultCmp(a, b types.DeterminismResult) int {
+	if c := cmp.Compare(a.AppName, b.AppName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.RendererKind, b.RendererKind)
+}
+
+// determinismResultToObj serializes one DeterminismResult as the
+// s-expression Shen rule R20 expects to pattern-match. The Mismatch bool is
+// projected into a lowercase-dashed discriminator symbol (`determ-match` /
+// `determ-mismatch`) so Shen's pattern match stays a plain symbol compare —
+// Shen's literal true/false booleans would be interpreted specially.
+func determinismResultToObj(d types.DeterminismResult) kl.Obj {
+	statusSym := "determ-match"
+	if d.Mismatch {
+		statusSym = "determ-mismatch"
+	}
+	return makeList([]kl.Obj{
+		sym("determinism-result"),
+		str(d.AppName),
+		str(d.RendererKind),
+		sym(statusSym),
+		str(d.DiffSummary),
+		sourceToObj(d.Source),
 	})
 }
 
