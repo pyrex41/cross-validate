@@ -187,6 +187,12 @@ type ResourceInfo struct {
 	Labels      map[string]string      `json:"labels,omitempty"`
 	Source      SourceLocation         `json:"source"`
 	Raw         map[string]interface{} `json:"-"`
+	// Provenance identifies how this resource entered the World.
+	// "direct" (or empty) means it was read from a manifest file on disk.
+	// "rendered:helm:<app-name>" means it was produced by rendering a Helm
+	// source of that Argo Application. Other future renderers will follow
+	// the same "rendered:<kind>:<app-name>" shape.
+	Provenance string `json:"provenance,omitempty"`
 }
 
 // ArgoApplication represents a parsed Argo CD Application.
@@ -651,6 +657,47 @@ type ResourceFieldFact struct {
 	Source     SourceLocation `json:"source"`
 }
 
+// ValuesIssue records one violation produced by validating a Helm chart's
+// merged values against its values.schema.json. Produced by
+// renderer.ValidateValues; consumed by Shen rule R19
+// (XPC.H.values-well-typed).
+type ValuesIssue struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// RenderResult records the outcome of rendering one Argo Application source
+// (currently Helm; Kustomize joins in S5). One entry per source attempted,
+// whether or not rendering succeeded. Consumed by Shen rules R18
+// (XPC.H.helm-renders) and R19 (XPC.H.values-well-typed).
+type RenderResult struct {
+	// AppName is the Argo Application whose source was rendered.
+	AppName string `json:"appName"`
+	// ChartPath is the resolved filesystem path that was rendered.
+	ChartPath string `json:"chartPath"`
+	// Success is true when the renderer produced output without error.
+	// A schema-violation in values does NOT flip Success to false — the
+	// render may still succeed even if values.schema.json rejects the
+	// merged values.
+	Success bool `json:"success"`
+	// Error is the error string (renderer stderr + exit code, or
+	// "helm binary absent" / "timed out"). Empty when Success is true.
+	Error string `json:"error,omitempty"`
+	// ErrorKind is a machine-readable classifier for Error: one of
+	// "helm-absent", "helm-template-failed", "helm-timeout", "other".
+	// Lowercase-dashed so Shen patterns can match on it directly
+	// (uppercase identifiers are Shen variables).
+	ErrorKind string `json:"errorKind,omitempty"`
+	// ValuesIssues is the list of values.schema.json violations detected
+	// when merging the chart's effective values. May be non-empty even
+	// when Success is true.
+	ValuesIssues []ValuesIssue `json:"valuesIssues,omitempty"`
+	// Source points at the Argo Application file+line that declared the
+	// rendered source, so diagnostics point somewhere an MR author can
+	// edit.
+	Source SourceLocation `json:"source"`
+}
+
 // SelectorMapping is one entry in the registry of Crossplane selector fields and the
 // concrete resolved paths they populate via late-init. Populated from a static table.
 // SelectorPath is the dotted path of the *Selector field in the manifest;
@@ -734,6 +781,12 @@ type World struct {
 	// by EnrichFieldValidation via schemas.ValidateManifest and consumed by
 	// Shen rule R17 (XPC.A.resource-field-valid).
 	ResourceFieldFacts []ResourceFieldFact `json:"-"`
+
+	// RenderResults records the outcome of every Helm (and eventually
+	// Kustomize) render attempt. Populated by the IR builder when
+	// Builder.SkipRender is false. Consumed by Shen rules R18
+	// (XPC.H.helm-renders) and R19 (XPC.H.values-well-typed).
+	RenderResults []RenderResult `json:"-"`
 }
 
 // NewWorld creates an empty World.
