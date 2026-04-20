@@ -44,54 +44,61 @@ git worktree remove -f -f <worktree-path>
 git branch -d claude/xpc-sN-<slug>
 ```
 
-## Next session — S4 (briefing guide for the incoming orchestrator)
+## Next session — S4 (dispatch guide, tip-verified)
 
-You are the orchestrator now. Wave 3 is merged; Wave 4 is your job. Follow the same shape the previous orchestrator used: verify anchors at the current tip, inspect S4 prep, author a fully-briefed S4 dispatch section (replacing THIS section), commit the brief, then fire implementer + verifier.
+Wave 3 is merged at `11ecb9c`; the orchestrator commit that added this brief will be `HEAD` at dispatch time. Everything below is ready for an implementer/verifier pair to run without further discovery.
 
 **Base plan section**: `/Users/reuben/.claude/plans/research-written-wiggly-nova.md` lines **257–338** (S4 spec: Helm rendering + values-well-typed). S5 follows at **342–402**.
 
-**Current HEAD**: `claude/phase1-cleanup` @ `11ecb9c` (S3 verify report). Verify before dispatching:
+**Host reality check (already done by previous orchestrator on 2026-04-20)**:
+- `helm` IS on PATH at `/opt/homebrew/bin/helm`, v4.1.4. Tests must STILL guard with `t.Skip` per base plan line 328 — CI may not have helm — but on this dev box the `helm-bin` success-criteria commands will run.
+- Current tip of `claude/phase1-cleanup`: `940a356` (the commit that landed this briefing) on top of `11ecb9c` (S3 verify report). Implementer must be dispatched against this tip.
 
-```bash
-cd /Users/reuben/projects/cross-validate
-git log --oneline -5     # tip should be 11ecb9c
-```
+### File anchors (grepped at `940a356`, keep in sync if you refresh)
 
-### What S3 shipped that S4 should reuse
+| File | Lines | What's there | S4 action |
+|---|---|---|---|
+| `pkg/checker/bridge.go` | 1075 | `sortedSection` helper @ 317; section list `worldToShenObj` @ 378–403; last current entry `resource-field-facts` @ 400 | **Insert** `sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj)` after line 400. Add cmp + toObj in this file. |
+| `pkg/types/types.go` | 769 | `ResourceInfo` @ 180–190; `ArgoSource` / `RendererHelm` @ 225–230; `ResourceFieldFact` / `ViolationKind` pattern @ 629–652; `World` struct @ 704–737 | **Add** `ResourceInfo.Provenance string` (default `"direct"`); **add** `ValuesIssue` + `RenderResult` structs (mirror `ResourceFieldFact` shape); **add** `World.RenderResults []RenderResult` with the same `json:"-"` tag as S3 used for `ResourceFieldFacts` (RenderResults are serialized into Shen, not public JSON). |
+| `pkg/ir/builder.go` | 1025 | `addArgoApplication` @ 409–474; `parseArgoSource` @ 476+ handles helm config into `src.Helm` | **Insert** render-invocation hook AFTER the app is fully parsed (after line 472 `b.world.ArgoApps = append...`). Guard with `b.SkipRender` per base plan line 284. On render success, parse rendered YAML through `loader.LoadReader` and append to `b.world.Resources` with `Provenance = "rendered:helm:<app-name>"`. On render fail OR values-schema violations, append a `RenderResult` to `b.world.RenderResults`. |
+| `cmd/xpc/main.go` | 783 | Raw arg-parsing (NOT cobra); `runCheck` flag-switch @ 107–124; help text @ 58–103; `runExplain` @ 520 | **Add** `--skip-render` (bool) and `--helm-bin=<path>` (string) flags matching the `case len(arg) > N && arg[:N] == "--flag=":` pattern. **Update** `printUsage`. **Update** `runExplain` to document `XPC.H.helm-renders` and `XPC.H.values-well-typed`. Thread flags into the `ir.Builder` via a new `SkipRender` / `HelmBin` field. |
+| `kernel/check.shen` | 137 | `load` list @ 16–34 ends at `r17`; `extract-section` bindings @ 61–82 end at `ResourceFieldFacts` and `Trajectory`; `mark-rule` bindings @ 88–105 end at `R17`; append cascade @ 107–109 ends with `(append R16 R17)` followed by **19 `)`** | **Add** `(load "r18-helm-renders.shen")` and `(load "r19-values-well-typed.shen")`. **Add** `RenderResults (extract-section render-results Sections)` near the `ResourceFieldFacts` line. **Add** `R18 (mark-rule "XPC.H.helm-renders" (check-r18 RenderResults))` and `R19 (mark-rule "XPC.H.values-well-typed" (check-r19 RenderResults))`. **Change** tail from `(append R16 R17)` to `(append R16 (append R17 (append R18 R19)))` — that adds **exactly 2 `append` opens → 2 more `)` at line 109** (let-bindings themselves contribute zero extra closers; only `append` does). Final closer count: 19 → **21**. |
+| `pkg/renderer/renderer.go` | new | — | Create per base plan §S4 item 1: `Renderer` interface, `ResolveChart` helper, chartPath resolution relative to the Application's file cwd. |
+| `pkg/renderer/helm.go` | new | — | Create per §S4 item 2: `HelmRenderer{HelmBin string}.Render(...)`. First-use `helm version` probe; on absence return a sentinel that the caller turns into a `RenderResult{Success:false, Error:"helm absent"}` **with severity=warning in the judgment** (base plan line 273). 30s timeout with `context.WithTimeout`. |
+| `pkg/renderer/cache.go` | new | — | Create per §S4 item 3: in-memory + `~/.cache/xpc/renders/` two-tier cache. Key = SHA-256(chart-dir-tree hash ‖ sorted values bytes ‖ helm version). 15-min TTL. |
+| `pkg/renderer/values_schema.go` | new | — | Create per §S4 item 6: invoke `schemas.ValidateManifest(chartValuesSchemaJSON, mergedValues)`. **IMPORTANT**: `ValidateManifest` was designed for CRDs (top-level apiVersion/kind/metadata exempt under additionalProperties:false), but for a values.schema.json — which usually does NOT set root `additionalProperties:false` — that exemption block is never reached, so the existing walker is correctly reusable. Fixture `helm-values-mismatch` has no `additionalProperties:false` and only checks `replicas: integer`. If you must set `additionalProperties:false` at values root, know that top-level `apiVersion`/`kind`/`metadata`/`status` get silently skipped — a non-issue for charts but worth a code comment. Map each returned `ResourceFieldFact` → `ValuesIssue{Path, Message}`. |
+| `kernel/r18-helm-renders.shen` | new | — | `check-r18 RenderResults` — one error judgment per `RenderResult` with `Success == false` AND a real error (non-absent-helm). Absent-helm → severity `warning` (base plan line 273). Use lowercase-dashed kind tags (Shen uppercase = variable — see gotchas). Model after `r17-resource-field-valid.shen`. |
+| `kernel/r19-values-well-typed.shen` | new | — | `check-r19 RenderResults` — one error judgment per `ValuesIssue` inside each `RenderResult.ValuesIssues`. Model after r17. |
+| `testdata/fixtures/helm-render-ok/` | new | — | Copy from `thoughts/shared/prep/fixtures/s4/helm-render-ok/` verbatim; add a Go test asserting one `Deployment` appears in `World.Resources` with `Provenance == "rendered:helm:helm-render-ok"`. |
+| `testdata/fixtures/helm-render-fail/` | new | — | Copy from prep; test asserts one `RenderResult` with `Success == false` and a non-empty error string. |
+| `testdata/fixtures/helm-values-mismatch/` | new | — | Copy from prep; test asserts one `RenderResult.ValuesIssues` entry with `Path == "replicas"` and `Violation == WrongType`. |
+| `docs/obligations.md` | — | Category H rows for `helm-renders` and `values-well-typed` | Mark both implemented. |
 
-- **`schemas.BuildSchemaIndex(*types.World) map[SchemaKey]map[string]interface{}`** at `pkg/schemas/index.go` — single-source schema map. S4's `values.schema.json` validation should go through this OR extend it rather than re-reading CRDs.
-- **`schemas.ValidateManifest(schema, raw) []ResourceFieldFact`** at `pkg/schemas/validate_manifest.go` — **the base plan at line 296 explicitly says S4's values.schema.json validation reuses this** (that's why A1 came first). The function handles `type`, `enum`, `required`, `additionalProperties:false`, and arrays of any element type (including nested objects).
-- **Array-path walker** is inline in `validate_manifest.go` around line 168 (the `case "array":` branch). If S4's `values.schema.json` paths need array indexing (`replicas[0]`, etc.), this already works — don't rewrite it.
-- **`ResourceFieldFact` / `ViolationKind` pattern** in `pkg/types/types.go` — the template for S4's `ValuesIssue` type (see base plan line 291).
-- **Audit proof is v4** — S4 should NOT bump it again. The plan authorizes exactly one bump per multi-rule-add, and S3 spent it.
+### Reusable surfaces from S3 (do NOT reinvent)
 
-### S4 prep artifacts (already on disk)
+- `schemas.BuildSchemaIndex(*types.World) map[SchemaKey]map[string]interface{}` @ `pkg/schemas/index.go:27` — S4 does NOT need to extend this (values.schema.json is per-chart, not per-GVK). But read it to understand the schema lookup pattern so R17 facts-on-rendered-resources keeps working after S4's builder change.
+- `schemas.ValidateManifest(schema, raw)` @ `pkg/schemas/validate_manifest.go:25` — base plan line 296 says S4 reuses this for values.schema.json. Confirmed reusable (see the `pkg/renderer/values_schema.go` row above). Array walker @ line 168 is inline; don't extract.
+- `ResourceFieldFact` / `ViolationKind` pattern @ `pkg/types/types.go:629–652` — template for `ValuesIssue` and `RenderResult`.
+- **Audit proof version is `4`** (S3 bumped it). S4 does **NOT** bump again — the plan authorizes one bump per multi-rule-add and S3 spent it. Leave `pkg/audit/proof.go` alone.
 
-`thoughts/shared/prep/fixtures/s4/` — **inspect before you brief**:
-- `helm-render-ok/` — minimal chart that renders cleanly to one Deployment.
-- `helm-render-fail/` — chart with a template syntax error.
-- `helm-values-mismatch/` — chart with `values.schema.json` requiring `replicas: integer`, values file passing `replicas: "three"`.
+### Dispatch mechanics
 
-Implementer copies these into `testdata/fixtures/` at dispatch time (same pattern S3 used).
-
-### S4-specific briefing TODOs (do these before you write the dispatch section)
-
-1. **Verify the 10+ file anchors** at tip `11ecb9c` — file paths, line numbers, insertion points. Use the base plan §S4 as the spec but fresh-grep line numbers because bridge.go / check.shen have grown since S3.
-2. **Check helm availability strategy**: base plan line 273 says "if helm absent, emit `XPC.H.helm-renders` severity=warning" — confirm the test suite uses `t.Skip` when helm is not on PATH (line 328). The verifier's automated phase needs to know whether `which helm` is expected to succeed or not.
-3. **Decide the `--skip-render` default**: base plan lines 313–314 add this flag. Default behavior when `helm` is absent on the test host matters for CI.
-4. **`kernel/check.shen` paren-count bump**: S4 adds TWO new sections (`render-results`) and TWO new rules (R18, R19) — the `let` binding at lines 66–76 + mark-rule block at 89–102 will need one additional `)` per new let-binding + per new mark-rule. Budget time for paren bisection (see gotchas).
-5. **S2 follow-up consideration**: S3's array walker lives in `validate_manifest.go` but R16's selector-path TODO in `trajectory_extract.go` is a separate traversal (expanding `[]` placeholders vs. walking a concrete array). Out of scope for S4, but if S4 naturally refactors to a shared path-walker helper, note it and flag the S2 follow-up.
-
-### Dispatch pattern (same as S1/S2/S3)
-
-1. **Pre-create worktree** (do NOT use `Agent(isolation: "worktree")` — wrong base branch; see memory):
+1. **Pre-create worktree with explicit base** — `Agent(isolation: "worktree")` defaults to `origin/HEAD` = `claude/build-xpc-type-checker-TfgsT` (wrong architecture; see `~/.claude/projects/-Users-reuben-projects-cross-validate/memory/feedback_agent_worktree_base.md`):
    ```bash
    git worktree add .claude/worktrees/s4-impl -b claude/xpc-s4-helm-renders claude/phase1-cleanup
    ```
-2. **Dispatch Implementer-S4** — `general-purpose`, `model: opus`, run in background. Self-contained prompt including: sanity checks (tip = `11ecb9c`, line counts, grep for `BuildSchemaIndex` to prove S3 merged), file-by-file anchor table, gating rules, test requirements, commit discipline, literal-output report mandate.
-3. **Dispatch Verifier-S4** — `general-purpose`, `model: haiku`, read-only to source, writes `thoughts/shared/verify/s4-report.md`. Match S3 report frontmatter shape.
-4. **Human gate** — user reviews report, then merge / iterate / abort.
-5. **Merge sequence** (same as S3):
+2. **Dispatch Implementer-S4** — `general-purpose`, `model: opus`, `run_in_background: true`. Prompt MUST contain:
+   - `cd /Users/reuben/projects/cross-validate/.claude/worktrees/s4-impl` as first action.
+   - Sanity checks: `git log --oneline -1` tip must start with the orchestrator-commit SHA (fetch it from the shell before dispatching and embed it literally); `wc -l pkg/checker/bridge.go` must be ≥ 1075; `grep -c BuildSchemaIndex pkg/schemas/index.go` must be ≥ 1 (proves S3 merged).
+   - The anchor table above, copied verbatim.
+   - Commit discipline: one logical commit per file-group (renderer package first, then types, then builder, then bridge, then kernel files, then CLI, then fixtures+tests, then docs). Messages in imperative mood matching recent history (`git log --oneline -20` for style).
+   - Test requirements: `make test` green (tests use `t.Skip` when `helm` not on PATH); `go test ./pkg/renderer/... -count=2` green; `go run ./cmd/xpc check --helm-bin=$(which helm) testdata/fixtures/helm-render-ok` exits 0 and `xpc dump-ir` shows the rendered Deployment; `go run ./cmd/xpc check --skip-render testdata/fixtures/helm-render-ok` exits 0 with one info diagnostic.
+   - Literal-output mandate: paste the actual tail of `make test` / `make lint` / `go run ...` into a report at `thoughts/shared/verify/s4-implementer-report.md` — no paraphrasing (S1 burned us on this).
+   - Shen gotchas: uppercase identifiers are variables (emit lowercase-dashed from Go); `string-contains?` arg order is `(Haystack Needle)`; string literals can't contain `\"`; after every kernel edit run `go run ./cmd/xpc check testdata/fixtures/basic` as a smoke test.
+   - Paren budget: line 109 of `kernel/check.shen` ends in 19 `)` today; after S4 it should end in **21 `)`** (2 new `append` opens). If you see `Panic: &{22}` after a kernel edit, that's paren mis-count — bisect.
+3. **Dispatch Verifier-S4** — `general-purpose`, `model: haiku`, read-only to source. Prompt instructs it to cd into the worktree, re-run all automated success-criteria commands fresh, write `thoughts/shared/verify/s4-report.md` with the same frontmatter shape as `thoughts/shared/verify/s3-report.md` (session: S4, rule: XPC.H.helm-renders + XPC.H.values-well-typed, branch: claude/xpc-s4-helm-renders, tip: <actual tip after implementer>, verifier: haiku, date: YYYY-MM-DD).
+4. **Human gate** — user reviews report before merge.
+5. **Merge sequence**:
    ```bash
    git checkout claude/phase1-cleanup
    git merge --ff-only claude/xpc-s4-helm-renders
@@ -100,7 +107,7 @@ Implementer copies these into `testdata/fixtures/` at dispatch time (same patter
    git worktree remove -f -f .claude/worktrees/s4-impl
    git branch -d claude/xpc-s4-helm-renders
    ```
-6. **Update this handoff** — flip the Wave 4 row to ✅ merged, record new tip, note anything worth carrying forward, replace this "Next session — S4" section with "Next session — S5" (same shape).
+6. **Update this handoff** — flip Wave 4 row to ✅ merged, record new tip, replace this "Next session — S4" block with "Next session — S5" (same shape; base plan lines **342–402**).
 
 ### Past-session gotchas (all still apply)
 
