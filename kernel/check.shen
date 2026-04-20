@@ -34,6 +34,7 @@
 (load "r17-resource-field-valid.shen")
 (load "r18-helm-renders.shen")
 (load "r19-values-well-typed.shen")
+(load "r20-render-deterministic.shen")
 
 \* ===== IR reading ===== *\
 
@@ -82,6 +83,7 @@
          IgnoreDiffEntries (extract-section ignore-diff-entries Sections)
          ResourceFieldFacts (extract-section resource-field-facts Sections)
          RenderResults (extract-section render-results Sections)
+         DeterminismResults (extract-section determinism-results Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -108,10 +110,11 @@
          R17 (mark-rule "XPC.A.resource-field-valid" (check-r17 ResourceFieldFacts))
          R18 (mark-rule "XPC.H.helm-renders" (check-r18 RenderResults))
          R19 (mark-rule "XPC.H.values-well-typed" (check-r19 RenderResults))
+         R20 (mark-rule "XPC.H.render-deterministic" (check-r20 DeterminismResults))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 R19)))))))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 R20))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

@@ -20,24 +20,49 @@
      - nothing when Success=true. *\
 
 
-\* r18-error-label — human-readable kind label. *\
+\* r18-error-label — human-readable kind label. Covers helm + kustomize. *\
 (define r18-error-label
-  helm-absent          -> "helm binary absent"
-  helm-template-failed -> "helm template failed"
-  helm-timeout         -> "helm template timed out"
-  other                -> "render failed"
-  none                 -> "render failed"
-  K                    -> "render failed")
+  helm-absent            -> "helm binary absent"
+  helm-template-failed   -> "helm template failed"
+  helm-timeout           -> "helm template timed out"
+  kustomize-absent       -> "kustomize binary absent"
+  kustomize-build-failed -> "kustomize build failed"
+  kustomize-timeout      -> "kustomize build timed out"
+  other                  -> "render failed"
+  none                   -> "render failed"
+  K                      -> "render failed")
 
 
 \* r18-fix-hint — remediation hint keyed off the error kind. *\
 (define r18-fix-hint
-  helm-absent          -> "Install helm or pass --helm-bin=<path> so xpc can render this Application's Helm sources."
-  helm-template-failed -> "Run 'helm template' locally on the chart to reproduce and fix the template error."
-  helm-timeout         -> "The chart takes >30s to render. Simplify the chart or raise the timeout."
-  other                -> "Inspect the render error and fix the chart or values."
-  none                 -> "Inspect the render error and fix the chart or values."
-  K                    -> "Inspect the render error and fix the chart or values.")
+  helm-absent            -> "Install helm or pass --helm-bin=<path> so xpc can render this Application's Helm sources."
+  helm-template-failed   -> "Run 'helm template' locally on the chart to reproduce and fix the template error."
+  helm-timeout           -> "The chart takes >30s to render. Simplify the chart or raise the timeout."
+  kustomize-absent       -> "Install kustomize or put it on PATH so xpc can render this Application's Kustomize sources."
+  kustomize-build-failed -> "Run 'kustomize build' locally on the overlay to reproduce and fix the build error."
+  kustomize-timeout      -> "The overlay takes >30s to render. Simplify the overlay tree or raise the timeout."
+  other                  -> "Inspect the render error and fix the chart or values."
+  none                   -> "Inspect the render error and fix the chart or values."
+  K                      -> "Inspect the render error and fix the chart or values.")
+
+
+\* r18-is-kustomize-kind? — does this ErrorKind identify a Kustomize
+   failure? Shen has no string-level introspection on symbols, so we pattern
+   match the three known kinds directly. *\
+(define r18-is-kustomize-kind?
+  kustomize-absent       -> true
+  kustomize-build-failed -> true
+  kustomize-timeout      -> true
+  _                      -> false)
+
+
+\* r18-code-for-kind — pick the diagnostic code: helm-renders vs
+   kustomize-renders. Using distinct codes lets the obligation ledger
+   tick both generators independently. *\
+(define r18-code-for-kind
+  K -> (if (r18-is-kustomize-kind? K)
+           "XPC.H.kustomize-renders"
+           "XPC.H.helm-renders"))
 
 
 \* r18-check-result — emit one judgment per failed render-result.
@@ -53,8 +78,15 @@
        (cn ChartPath (cn ": " Error))
        (r18-fix-hint helm-absent)
        [])]
+  [render-result AppName ChartPath render-failed kustomize-absent Error Issues Src] ->
+    [(make-warning "XPC.H.kustomize-renders"
+       Src
+       (cn AppName (cn ": " (r18-error-label kustomize-absent)))
+       (cn ChartPath (cn ": " Error))
+       (r18-fix-hint kustomize-absent)
+       [])]
   [render-result AppName ChartPath render-failed ErrorKind Error Issues Src] ->
-    [(make-error "XPC.H.helm-renders"
+    [(make-error (r18-code-for-kind ErrorKind)
        Src
        (cn AppName (cn ": " (r18-error-label ErrorKind)))
        (cn ChartPath (cn ": " Error))
