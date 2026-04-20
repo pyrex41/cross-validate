@@ -1,8 +1,8 @@
 # S2 Verify — XPC.E.selector-needs-ignore-diff
 
-**Date**: 2026-04-18
-**Branch**: `claude/phase1-cleanup`
-**Tip**: 560222d
+**Date**: 2026-04-19
+**Branch**: `claude/xpc-s2-selector-ignore-diff`
+**Tip**: 9dda0c9
 **Verifier**: haiku agent s2-verify
 
 ## Success criteria
