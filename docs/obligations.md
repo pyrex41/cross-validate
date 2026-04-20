@@ -134,9 +134,9 @@ For every Application source, verify the renderer is available, rendering
 succeeds, and the output is well-formed YAML with valid apiVersion/kind.
 
 **Generators**:
-- `helm-renders` -- Helm template succeeds
+- `helm-renders` -- Helm template succeeds (**implemented** — R18 / `XPC.H.helm-renders`; warning when helm binary absent, error on template/timeout failure)
 - `kustomize-renders` -- Kustomize build succeeds
-- `values-well-typed` -- value sources match chart schema
+- `values-well-typed` -- value sources match chart schema (**implemented** — R19 / `XPC.H.values-well-typed`, reuses S3 `ValidateManifest` walker)
 - `render-deterministic` -- same input produces same output
 
 **Absorbs**: (new -- no legacy rule)
