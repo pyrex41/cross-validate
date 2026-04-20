@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
 // TestKeyDeterminism guards against a foot-gun: if the cache key changed
@@ -75,6 +77,92 @@ func TestHashChartDirDeterministic(t *testing.T) {
 	}
 	if h3 == h1 {
 		t.Fatalf("HashChartDir did not change after content edit")
+	}
+}
+
+// TestKustomizeKeyStability covers cache-key stability for the Kustomize
+// renderer. The key input combines the overlay tree digest, kustomize
+// version, and the Argo-side ArgoKustomizeSource overrides; changing any
+// input must flip the key. Same inputs → same key is the real lifeblood
+// invariant — without it we'd never get a cache hit.
+func TestKustomizeKeyStability(t *testing.T) {
+	tree := "abc123"
+	version := "v5.8.1"
+	src := &types.ArgoKustomizeSource{
+		NamePrefix:   "prod-",
+		Images:       []string{"app=app:v1", "db=db:v2"},
+		CommonLabels: map[string]string{"tier": "web"},
+	}
+
+	k1 := kustomizeKey(tree, version, src)
+	k2 := kustomizeKey(tree, version, src)
+	if k1 != k2 {
+		t.Fatalf("kustomizeKey not deterministic: %q vs %q", k1, k2)
+	}
+
+	// Tree change busts key.
+	if kustomizeKey("different", version, src) == k1 {
+		t.Fatalf("tree change did not alter key")
+	}
+	// Version change busts key.
+	if kustomizeKey(tree, "v5.9.0", src) == k1 {
+		t.Fatalf("version change did not alter key")
+	}
+	// NamePrefix change busts key.
+	src2 := *src
+	src2.NamePrefix = "dev-"
+	if kustomizeKey(tree, version, &src2) == k1 {
+		t.Fatalf("namePrefix change did not alter key")
+	}
+	// Image order must NOT matter (we sort before hashing).
+	src3 := *src
+	src3.Images = []string{"db=db:v2", "app=app:v1"}
+	if kustomizeKey(tree, version, &src3) != k1 {
+		t.Fatalf("image-order swap altered key; expected sorted-stable hashing")
+	}
+	// nil source still produces a deterministic key.
+	k4 := kustomizeKey(tree, version, nil)
+	k5 := kustomizeKey(tree, version, nil)
+	if k4 != k5 {
+		t.Fatalf("kustomizeKey(nil) not deterministic")
+	}
+}
+
+func TestHashKustomizeDirDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("kustomization.yaml", "kind: Kustomization\n")
+	write("base/a.yaml", "kind: ConfigMap\n")
+	write("base/b.yaml", "kind: Secret\n")
+
+	h1, err := HashKustomizeDir(dir)
+	if err != nil {
+		t.Fatalf("HashKustomizeDir: %v", err)
+	}
+	h2, err := HashKustomizeDir(dir)
+	if err != nil {
+		t.Fatalf("HashKustomizeDir: %v", err)
+	}
+	if h1 != h2 {
+		t.Fatalf("HashKustomizeDir not deterministic: %q vs %q", h1, h2)
+	}
+
+	write("base/b.yaml", "kind: Secret2\n")
+	h3, err := HashKustomizeDir(dir)
+	if err != nil {
+		t.Fatalf("HashKustomizeDir: %v", err)
+	}
+	if h3 == h1 {
+		t.Fatalf("HashKustomizeDir did not change after content edit")
 	}
 }
 
