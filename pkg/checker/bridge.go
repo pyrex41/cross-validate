@@ -239,37 +239,23 @@ func enrichSyncWaves(w *types.World) {
 
 // resolvePatchTypes resolves field types for patches in Resources-mode compositions
 // using the world's schema data.
+//
+// The XRD and CRD schemas are looked up through schemas.BuildSchemaIndex, the
+// shared (apiVersion, kind) → schema index also consumed by
+// ir.EnrichFieldValidation for R17. For XRDs we pick the composite type ref's
+// explicit version; for composed CRDs we use the base.apiVersion directly.
 func resolvePatchTypes(w *types.World) {
-	xrdSchemaMap := make(map[string]map[string]interface{})
-	for _, xrd := range w.XRDs {
-		for _, v := range xrd.Versions {
-			if v.Referenceable && v.SchemaDigest != "" {
-				if si, ok := w.Schemas[v.SchemaDigest]; ok {
-					xrdSchemaMap[xrd.Group+"/"+xrd.Kind] = si.Schema
-				}
-			}
-		}
-	}
-	crdSchemaMap := make(map[string]map[string]interface{})
-	for _, crd := range w.CRDs {
-		for _, v := range crd.Versions {
-			if v.Storage && v.SchemaDigest != "" {
-				if si, ok := w.Schemas[v.SchemaDigest]; ok {
-					crdSchemaMap[crd.Group+"/"+crd.Kind] = si.Schema
-				}
-			}
-		}
-	}
+	index := schemas.BuildSchemaIndex(w)
 
 	for ci, comp := range w.Compositions {
-		xrdKey := comp.CompositeTypeRef.Group + "/" + comp.CompositeTypeRef.Kind
-		xrdSchema := xrdSchemaMap[xrdKey]
+		xrdKey := schemas.SchemaKey{
+			APIVersion: comp.CompositeTypeRef.Group + "/" + comp.CompositeTypeRef.Version,
+			Kind:       comp.CompositeTypeRef.Kind,
+		}
+		xrdSchema := index[xrdKey]
+
 		for ri, res := range comp.Resources {
-			crdKey := ""
-			if parts := strings.SplitN(res.Base.APIVersion, "/", 2); len(parts) == 2 {
-				crdKey = parts[0] + "/" + res.Base.Kind
-			}
-			crdSchema := crdSchemaMap[crdKey]
+			crdSchema := index[schemas.SchemaKey{APIVersion: res.Base.APIVersion, Kind: res.Base.Kind}]
 			for pi, patch := range res.Patches {
 				if patch.FromFieldPath == "" || patch.ToFieldPath == "" {
 					continue
@@ -411,6 +397,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("selector-mappings", w.SelectorMappings, selectorMappingCmp, selectorMappingToObj),
 		sortedSection("selector-usages", w.SelectorUsages, selectorUsageCmp, selectorUsageToObj),
 		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
+		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -740,6 +727,53 @@ func selectorUsageToObj(u types.SelectorUsage) kl.Obj {
 		str(u.SelectorPath), str(u.ResolvedPath),
 		sourceToObj(u.Source),
 	})
+}
+
+func resourceFieldFactCmp(a, b types.ResourceFieldFact) int {
+	if c := cmp.Compare(a.APIVersion, b.APIVersion); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Path, b.Path); c != 0 {
+		return c
+	}
+	return cmp.Compare(string(a.Violation), string(b.Violation))
+}
+
+func resourceFieldFactToObj(f types.ResourceFieldFact) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("resource-field-fact"),
+		str(f.APIVersion), str(f.Kind), str(f.Namespace), str(f.Name),
+		str(f.Path),
+		sym(violationSym(f.Violation)),
+		str(f.Message),
+		sourceToObj(f.Source),
+	})
+}
+
+// violationSym maps a ViolationKind to a lowercase, dashed symbol name used
+// in Shen patterns. Lowercase symbols avoid Shen's pattern-match convention
+// where uppercase identifiers are variables.
+func violationSym(v types.ViolationKind) string {
+	switch v {
+	case types.ViolationUnknownField:
+		return "unknown-field"
+	case types.ViolationWrongType:
+		return "wrong-type"
+	case types.ViolationMissingRequired:
+		return "missing-required"
+	case types.ViolationInvalidEnum:
+		return "invalid-enum"
+	}
+	return "unknown"
 }
 
 // buildIgnoreDiffEntries flattens the ignoreDifferences of all ArgoApplications
