@@ -212,3 +212,44 @@ Tip: `c86d05a` on `claude/xpc-s5-kustomize-appset`. Gate checks in priority orde
 8. Note the total-coverage scoreboard gap in verify report.
 
 Match the s4-report.md frontmatter shape. Flag the scoreboard gap explicitly in the "Merge recommendation" section so the human gate can decide.
+
+## Total-coverage scoreboard (post-hoc, base plan line 401)
+
+Recomputed against the MR-bucket taxonomy in `thoughts/shared/research/2026-04-18-fg-manifold-target-study.md` (~500-MR history). Shares are the research doc's own percentages; rule attribution is from `kernel/check.shen:93–113` at tip `1865039`.
+
+| # | Bucket | MR share | Rule(s) that cover it | Status |
+|---|---|---|---|---|
+| 1 | CRD schema field mismatches (wrong field name / type / missing required / wrong enum) | ~40% | R17 `XPC.A.resource-field-valid` (S3) | ✅ covered |
+| 2 | Crossplane selector → resolved-ref drift (`*Selector` without matching `ignoreDifferences`) | ~20% | R16 `XPC.E.selector-needs-ignore-diff` (S2) | ✅ covered |
+| 3 | Late-init field drift (provider writes back to `spec.forProvider.*`) | ~15% | — (explicitly deferred; would reuse S2's registry shape as a follow-up) | ❌ miss |
+| 4 | AppProject whitelist misses (resource kind not in `clusterResourceWhitelist`) | ~2% | R15 `XPC.D.kind-whitelisted` (S1); reaches AppSet-expanded Applications via S5's `ExpandAppSet` | ✅ covered (S5 unlocks full surface) |
+| 5 | ServerSideApply × managementPolicies interactions | ~2–3% | — (Category E defined in `docs/obligations.md:81–96`, rule unbuilt) | ❌ miss |
+| 6 | Provider-package bugs (deprecated versions, webhook conversion cost) | ~5% | R11 (deprecation-calendar subset), R2 (webhook-conversion subset via `XPC002`) | ◐ partial (~1–2% of the 5%) |
+| 7 | External-name normalization (`alias/` prefix, SM ARN form) | ~1% | — | ❌ miss |
+| 8 | Wave ordering / provider-wave < MR-wave | <1% | R6 + R6c `XPC006` | ✅ covered (not a frequent MR category — team has engineered around it) |
+| 9 | Composition → XRD reference | <1% | R3 `XPC003` | ✅ covered (low MR rate) |
+| 10 | Pipeline function reference | <1% | R4 `XPC004` | ✅ covered (low MR rate) |
+
+**Primary coverage (sum of ✅ buckets over the dominant 500-MR surface):** ~40 + 20 + 2 = **62%** of the historical MR volume, plus ~1–2% partial from R11/R2. Target was ≥50%. **✅ Pass.**
+
+### Qualifying assumptions
+
+1. **Helm/Kustomize rendering (S4/S5) is a force multiplier, not a new bucket.** R15/R16/R17 all require resource manifests in `World.Resources`. Without S4 (Helm) and S5 (Kustomize), every Application that sources from a chart or overlay would be opaque to those three rules. fg-manifold routes nearly all claim traffic through `lib/charts/crossplane-{claim,fargateservice,workers}/`, so rendering is what lets buckets 1, 2, and 4 reach their stated shares in practice. R18/R19/R20 are the infrastructure that makes the 62% real on this specific repo — they do not themselves close any new MR bucket.
+
+2. **ApplicationSet expansion (S5) unlocks bucket 4 on preview-driven Apps.** !1388 (the `preview` AppProject missing `postgresql.sql.crossplane.io`) is produced by a matrix × pullRequest AppSet. Without S5's `ExpandAppSet`, R15 can only lint the bootstrap Application and handful of static ones; with it, R15 lints every materialized Application in the preview fleet. The capstone test `TestAppSetExpansion_PropagatesToR15` (`pkg/checker/check_test.go:636`) is the literal proof that expansion feeds the whitelist rule.
+
+3. **R20 (`render-deterministic`) is not tied to any historical bucket.** It is a preventative warning — expected to surface chart templates using `randAlphaNum` that the team should annotate, not a rule that retroactively catches MRs in the sample.
+
+4. **Late-init drift (bucket 3, ~15%) is the largest uncovered bucket.** The research doc flags this explicitly as "could live in the same rule as [selectors] with a separate emit message, or as a Category I generator." Lifting S2's `selector_registry.go` shape into a `late_init_registry.go` is the shortest path — deferred per base plan scope ("What we're NOT doing" line 43: "Late-init field drift as a distinct rule this plan cycle").
+
+5. **The 62% headline is coverage of MR *categories*, not a guarantee that xpc run on an arbitrary fg-manifold branch today would produce a bisectable diagnostic for 62% of merged MRs.** False-positive rate, missed edge-case manifests, and CRD-schema staleness (SchemasDir freshness) will eat some of that in practice. Empirical coverage-on-replay is the manual-success-criterion in base plan line 399; that requires access to `~/fg/fg-manifold` and is out of scope for this session.
+
+### What's left for a follow-up session
+
+- **Late-init-drift rule** (reclaims ~15% from bucket 3). S2's registry pattern, one new table, one new rule file. Estimated ≤1 day.
+- **SSA × managementPolicies** (reclaims ~2–3% from bucket 5). Category E; the bridge already has `IgnoreDiffEntries` section pattern from R16. Similar scale.
+- **External-name normalization** (~1%). Category I territory; requires a maintained provider-capability table — smaller ROI per unit effort.
+- **Manual fg-manifold replay** (base plan line 399) — record diagnostic counts on three known-good branches; profile if warm-cache > 2 minutes.
+
+Combined, the first two follow-ups would push primary coverage to **~80%**. Deferred per scope-gate, not a regression.
+
