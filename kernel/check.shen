@@ -31,6 +31,7 @@
 (load "r14-no-rbac-regression.shen")
 (load "r15-appproject-whitelist.shen")
 (load "r16-selector-needs-ignore-diff.shen")
+(load "r17-resource-field-valid.shen")
 
 \* ===== IR reading ===== *\
 
@@ -77,6 +78,7 @@
          SelectorMappings (extract-section selector-mappings Sections)
          SelectorUsages (extract-section selector-usages Sections)
          IgnoreDiffEntries (extract-section ignore-diff-entries Sections)
+         ResourceFieldFacts (extract-section resource-field-facts Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -100,10 +102,11 @@
          R14 (mark-rule "XPC014" (check-r14 Trajectory SARefs RBACBindings))
          R15 (mark-rule "XPC.D.kind-whitelisted" (check-r15 ArgoApps ArgoAppProjLinks ArgoAppProjects Resources CRDs))
          R16 (mark-rule "XPC.E.selector-needs-ignore-diff" (check-r16 SelectorUsages IgnoreDiffEntries))
+         R17 (mark-rule "XPC.A.resource-field-valid" (check-r17 ResourceFieldFacts))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 R16))))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 R17)))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
