@@ -59,6 +59,7 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 		}
 	}
 	EnrichTrajectoryData(b.world)
+	EnrichFieldValidation(b.world)
 	return b.world, nil
 }
 
