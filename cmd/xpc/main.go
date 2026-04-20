@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/pyrex41/cross-validate-/pkg/audit"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
@@ -75,6 +77,10 @@ Check flags:
   --snapshot=<path>    Use a specific snapshot file
   --skip-render        Skip Helm/Kustomize rendering (emits one info diagnostic per skipped Application)
   --helm-bin=<path>    Path to the helm binary (default: first 'helm' on PATH)
+  --kustomize-bin=<path>  Path to the kustomize binary (default: first 'kustomize' on PATH)
+  --skip-appset-expand Skip ApplicationSet generator expansion
+  --appset-fixture=<file>  YAML fixture for pullRequest/scmProvider generators
+                             (shape: {appset-name: [{key: value, ...}]})
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -113,6 +119,9 @@ func runCheck(args []string) int {
 	snapshotPath := ""
 	skipRender := false
 	helmBin := ""
+	kustomizeBin := ""
+	appsetFixturePath := ""
+	skipAppSetExpand := false
 	var paths []string
 
 	for _, arg := range args {
@@ -123,12 +132,18 @@ func runCheck(args []string) int {
 			generateProof = true
 		case arg == "--skip-render":
 			skipRender = true
+		case arg == "--skip-appset-expand":
+			skipAppSetExpand = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
 		case len(arg) > 11 && arg[:11] == "--snapshot=":
 			snapshotPath = arg[11:]
 		case len(arg) > 11 && arg[:11] == "--helm-bin=":
 			helmBin = arg[11:]
+		case len(arg) > 16 && arg[:16] == "--kustomize-bin=":
+			kustomizeBin = arg[16:]
+		case len(arg) > 17 && arg[:17] == "--appset-fixture=":
+			appsetFixturePath = arg[17:]
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -175,6 +190,16 @@ func runCheck(args []string) int {
 	builder := ir.NewBuilder()
 	builder.SkipRender = skipRender
 	builder.HelmBin = helmBin
+	builder.KustomizeBin = kustomizeBin
+	builder.SkipAppSetExpand = skipAppSetExpand
+	if appsetFixturePath != "" {
+		fixtures, fxErr := loadAppSetFixtures(appsetFixturePath)
+		if fxErr != nil {
+			fmt.Fprintf(os.Stderr, "error loading --appset-fixture=%s: %v\n", appsetFixturePath, fxErr)
+			return 1
+		}
+		builder.AppSetContext.PRFixtures = fixtures
+	}
 	world, err := builder.Build(allDocs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
@@ -202,22 +227,43 @@ func runCheck(args []string) int {
 	result := checker.CheckWithObligations(world, cfg)
 	diags := result.Diagnostics
 
+	// Merge in any info-level diagnostics the AppSet expander emitted
+	// (unsupported generator kinds, unrenderable templates). These arrive
+	// on builder.ExpansionDiags because the kernel never sees AppSets
+	// directly — we synthesize their Applications in pkg/ir.
+	diags = append(diags, builder.ExpansionDiags...)
+
 	// When rendering is skipped, surface one info diagnostic per
-	// Application that had a Helm source we did not render. CI runs
-	// without helm on PATH use this to know what coverage they missed.
+	// Application that had a Helm or Kustomize source we did not render.
+	// CI runs without helm/kustomize on PATH use this to know what
+	// coverage they missed.
 	if skipRender {
 		for _, app := range world.ArgoApps {
+			helmSeen := false
+			kustSeen := false
 			for _, src := range app.Sources {
-				if src.Renderer != types.RendererHelm {
-					continue
+				switch src.Renderer {
+				case types.RendererHelm:
+					if !helmSeen {
+						diags = append(diags, types.Diagnostic{
+							Code:     "XPC.H.helm-renders",
+							Severity: types.SeverityInfo,
+							Message:  fmt.Sprintf("%s: helm render skipped (--skip-render set)", app.Name),
+							Source:   app.Source,
+						})
+						helmSeen = true
+					}
+				case types.RendererKustomize:
+					if !kustSeen {
+						diags = append(diags, types.Diagnostic{
+							Code:     "XPC.H.kustomize-renders",
+							Severity: types.SeverityInfo,
+							Message:  fmt.Sprintf("%s: kustomize render skipped (--skip-render set)", app.Name),
+							Source:   app.Source,
+						})
+						kustSeen = true
+					}
 				}
-				diags = append(diags, types.Diagnostic{
-					Code:     "XPC.H.helm-renders",
-					Severity: types.SeverityInfo,
-					Message:  fmt.Sprintf("%s: render skipped (--skip-render set)", app.Name),
-					Source:   app.Source,
-				})
-				break
 			}
 		}
 	}
@@ -568,6 +614,43 @@ func runExplain(args []string) int {
 // mergeSnapshotIntoWorld merges snapshot type environment data into a World.
 // The snapshot provides CRDs, providers, functions etc. that may not be
 // present in the manifest files being checked.
+// loadAppSetFixtures parses a YAML file that supplies PR-stub parameter
+// sets for ApplicationSets whose generators hit remote APIs
+// (pullRequest, scmProvider). The file's top-level shape is:
+//
+//	appset-name:
+//	  - number: 42
+//	    branch: feature/x
+//	    headSha: abc123
+//	  - number: 43
+//	    ...
+//
+// Any non-string value is coerced via fmt.Sprintf("%v", …) so integers
+// like `number: 42` survive the type-mismatch — ApplicationSet templates
+// consume these as plain {{ .number }} substitutions, which our minimal
+// engine does as strings anyway.
+func loadAppSetFixtures(path string) (map[string][]map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string][]map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decoding YAML: %w", err)
+	}
+	out := make(map[string][]map[string]string, len(raw))
+	for appset, prs := range raw {
+		for _, pr := range prs {
+			stringified := make(map[string]string, len(pr))
+			for k, v := range pr {
+				stringified[k] = fmt.Sprintf("%v", v)
+			}
+			out[appset] = append(out[appset], stringified)
+		}
+	}
+	return out, nil
+}
+
 func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
 	// Add CRDs from snapshot that aren't already in the world
 	existingCRDs := make(map[string]bool)
