@@ -135,9 +135,9 @@ succeeds, and the output is well-formed YAML with valid apiVersion/kind.
 
 **Generators**:
 - `helm-renders` -- Helm template succeeds (**implemented** — R18 / `XPC.H.helm-renders`; warning when helm binary absent, error on template/timeout failure)
-- `kustomize-renders` -- Kustomize build succeeds
+- `kustomize-renders` -- Kustomize build succeeds (**implemented** — R18 / `XPC.H.kustomize-renders`; same absent-binary/timeout/failure severity ladder as helm-renders)
 - `values-well-typed` -- value sources match chart schema (**implemented** — R19 / `XPC.H.values-well-typed`, reuses S3 `ValidateManifest` walker)
-- `render-deterministic` -- same input produces same output
+- `render-deterministic` -- same input produces same output (**implemented** — R20 / `XPC.H.render-deterministic`; warning-only, double-render byte-compare)
 
 **Absorbs**: (new -- no legacy rule)
 
