@@ -16,7 +16,7 @@ Running state of the 5-session team-of-agents plan. Update after each wave.
 | 2 | S2 — XPC.E.selector-needs-ignore-diff (R16) | ✅ merged | `claude/phase1-cleanup` @ `994e052` | 6 impl commits + verify report + frontmatter fixup. Verify report: `thoughts/shared/verify/s2-report.md`. Registry: 53 entries (35 scalar-active + 18 array-path TODO). |
 | 3 | S3 — XPC.A.resource-field-valid (R17) | ✅ merged | `claude/phase1-cleanup` @ `11ecb9c` | 8 impl commits + verify report. Verify report: `thoughts/shared/verify/s3-report.md`. Bumped audit proof v3→v4. New: `pkg/schemas/{index,validate_manifest}.go`, `pkg/ir/field_validation.go`, `kernel/r17-resource-field-valid.shen`. Array-path walker implemented inline in `validate_manifest.go` (partially addresses S2's TODO — see gotchas). |
 | 4 | S4 — XPC.H.helm-renders + values-well-typed | ✅ merged | `claude/phase1-cleanup` @ `e3fe53b` | 8 impl commits + implementer report + verify report. Verify report: `thoughts/shared/verify/s4-report.md`. New: `pkg/renderer/{renderer,cache,helm,values_schema,file_util}.go`, `kernel/r18-helm-renders.shen`, `kernel/r19-values-well-typed.shen`, `--skip-render` / `--helm-bin=<path>` CLI flags. Two scope expansions: bridge emits `render-ok` / `render-failed` symbols (Shen booleans didn't pattern-match reliably); `pkg/loader/loader.go` now skips `templates/` dirs adjacent to `Chart.yaml` to keep raw Go-template YAML from breaking the decoder. |
-| 5 | S5 — Kustomize + AppSet + determinism | ⬜ next | — | Consumes `thoughts/shared/prep/fixtures/s5/`. Reuses S4's renderer/cache shape for Kustomize. |
+| 5 | S5 — Kustomize + AppSet + determinism | ✅ merged | `claude/phase1-cleanup` @ `86b33fa` | 15 impl commits (13 code + 2 orchestrator docs) + verify report. Verify report: `thoughts/shared/verify/s5-report.md`. Implementer crashed mid-run (`Prompt is too long`); orchestrator committed already-written source in 12 logical chunks, fixed gofmt regression on `pkg/ir/builder.go`, wrote implementer report, appended total-coverage scoreboard. New: `pkg/renderer/{kustomize,determinism}.go`, `pkg/ir/{appset_expand,appset_template}.go`, `kernel/r20-render-deterministic.shen`, `--appset-fixture=` / `--skip-appset-expand` CLI flags, `docs/adr/003-appset-expansion.md`. R18 generalized to carry both Helm and Kustomize provenance (filename now a misnomer; rename deferred). Capstone integration test `TestAppSetExpansion_PropagatesToR15` proves expansion feeds the normal rule pipeline. |
 
 ## Dispatch recipe (validated on S1)
 
@@ -44,81 +44,76 @@ git worktree remove -f -f <worktree-path>
 git branch -d claude/xpc-sN-<slug>
 ```
 
-## Next session — S5 (briefing guide for the incoming orchestrator)
+## Plan complete — 2026-04-20
 
-You are the orchestrator now. Wave 4 is merged; Wave 5 is your job and closes out the plan. Follow the same shape the previous orchestrator used: verify anchors at the current tip, inspect S5 prep, author a fully-briefed S5 dispatch section (replacing THIS section), commit the brief, then fire implementer + verifier.
+Five waves merged. Every rule from the base plan shipped green; S5 closed out Category H and added ApplicationSet expansion. `claude/phase1-cleanup` tip: `86b33fa`. Full commit log spans Waves 0 → 5; 14 rules now wired (R1–R14 pre-plan, R15–R20 added by this plan).
 
-**Base plan section**: `/Users/reuben/.claude/plans/research-written-wiggly-nova.md` lines **342–402** (S5 spec: Kustomize + ApplicationSet expansion + render-determinism). This is the last session.
+### Rule inventory at plan close
 
-**Current HEAD**: `claude/phase1-cleanup` @ `a8acd8c` (S4 verify report) on top of `e3fe53b` (S4 implementer tip). Verify before dispatching:
+| Code | Rule | Wave | File |
+|---|---|---|---|
+| XPC001–XPC014 | (pre-existing, R1–R14) | pre-plan | `kernel/r1*.shen` … `r14.shen` |
+| XPC.D.kind-whitelisted | R15 AppProject whitelist | S1 | `kernel/r15-appproject-whitelist.shen` |
+| XPC.E.selector-needs-ignore-diff | R16 selector→ignore-diff cross-check | S2 | `kernel/r16-selector-needs-ignore-diff.shen` |
+| XPC.A.resource-field-valid | R17 raw manifest vs CRD schema | S3 | `kernel/r17-resource-field-valid.shen` |
+| XPC.H.helm-renders + values-well-typed | R18 + R19 Helm rendering | S4 | `kernel/r18-helm-renders.shen`, `r19-values-well-typed.shen` |
+| XPC.H.kustomize-renders | R18 (generalized) | S5 | shared with Helm; provenance-discriminated |
+| XPC.H.render-deterministic | R20 double-render byte-compare | S5 | `kernel/r20-render-deterministic.shen` |
 
-```bash
-cd /Users/reuben/projects/cross-validate
-git log --oneline -5     # tip should be a8acd8c
-```
+Audit proof version was bumped once (S3: v3 → v4); stayed at v4 through S4 and S5 per plan budget.
 
-### What S4 shipped that S5 should reuse
+### Total-coverage scoreboard (capstone metric, base plan line 401)
 
-- **Renderer package shape** (`pkg/renderer/{renderer,helm,cache,values_schema,file_util}.go`) — S5's Kustomize renderer should implement the same `Renderer` interface and reuse the same two-tier cache. Key additions only: overlay tree hash + kustomize version in the cache key.
-- **`ResourceInfo.Provenance` field** (`pkg/types/types.go`) — Kustomize-rendered resources should tag as `"rendered:kustomize:<app-name>"`.
-- **`RenderResult` type** — extend (don't duplicate) if Kustomize needs new issue fields, OR add `KustomizeResult` mirroring it. Prefer the former; the Shen `render-results` section already exists.
-- **Loader skip-`templates/`** (`pkg/loader/loader.go`) — S4 added a special-case to skip `templates/` directories adjacent to a `Chart.yaml`. Kustomize doesn't have an analogous issue (kustomize overlays don't have unrenderable raw files), but be aware of the pattern if you need a similar carve-out.
-- **Bridge render-results section** — S5 may extend to carry determinism facts OR add a separate `determinism-results` section (per base plan line 358: "facts surface as `DeterminismResults` on World"). A separate section is cleaner and matches the existing one-section-per-fact-type pattern.
-- **Symbol-vs-boolean lesson (S4)**: the bridge emits lowercase-dashed symbol discriminators (`render-ok`, `render-failed`) instead of Shen booleans (`true`/`false`), because the Shen pattern-matcher treats the latter inconsistently across contexts. Use the same approach for any new success/failure flags in S5 facts.
-- **Audit proof version is `4`** — S5 does NOT bump it again unless absolutely necessary. The plan authorized exactly one bump per multi-rule-add (S3 spent it).
+Recomputed against the ~500-MR fg-manifold history in `thoughts/shared/research/2026-04-18-fg-manifold-target-study.md`. Full bucket-by-bucket breakdown in `thoughts/shared/verify/s5-implementer-report.md` "Total-coverage scoreboard" section.
 
-### S5 prep artifacts (already on disk)
+| Bucket | MR share | Status at plan close |
+|---|---|---|
+| CRD schema field mismatches | ~40% | ✅ R17 |
+| Selector → resolved-ref drift | ~20% | ✅ R16 |
+| AppProject whitelist misses | ~2% | ✅ R15 (S5 AppSet expansion extends surface to preview fleet) |
+| Wave / Composition / Function ref | <3% combined | ✅ R6 / R6c / R3 / R4 |
+| Provider-package bugs | ~5% | ◐ partial (R11 deprecation-calendar subset + R2 webhook-conversion subset) |
+| Late-init field drift | ~15% | ❌ deferred (reuses S2 registry shape) |
+| SSA × managementPolicies | ~2–3% | ❌ deferred (Category E, unbuilt) |
+| External-name normalization | ~1% | ❌ deferred (Category I, unbuilt) |
 
-`thoughts/shared/prep/fixtures/s5/` — **inspect before you brief**:
-- `kustomize-ok/` — minimal kustomization that renders cleanly.
-- `kustomize-render-fail/` — kustomization with a resource/patch that fails `kustomize build`.
-- `appset-list/` — ApplicationSet with a `list` generator.
-- `appset-matrix/` — ApplicationSet with a `matrix` (list × list or list × git) generator.
-- `appset-pullrequest/` — ApplicationSet with a `pullRequest` generator + a sample PR-stub fixture file for the `--appset-fixture=` flag.
+**Primary coverage: ~62% of historical MR volume** (target was ≥50%). Rendering (S4/S5) is a force multiplier — without it, R15/R16/R17 would see only direct-manifest Applications, missing most of fg-manifold's claim-driven workloads. R20 is preventative, not tied to a historical bucket.
 
-Implementer copies these into `testdata/fixtures/` at dispatch time (same pattern S3/S4 used).
+### Reusable surfaces delivered by the plan
 
-### S5-specific briefing TODOs (do these before you write the dispatch section)
+- **Schema machinery** — `pkg/schemas/{index,validate_manifest}.go` (S3). Now shared by R17 (raw manifests) and R19 (Helm values.schema.json); ready for any future "validate JSON against stored OpenAPI schema" rule.
+- **Selector registry pattern** — `pkg/ir/selector_registry.go` (S2). Static table shape; a future `late_init_registry.go` drops in with the same extraction hook.
+- **Renderer + cache** — `pkg/renderer/{renderer,cache,helm,kustomize,determinism,values_schema,file_util}.go` (S4 + S5). Content-addressed two-tier cache; `Renderer` interface; absent-binary warning sentinel pattern; `"rendered:<tool>:<app>"` provenance convention.
+- **AppSet expansion** — `pkg/ir/{appset_expand,appset_template}.go` (S5). `ExpandAppSet(appset, ctx) []ArgoApplication` for list / matrix / git-directories / merge. `pullRequest` + `scmProvider` consume injected fixtures via `--appset-fixture=<file.yaml>`. Feeds the normal Application pipeline so downstream rules (R15, R16, R17) gain coverage automatically. Documented in `docs/adr/003-appset-expansion.md`.
+- **Bridge section pattern** — one `sortedSection[T]` per fact type, lowercase-dashed symbol discriminators for success/failure (never booleans). Five new sections shipped: `argo-appprojects`, `argo-app-proj-links`, `selector-usages`, `ignore-diff-entries`, `resource-field-facts`, `render-results`, `determinism-results`.
 
-1. **Verify the 10+ file anchors** at tip `a8acd8c` — file paths, line counts, insertion points. `pkg/checker/bridge.go`, `pkg/types/types.go`, `pkg/ir/builder.go`, `cmd/xpc/main.go`, `kernel/check.shen` have all grown since S4. Fresh-grep line numbers.
-2. **Check kustomize availability strategy**: base plan (implicit) parallels Helm — if `kustomize` absent, emit warning-severity diagnostic. Confirm tests use `t.Skip` when `which kustomize` fails. Probe the dev host before dispatching (`which kustomize && kustomize version`).
-3. **`--skip-appset-expand` flag default**: base plan line 378. Decide: default to expand (slower, richer) or skip (faster CI). S4 defaulted render to ON; consider parallel default here.
-4. **`kernel/check.shen` paren-count bump**: S5 likely adds ONE new rule (`r20-render-deterministic`) plus ONE new section (`determinism-results`). Expected tail change: `(append R17 (append R18 R19))` + 21 closers → `(append R17 (append R18 (append R19 R20)))` + 22 closers (+1 append = +1 `)`). Confirm by counting actual current closers before dispatching. If S5 naturally adds a second rule (e.g., a separate `XPC.H.kustomize-renders` that wasn't obvious from the plan), budget +2 instead.
-5. **ApplicationSet expansion is subtle** — base plan lines 360–374. Expanded Applications feed back into the normal pipeline, so S1's R15 (kind-whitelisted) and S2's R16 (selector-needs-ignore-diff) gain coverage automatically. Implementer should write a test that proves this (e.g., appset-matrix produces a whitelist violation on one of its expanded Applications). That's the integration-point proof for the whole 5-session plan.
-6. **S2's array-path TODO is still open** — 18/53 selector-registry rows inert. S5 is NOT responsible for closing it, but if AppSet expansion produces selectors-in-arrays, the resulting false-negative may become more visible. Note in the S5 brief.
-7. **Total-coverage assessment** (base plan line 401): S5's manual success criterion asks for a recomputed MR-bucket hit-rate table. Don't let the implementer skip this — it's the final scoreboard for the 5-session investment.
+### Known follow-ups (non-blocking, ordered by ROI per the scoreboard)
 
-### Dispatch pattern (same as S1–S4)
-
-1. **Pre-create worktree** (do NOT use `Agent(isolation: "worktree")` — wrong base branch; see memory):
+1. **Late-init-drift rule** — reclaims ~15% from the largest uncovered bucket. Reuses S2's `selector_registry.go` shape as a `late_init_registry.go`; one new rule file (`r21-late-init-needs-ignore-diff.shen`); ≤1 day.
+2. **SSA × managementPolicies rule** — Category E, reclaims ~2–3%. Pattern: cross-check `serverSideApply` flag + `managementPolicies` value against resource kind. Bridge already has `IgnoreDiffEntries` section; similar shape.
+3. **S2's array-path selector-registry TODO** (18/53 rows inert, `pkg/ir/trajectory_extract.go:extractSelectorUsages:105`) — S3's array-path walker in `pkg/schemas/validate_manifest.go:168` partially addresses it; full fix lifts that walker into `extractSelectorUsages`.
+4. **External-name normalization** — ~1% of MRs; requires a maintained provider-capability table (provider name → external-name transform). Smaller ROI per effort; defer unless the team asks.
+5. **R18/r18-helm-renders.shen rename** — file now covers both Helm and Kustomize (provenance-discriminated). Rename is pure hygiene; deferred to avoid touching the `(load …)` paren-balance chain.
+6. **Manual fg-manifold replay** (base plan line 399) — requires the user's local `~/fg/fg-manifold` tree:
    ```bash
-   git worktree add .claude/worktrees/s5-impl -b claude/xpc-s5-kustomize-appset claude/phase1-cleanup
+   xpc check --appset-fixture=<2-pr-stub.yaml> ~/fg/fg-manifold/deploy/facilitygrid/ops/applicationsets/preview-environments.yaml
+   xpc check ~/fg/fg-manifold/   # full-repo; expect <2 min with cache warm
    ```
-2. **Dispatch Implementer-S5** — `general-purpose`, `model: opus`, `run_in_background: true`. Self-contained prompt including: sanity checks (tip = `a8acd8c` or your new brief-commit SHA, line counts, grep for `pkg/renderer/helm.go` to prove S4 merged), file-by-file anchor table, the S4 symbol-vs-boolean lesson, gating rules, test requirements, commit discipline, literal-output report mandate, the ApplicationSet integration-point test requirement.
-3. **Dispatch Verifier-S5** — `general-purpose`, `model: haiku`, read-only to source, writes `thoughts/shared/verify/s5-report.md`. Match S4 report frontmatter shape.
-4. **Human gate** — user reviews report, then merge / iterate / abort.
-5. **Merge sequence**:
-   ```bash
-   git checkout claude/phase1-cleanup
-   git merge --ff-only claude/xpc-s5-kustomize-appset
-   cp .claude/worktrees/s5-impl/thoughts/shared/verify/s5-report.md thoughts/shared/verify/
-   git add thoughts/shared/verify/s5-report.md && git commit -m "docs: S5 verify report for Kustomize + AppSet + determinism"
-   git worktree remove -f -f .claude/worktrees/s5-impl
-   git branch -d claude/xpc-s5-kustomize-appset
-   ```
-6. **Final handoff update** — flip Wave 5 to ✅ merged. This is the last wave; append a brief "Plan complete" summary with total-coverage numbers from the manual success criterion, then retire the "Next session" block.
+   Not attempted from this session.
+7. **CI integration doc** (base plan line 431) — publish a `gitlab-ci.yml` snippet for fg-manifold: `xpc check --format=sarif . > xpc.sarif` + GitLab SAST integration. Was the explicit "useful in CI" bar from the research doc; not blocking.
 
-### Past-session gotchas (all still apply)
+### Gotcha ledger (still load-bearing for any future rule additions)
 
-- **Shen uppercase identifiers are variables, not symbols** — S3 hit this; S4 hit it again with its success flag and had to switch to `render-ok`/`render-failed` symbols. Emit lowercase-dashed symbols from Go and match those in Shen. Do NOT use `true`/`false` as discriminators in facts.
-- **Shen `check-world` paren discipline**: each new `append` adds exactly one `)` to line 109. Let-bindings add ZERO closers. S4 went 19 → 21; S5 likely goes 21 → 22 (one new rule). Off-by-one yields `Panic: &{22}` from `PrimSimpleError`. Run `go run ./cmd/xpc check testdata/fixtures/basic` as smoke test after every kernel edit.
-- **Shen string literals DO NOT support `\"`**: keep quotes out of kernel-file strings; use `cn` concatenation with pre-built quote-free segments.
-- **Prelude `string-contains?` arg order is `(Haystack Needle)`** — easy to invert.
-- **S2's array-path TODO**: 18/53 selector registry rows still inert in `pkg/ir/trajectory_extract.go:extractSelectorUsages` (line 105). Not blocking S5, but the AppSet-expansion integration test may surface a false-negative that points here.
-- **Implementer reporting fidelity**: require literal tail output in the implementer report. S1 burned us with paraphrased "make test passed" when the worktree had no Makefile.
-- **`make lint` baseline**: pre-existing failures in `internal/shenfull/*` and handful of unmodified files are expected. Fail only on NEW regressions in files the session touched.
-- **Loader skip-`templates/` (S4)**: `pkg/loader/loader.go` now skips `templates/` directories adjacent to a `Chart.yaml` so raw Go-template YAML doesn't break the decoder. Any S5 fixture with a similar pattern (raw-template files in a renderer-owned subdir) needs a similar carve-out or the pipeline will fail before the renderer runs.
-- **Helm v4 enforces values.schema.json during `template`** — `helm-values-mismatch` produces BOTH R18 and R19 errors. The R18/R19 test documents this. If an older helm ever relaxes enforcement, the test will fail loudly — the comment there flags the trigger for flipping the assertion.
+- **Worktree default base is wrong** — pre-create worktrees with explicit base `claude/phase1-cleanup` (see `feedback_agent_worktree_base.md` memory).
+- **Shen uppercase identifiers are variables** — emit lowercase-dashed symbols from Go as fact discriminators; never `true`/`false`.
+- **Shen `check-world` paren discipline** — each new `append` adds exactly one `)` to the trailing line. Off-by-one yields `Panic: &{22}` at kernel load. Smoke with `go run ./cmd/xpc check testdata/fixtures/basic` after every kernel edit.
+- **Shen string literals do not support `\"`** — use `cn` concatenation over pre-built quote-free segments.
+- **Prelude `string-contains?`** — arg order is `(Haystack Needle)`.
+- **Loader skips `templates/`** adjacent to `Chart.yaml` (`pkg/loader/loader.go`) — the carve-out pattern to remember for any renderer-owned raw-template subdir.
+- **Helm v4 enforces values.schema.json during `template`** — R18 and R19 both fire on a schema-violating chart. Integration test (`helm-values-mismatch` fixture) asserts this explicitly.
+- **`make lint` baseline** — `internal/shenfull/*` + a handful of pre-existing untouched files are expected failures. Only new regressions in session-touched files are real.
+- **Implementer reporting fidelity** — require literal tail output. Paraphrased success claims have burned this plan once (S1).
+- **Implementer context overflow** — S5's opus run crashed with `Prompt is too long` after ~17 minutes. Mitigation: keep implementer prompts tight; orchestrator should be prepared to pick up uncommitted work (S5 recovered cleanly this way).
 
 ## Key file locations
 
