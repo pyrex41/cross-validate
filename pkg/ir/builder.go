@@ -1370,8 +1370,8 @@ func inferFunctionInputVersions(name, pkg string) []string {
 		"function-auto-ready":          {}, // no input
 		"function-cel-filter":          {"celfilter.fn.crossplane.io/v1beta1"},
 		"function-status-transformer":  {"statustransformer.fn.crossplane.io/v1beta1"},
-		"function-environment-configs":  {"environmentconfigs.fn.crossplane.io/v1beta1"},
-		"function-extra-resources":      {"extraresources.fn.crossplane.io/v1beta1"},
+		"function-environment-configs": {"environmentconfigs.fn.crossplane.io/v1beta1"},
+		"function-extra-resources":     {"extraresources.fn.crossplane.io/v1beta1"},
 		"function-sequencer":           {"sequencer.fn.crossplane.io/v1beta1"},
 	}
 
