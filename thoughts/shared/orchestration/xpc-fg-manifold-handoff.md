@@ -13,8 +13,8 @@ Running state of the 5-session team-of-agents plan. Update after each wave.
 |---|---|---|---|---|
 | 0 | Makefile + prep artifacts | ✅ merged | `claude/phase1-cleanup` @ `64fa2f3` | Makefile, `thoughts/shared/prep/{s2,fixtures/{s3,s4,s5}}/` committed |
 | 1 | S1 — XPC.D.kind-whitelisted (R15) | ✅ merged | `claude/phase1-cleanup` @ `849a129` | 6 impl commits + 1 verify report. Verify report: `thoughts/shared/verify/s1-report.md` |
-| 2 | S2 — XPC.E.selector-needs-ignore-diff (R16) | ⬜ next | — | Consumes `thoughts/shared/prep/s2/selector-mappings.md` (53 rows) |
-| 3 | S3 — XPC.A.resource-field-valid | ⬜ | — | Bumps audit proof to v4. Consumes `thoughts/shared/prep/fixtures/s3/` |
+| 2 | S2 — XPC.E.selector-needs-ignore-diff (R16) | ✅ merged | `claude/phase1-cleanup` @ `994e052` | 6 impl commits + verify report + frontmatter fixup. Verify report: `thoughts/shared/verify/s2-report.md`. Registry: 53 entries (35 scalar-active + 18 array-path TODO). |
+| 3 | S3 — XPC.A.resource-field-valid | ⬜ next | — | Bumps audit proof to v4. Consumes `thoughts/shared/prep/fixtures/s3/` |
 | 4 | S4 — XPC.H.helm-renders + values-well-typed | ⬜ | — | Consumes `thoughts/shared/prep/fixtures/s4/` |
 | 5 | S5 — Kustomize + AppSet + determinism | ⬜ | — | Consumes `thoughts/shared/prep/fixtures/s5/` |
 
@@ -44,23 +44,32 @@ git worktree remove -f -f <worktree-path>
 git branch -d claude/xpc-sN-<slug>
 ```
 
-## S2 dispatch — exact next steps
+## S3 dispatch — exact next steps
 
-1. Pre-create worktree:
+1. Pre-create worktree (NOTE: S3 bumps proof format v3→v4, expect wider blast radius):
    ```bash
-   git worktree add .claude/worktrees/s2-impl -b claude/xpc-s2-selector-ignore-diff claude/phase1-cleanup
+   git worktree add .claude/worktrees/s3-impl -b claude/xpc-s3-resource-field-valid claude/phase1-cleanup
    ```
-2. Dispatch `Agent(subagent_type="general-purpose", model="sonnet", name="s2-impl")` with a prompt built from base-plan lines 123–181 ("Session 2") plus:
-   - Path to the prep artifact: `thoughts/shared/prep/s2/selector-mappings.md` (53 rows ready to paste into `pkg/ir/selector_registry.go`)
-   - Verified anchors on current HEAD: re-run `grep -n` against `pkg/ir/immutable_registry.go`, `pkg/ir/trajectory_extract.go`, `pkg/types/types.go` (World at 630, ImmutableField struct), `pkg/checker/bridge.go` (sortedSection at 331, worldToShenObj at 341), `kernel/check.shen` (loads end ~31, extracts ~58–73) BEFORE writing the prompt — S1 shifted some lines
-   - Gating rules (unchanged from S1 prompt): no proof version bump, no `t.Parallel()`, Shen path only, no obligation-framework
-   - First-action sanity check: `cd .claude/worktrees/s2-impl && wc -l pkg/checker/bridge.go` → expect ≥940 lines (S1 added ~43 to the ~896 baseline)
-3. Verifier after implementer returns. Same shape as S1 verifier but running S2 success criteria (base plan lines 183–193).
+2. Dispatch `Agent(subagent_type="general-purpose", model="sonnet", name="s3-impl")` with a prompt built from base-plan lines 185–** (find S3 end-marker in `/Users/reuben/.claude/plans/research-written-wiggly-nova.md`) plus:
+   - Path to fixture prep: `thoughts/shared/prep/fixtures/s3/` (list contents first to know what's there)
+   - Verified anchors on current HEAD: re-run `grep -n` for `pkg/schemas/fetcher.go` (ResolveFieldType, TypeAssignable), `pkg/audit/proof.go` (current v3 format constant + marshal), `pkg/checker/bridge.go` (now 1041 lines), `kernel/check.shen` (now 134 lines)
+   - Gating rules: **S3 IS authorized to bump proof format** (explicit in base plan). Still no `t.Parallel()`, Shen path only where possible (may need Go-native schema walker), no obligation-framework wiring
+   - First-action sanity check: `wc -l pkg/checker/bridge.go` → expect 1041, `wc -l pkg/ir/selector_registry.go` → expect ~465 (proves the tree is post-S2)
+3. Verifier after implementer returns. S3 adds a proof-version migration check: verifier must confirm v3→v4 bump happened cleanly (old fixtures still replay, new field reason captured in proof).
+
+### Past S2 gotchas (kept for S3 to read)
+
+- **Shen `check-world` paren discipline**: adding one new Section extract + one new Rule binding requires exactly one more `)` at the end of the big `let`. Off-by-one yields `Panic: &{22}` from `PrimSimpleError` — bisect paragraph-by-paragraph if it fires.
+- **Shen string literals DO NOT support `\"`**: keep all quotes out of kernel-file strings. Use `cn` concatenation with pre-built quote-free segments.
+- **Prelude `string-contains?` arg order is (Haystack Needle)** — easy to get backwards.
+- **Array-indexed selector paths (`spec.x.y[].z`) were punted in S2 trajectory_extract** — 18 of 53 rows are inert. If S3 needs to walk array-indexed schema paths for CRD validation, this is the same problem; consider sharing a helper.
 
 ## Key file locations
 
 - S1 verify report: `thoughts/shared/verify/s1-report.md`
-- S2 prep artifact: `thoughts/shared/prep/s2/selector-mappings.md`
+- S2 verify report: `thoughts/shared/verify/s2-report.md`
+- S2 prep artifact: `thoughts/shared/prep/s2/selector-mappings.md` (consumed; 53 rows now live in `pkg/ir/selector_registry.go`)
+- S3 prep artifacts: `thoughts/shared/prep/fixtures/s3/` (not yet inspected by orchestrator — S3 dispatcher should `ls` it first)
 - Makefile targets: `test`, `lint`, `build` (note: `make lint` has pre-existing failures in `internal/shenfull/*` generated code and a handful of pre-existing-unmodified files — treat those as baseline, fail the check only on NEW regressions)
 
 ## Gotchas captured so far
