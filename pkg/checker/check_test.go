@@ -315,6 +315,86 @@ func TestR16_SelectorDrift(t *testing.T) {
 	}
 }
 
+func TestR17_FieldValidation(t *testing.T) {
+	cases := []struct {
+		name     string
+		fixture  string
+		wantCode string
+		wantMsg  string // substring expected in the message; empty → no check
+	}{
+		{
+			name:     "invalid-enum",
+			fixture:  "../../testdata/fixtures/resource-field-invalid/invalid-enum",
+			wantCode: "XPC.A.resource-field-valid",
+			wantMsg:  "invalid enum value",
+		},
+		{
+			name:     "missing-required",
+			fixture:  "../../testdata/fixtures/resource-field-invalid/missing-required",
+			wantCode: "XPC.A.resource-field-valid",
+			wantMsg:  "missing required field",
+		},
+		{
+			name:     "unknown-field",
+			fixture:  "../../testdata/fixtures/resource-field-invalid/unknown-field",
+			wantCode: "XPC.A.resource-field-valid",
+			wantMsg:  "unknown field",
+		},
+		{
+			name:     "wrong-type",
+			fixture:  "../../testdata/fixtures/resource-field-invalid/wrong-type",
+			wantCode: "XPC.A.resource-field-valid",
+			wantMsg:  "wrong type",
+		},
+	}
+
+	for _, tc := range cases {
+		// Note: no t.Parallel() — the Shen runtime is shared across tests in
+		// the same process (sync.Once + kernel-dir chdir), so parallel subtests
+		// would race.
+		t.Run(tc.name, func(t *testing.T) {
+			world := loadFixture(t, tc.fixture)
+			diags := checkFixture(t, world, Config{})
+
+			got := findDiagByCode(diags, tc.wantCode)
+			if len(got) != 1 {
+				t.Fatalf("%s: expected exactly 1 %s diagnostic, got %d: %+v",
+					tc.name, tc.wantCode, len(got), got)
+			}
+			if got[0].Severity != types.SeverityError {
+				t.Errorf("%s: expected error severity, got %s", tc.name, got[0].Severity)
+			}
+			if tc.wantMsg != "" && !containsStr(got[0].Message+" "+got[0].Detail, tc.wantMsg) {
+				t.Errorf("%s: expected message to contain %q, got message=%q detail=%q",
+					tc.name, tc.wantMsg, got[0].Message, got[0].Detail)
+			}
+		})
+	}
+
+	t.Run("resource-field-valid-ok", func(t *testing.T) {
+		world := loadFixture(t, "../../testdata/fixtures/resource-field-valid-ok")
+		diags := checkFixture(t, world, Config{})
+		got := findDiagByCode(diags, "XPC.A.resource-field-valid")
+		if len(got) != 0 {
+			t.Fatalf("resource-field-valid-ok: expected 0 XPC.A.resource-field-valid diagnostics, got %d: %+v",
+				len(got), got)
+		}
+	})
+}
+
+// containsStr is a tiny substring helper local to this test file.
+func containsStr(haystack, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEndToEnd_WebhookConversion(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
 	diags := checkFixture(t, world, Config{})
