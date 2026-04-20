@@ -791,9 +791,12 @@ func renderResultCmp(a, b types.RenderResult) int {
 // tags are lowercase-dashed symbols (uppercase identifiers are Shen
 // variables).
 func renderResultToObj(r types.RenderResult) kl.Obj {
-	successSym := "false"
+	// Use distinct discriminator symbols rather than Shen's built-in
+	// true/false booleans so the Shen pattern-match stays a pure
+	// symbol-compare.
+	successSym := "render-failed"
 	if r.Success {
-		successSym = "true"
+		successSym = "render-ok"
 	}
 	errorKind := r.ErrorKind
 	if errorKind == "" {

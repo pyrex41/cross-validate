@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/pyrex41/cross-validate-/pkg/ir"
@@ -14,7 +15,28 @@ func loadFixture(t *testing.T, path string) *types.World {
 	if err != nil {
 		t.Fatalf("loading %s: %v", path, err)
 	}
+	// By default, tests run hermetically — rendering is skipped so the
+	// per-rule fixtures don't require helm on PATH.
 	builder := ir.NewBuilder()
+	builder.SkipRender = true
+	world, err := builder.Build(docs)
+	if err != nil {
+		t.Fatalf("building IR for %s: %v", path, err)
+	}
+	return world
+}
+
+// loadFixtureWithHelm builds the World with the actual Helm renderer
+// wired in. Used by R18/R19 tests; callers should t.Skip when helm is
+// absent.
+func loadFixtureWithHelm(t *testing.T, path, helmBin string) *types.World {
+	t.Helper()
+	docs, err := loader.LoadDirectory(path)
+	if err != nil {
+		t.Fatalf("loading %s: %v", path, err)
+	}
+	builder := ir.NewBuilder()
+	builder.HelmBin = helmBin
 	world, err := builder.Build(docs)
 	if err != nil {
 		t.Fatalf("building IR for %s: %v", path, err)
@@ -393,6 +415,123 @@ func containsStr(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestR18_HelmRenders exercises rule XPC.H.helm-renders against the
+// helm-render-* fixtures. Requires helm on PATH.
+func TestR18_HelmRenders(t *testing.T) {
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not on PATH; skipping R18 tests")
+	}
+
+	t.Run("helm-render-ok", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-render-ok", helmBin)
+		diags := checkFixture(t, world, Config{})
+
+		if got := findDiagByCode(diags, "XPC.H.helm-renders"); len(got) != 0 {
+			t.Fatalf("helm-render-ok: expected 0 R18 diagnostics, got %d: %+v", len(got), got)
+		}
+		if got := findDiagByCode(diags, "XPC.H.values-well-typed"); len(got) != 0 {
+			t.Fatalf("helm-render-ok: expected 0 R19 diagnostics, got %d: %+v", len(got), got)
+		}
+
+		// The rendered Deployment must appear in World.Resources with the
+		// correct provenance tag.
+		var deployment *types.ResourceInfo
+		for i := range world.Resources {
+			r := &world.Resources[i]
+			if r.Kind == "Deployment" {
+				deployment = r
+				break
+			}
+		}
+		if deployment == nil {
+			t.Fatal("expected rendered Deployment in World.Resources, got none")
+		}
+		wantProv := "rendered:helm:helm-render-ok"
+		if deployment.Provenance != wantProv {
+			t.Errorf("Deployment.Provenance = %q, want %q", deployment.Provenance, wantProv)
+		}
+	})
+
+	t.Run("helm-render-fail", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-render-fail", helmBin)
+		diags := checkFixture(t, world, Config{})
+
+		got := findDiagByCode(diags, "XPC.H.helm-renders")
+		if len(got) != 1 {
+			t.Fatalf("helm-render-fail: expected 1 R18 diagnostic, got %d: %+v", len(got), got)
+		}
+		if got[0].Severity != types.SeverityError {
+			t.Errorf("helm-render-fail: expected error severity, got %s", got[0].Severity)
+		}
+
+		// A failed render must not contribute rendered resources to the
+		// World — we don't want downstream rules reasoning about partially
+		// rendered junk.
+		for _, r := range world.Resources {
+			if r.Provenance == "rendered:helm:helm-render-fail" {
+				t.Errorf("unexpected rendered resource after failed render: %+v", r)
+			}
+		}
+	})
+
+	t.Run("helm-values-mismatch", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-values-mismatch", helmBin)
+		diags := checkFixture(t, world, Config{})
+
+		got := findDiagByCode(diags, "XPC.H.values-well-typed")
+		if len(got) != 1 {
+			t.Fatalf("helm-values-mismatch: expected exactly 1 R19 diagnostic, got %d: %+v", len(got), got)
+		}
+		if got[0].Severity != types.SeverityError {
+			t.Errorf("helm-values-mismatch: expected error severity, got %s", got[0].Severity)
+		}
+		// The values-schema violation should reference path "replicas".
+		if !containsStr(got[0].Message, "replicas") {
+			t.Errorf("helm-values-mismatch: expected 'replicas' in message %q", got[0].Message)
+		}
+		// Under helm v4+, `helm template` also invokes values.schema.json
+		// and exits non-zero when the values don't satisfy the schema.
+		// We assert R18 fires with error severity in that case — if a
+		// future helm release silences this, the assertion will need to
+		// flip to "not fired".
+		r18 := findDiagByCode(diags, "XPC.H.helm-renders")
+		if len(r18) != 1 {
+			t.Fatalf("helm-values-mismatch: expected exactly 1 R18 diagnostic (helm rejects bad values), got %d: %+v", len(r18), r18)
+		}
+		if r18[0].Severity != types.SeverityError {
+			t.Errorf("helm-values-mismatch: expected R18 error severity, got %s", r18[0].Severity)
+		}
+	})
+}
+
+// TestSkipRender_EmitsInfoDiagnostic is covered by the CLI wrapper, but we
+// also assert the typed Builder path: with SkipRender=true, no resources
+// are rendered into the World and no RenderResults are recorded. The info
+// diagnostic itself is emitted by cmd/xpc/main.go so it's not visible from
+// the checker-level test — that's why this test only covers the builder
+// invariants.
+func TestSkipRender_NoRenderedResources(t *testing.T) {
+	docs, err := loader.LoadDirectory("../../testdata/fixtures/helm-render-ok")
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	b := ir.NewBuilder()
+	b.SkipRender = true
+	world, err := b.Build(docs)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, r := range world.Resources {
+		if r.Provenance == "rendered:helm:helm-render-ok" {
+			t.Errorf("SkipRender=true still produced rendered resource: %+v", r)
+		}
+	}
+	if n := len(world.RenderResults); n != 0 {
+		t.Errorf("SkipRender=true still produced %d RenderResults", n)
+	}
 }
 
 func TestEndToEnd_WebhookConversion(t *testing.T) {

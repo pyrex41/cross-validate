@@ -40,17 +40,20 @@
   K                    -> "Inspect the render error and fix the chart or values.")
 
 
-\* r18-check-result — emit one judgment per failed render-result. *\
+\* r18-check-result — emit one judgment per failed render-result.
+   The third arg is a lowercase-dashed discriminator symbol:
+   render-ok or render-failed (Shen's literal true/false booleans would
+   be interpreted specially, so we use plain symbols). *\
 (define r18-check-result
-  [render-result AppName ChartPath true  ErrorKind Error Issues Src] -> []
-  [render-result AppName ChartPath false helm-absent Error Issues Src] ->
+  [render-result AppName ChartPath render-ok    ErrorKind Error Issues Src] -> []
+  [render-result AppName ChartPath render-failed helm-absent Error Issues Src] ->
     [(make-warning "XPC.H.helm-renders"
        Src
        (cn AppName (cn ": " (r18-error-label helm-absent)))
        (cn ChartPath (cn ": " Error))
        (r18-fix-hint helm-absent)
        [])]
-  [render-result AppName ChartPath false ErrorKind Error Issues Src] ->
+  [render-result AppName ChartPath render-failed ErrorKind Error Issues Src] ->
     [(make-error "XPC.H.helm-renders"
        Src
        (cn AppName (cn ": " (r18-error-label ErrorKind)))

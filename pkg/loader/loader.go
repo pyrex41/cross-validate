@@ -24,7 +24,10 @@ type LoadedDocument struct {
 }
 
 // LoadDirectory reads all YAML files from a directory (recursively) and
-// returns the parsed documents.
+// returns the parsed documents. Helm chart directories (detected by the
+// presence of a Chart.yaml) have their templates/ subdirectory skipped —
+// those files contain Go-template syntax that doesn't parse as YAML until
+// helm has rendered it.
 func LoadDirectory(dir string) ([]LoadedDocument, error) {
 	var docs []LoadedDocument
 
@@ -33,6 +36,16 @@ func LoadDirectory(dir string) ([]LoadedDocument, error) {
 			return err
 		}
 		if info.IsDir() {
+			// Skip Helm chart templates/ directories so raw {{ }} YAML
+			// never reaches the decoder. Rendered resources enter the
+			// World via the renderer hook in pkg/ir/builder.go, not
+			// through direct filesystem traversal.
+			if info.Name() == "templates" {
+				parent := filepath.Dir(path)
+				if fi, err := os.Stat(filepath.Join(parent, "Chart.yaml")); err == nil && !fi.IsDir() {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))

@@ -32,9 +32,11 @@
   _ -> [])
 
 
-\* r19-check-result — emit one judgment per values-issue on this result. *\
+\* r19-check-result — emit one judgment per values-issue on this result.
+   Matches both render-ok and render-failed discriminators: a failed render
+   can still produce values-schema violations worth reporting. *\
 (define r19-check-result
-  [render-result AppName ChartPath Success ErrorKind Error Issues Src] ->
+  [render-result AppName ChartPath SuccessSym ErrorKind Error Issues Src] ->
     (map (/. I (r19-issue-judgment AppName Src I))
          (r19-issue-list-of Issues))
   _ -> [])
