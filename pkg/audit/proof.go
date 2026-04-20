@@ -129,7 +129,7 @@ const RulesetVersion = "2026.04"
 // Merkle root so the proof attests to run completeness, not just violations.
 func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest string) *Proof {
 	p := &Proof{
-		Version: 3,
+		Version: 4,
 		Metadata: ProofMetadata{
 			IRDigest:       irDigest,
 			SnapshotDigest: snapshotDigest,

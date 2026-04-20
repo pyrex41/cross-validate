@@ -28,8 +28,8 @@ func TestGenerate(t *testing.T) {
 	if p.RootDigest == "" {
 		t.Error("expected non-empty root digest")
 	}
-	if p.Version != 3 {
-		t.Errorf("expected version 3, got %d", p.Version)
+	if p.Version != 4 {
+		t.Errorf("expected version 4, got %d", p.Version)
 	}
 	if p.Metadata.IRDigest != "sha256:abc123" {
 		t.Errorf("expected IR digest sha256:abc123, got %s", p.Metadata.IRDigest)
