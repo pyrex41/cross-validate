@@ -787,6 +787,32 @@ type World struct {
 	// Builder.SkipRender is false. Consumed by Shen rules R18
 	// (XPC.H.helm-renders) and R19 (XPC.H.values-well-typed).
 	RenderResults []RenderResult `json:"-"`
+
+	// DeterminismResults records the outcome of double-rendering every
+	// renderable source. Populated by pkg/renderer/determinism.go and
+	// consumed by Shen rule R20 (XPC.H.render-deterministic).
+	DeterminismResults []DeterminismResult `json:"-"`
+}
+
+// DeterminismResult records whether rendering the same source twice in a row
+// yields byte-identical output. A mismatch is a signal that the renderer's
+// inputs are under-specified (e.g. a chart uses `randAlphaNum` or references
+// a clock). It is surfaced as a warning, not an error — some non-determinism
+// is legitimate and simply wants documenting.
+type DeterminismResult struct {
+	// AppName is the Argo Application whose source was rendered.
+	AppName string `json:"appName"`
+	// RendererKind is the renderer this result came from: "helm" or
+	// "kustomize". Lowercase so it can go straight into a Shen pattern.
+	RendererKind string `json:"rendererKind"`
+	// Mismatch is true when the two renders produced different bytes.
+	Mismatch bool `json:"mismatch"`
+	// DiffSummary is a short, human-readable summary of the first divergence
+	// (e.g. "outputs differ: 2048 vs 2055 bytes"). Empty when Mismatch is
+	// false.
+	DiffSummary string `json:"diffSummary,omitempty"`
+	// Source points at the Argo Application file+line.
+	Source SourceLocation `json:"source"`
 }
 
 // NewWorld creates an empty World.
