@@ -4,19 +4,34 @@
 package ir
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/pyrex41/cross-validate-/pkg/loader"
+	"github.com/pyrex41/cross-validate-/pkg/renderer"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
 // Builder constructs a World from loaded documents.
 type Builder struct {
 	world *types.World
+
+	// SkipRender suppresses Helm (and eventually Kustomize) rendering.
+	// Existing tests that only exercise direct-manifest rules stay hermetic
+	// when this is true; callers that want rendered resources in the World
+	// set it to false and provide a HelmBin.
+	SkipRender bool
+	// HelmBin is the path to the helm binary. Empty means "look up helm on
+	// PATH when first needed".
+	HelmBin string
+	// helmRenderer is constructed lazily on first render attempt.
+	helmRenderer *renderer.HelmRenderer
 }
 
 // NewBuilder creates a new IR builder.
@@ -470,7 +485,169 @@ func (b *Builder) addArgoApplication(doc loader.LoadedDocument) error {
 	}
 
 	b.world.ArgoApps = append(b.world.ArgoApps, app)
+
+	// Rendering hook: if rendering is enabled, walk every Helm source on
+	// this Application, invoke the renderer, and merge rendered resources
+	// into the World. A RenderResult is always appended so R18/R19 can
+	// emit judgments about the outcome.
+	if !b.SkipRender {
+		b.renderHelmSources(app, doc.Source.File)
+	}
 	return nil
+}
+
+// renderHelmSources invokes the HelmRenderer for each Helm source on `app`
+// and appends one RenderResult per source. Successful renders also
+// contribute their rendered resources to World.Resources with a provenance
+// tag keyed on the Application name.
+func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
+	if len(app.Sources) == 0 {
+		return
+	}
+	cwd := filepath.Dir(appFile)
+	if b.helmRenderer == nil {
+		b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin)
+	}
+
+	for _, src := range app.Sources {
+		if src.Renderer != types.RendererHelm {
+			continue
+		}
+		chartPath, resolveErr := renderer.ResolveChart(src, cwd)
+		if resolveErr != nil {
+			b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
+				AppName:   app.Name,
+				ChartPath: chartPath,
+				Success:   false,
+				Error:     resolveErr.Error(),
+				ErrorKind: "other",
+				Source:    app.Source,
+			})
+			continue
+		}
+
+		// Values-schema validation comes FIRST so we report issues even
+		// if the render itself happens to fail (and symmetrically so we
+		// still flag schema violations on successful renders).
+		var valuesIssues []types.ValuesIssue
+		schemaPath := filepath.Join(chartPath, "values.schema.json")
+		if schemaBytes, err := readFileQuietly(schemaPath); err == nil && len(schemaBytes) > 0 {
+			merged, _ := renderer.MergedValues(chartPath, src.Helm)
+			issues, verr := renderer.ValidateValues(schemaBytes, merged)
+			if verr == nil {
+				valuesIssues = issues
+			}
+		}
+
+		rendered, renderErr := b.helmRenderer.RenderChart(chartPath, src.Helm, app.Destination.Namespace)
+		result := types.RenderResult{
+			AppName:      app.Name,
+			ChartPath:    chartPath,
+			Success:      renderErr == nil,
+			ValuesIssues: valuesIssues,
+			Source:       app.Source,
+		}
+		if renderErr != nil {
+			result.Error = renderErr.Error()
+			result.ErrorKind = classifyRenderError(renderErr)
+			b.world.RenderResults = append(b.world.RenderResults, result)
+			continue
+		}
+
+		docs, parseErr := loader.LoadReader(bytes.NewReader(rendered), appFile)
+		if parseErr != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("parsing rendered YAML: %v", parseErr)
+			result.ErrorKind = "other"
+			b.world.RenderResults = append(b.world.RenderResults, result)
+			continue
+		}
+
+		provenance := "rendered:helm:" + app.Name
+		for _, d := range docs {
+			// Tag every rendered resource's Source at the Application file
+			// so diagnostics land somewhere an MR author can edit, and
+			// stamp Provenance for downstream rule reasoning.
+			res := resourceInfoFromDoc(d)
+			res.Source = app.Source
+			res.Provenance = provenance
+			b.world.Resources = append(b.world.Resources, res)
+		}
+		b.world.RenderResults = append(b.world.RenderResults, result)
+	}
+}
+
+// resourceInfoFromDoc projects a LoadedDocument into a ResourceInfo. Mirrors
+// the shape of addResource so rendered manifests look identical to direct
+// ones downstream.
+func resourceInfoFromDoc(doc loader.LoadedDocument) types.ResourceInfo {
+	name := getName(doc.Raw)
+	ns := ""
+	if meta := getMap(doc.Raw, "metadata"); meta != nil {
+		ns, _ = meta["namespace"].(string)
+	}
+	annotations := map[string]string{}
+	labels := map[string]string{}
+	if meta := getMap(doc.Raw, "metadata"); meta != nil {
+		if am := getMap(meta, "annotations"); am != nil {
+			for k, v := range am {
+				if vs, ok := v.(string); ok {
+					annotations[k] = vs
+				}
+			}
+		}
+		if lm := getMap(meta, "labels"); lm != nil {
+			for k, v := range lm {
+				if vs, ok := v.(string); ok {
+					labels[k] = vs
+				}
+			}
+		}
+	}
+	return types.ResourceInfo{
+		APIVersion:  doc.APIVersion,
+		Kind:        doc.Kind,
+		Name:        name,
+		Namespace:   ns,
+		Annotations: annotations,
+		Labels:      labels,
+		Source:      doc.Source,
+		Raw:         doc.Raw,
+	}
+}
+
+// classifyRenderError maps a renderer error to the kebab-case kind tag used
+// by Shen rule patterns. Uppercase identifiers are Shen variables, so every
+// tag must stay lowercase.
+func classifyRenderError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if renderer.IsHelmAbsent(err) {
+		return "helm-absent"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "timed out") {
+		return "helm-timeout"
+	}
+	if strings.Contains(msg, "helm template") {
+		return "helm-template-failed"
+	}
+	return "other"
+}
+
+// readFileQuietly is a thin wrapper that hides the "does not exist" error,
+// so callers can probe for optional files (values.schema.json) without
+// pattern-matching fs errors.
+func readFileQuietly(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return b, nil
 }
 
 func (b *Builder) parseArgoSource(m map[string]interface{}) types.ArgoSource {
