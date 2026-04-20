@@ -103,12 +103,12 @@ func (c *CRDInfo) ServesVersion(version string) bool {
 
 // CompositionInfo represents a parsed Crossplane Composition.
 type CompositionInfo struct {
-	Name             string           `json:"name"`
-	CompositeTypeRef GVK              `json:"compositeTypeRef"`
-	Mode             string           `json:"mode"` // Pipeline or Resources
-	Pipeline         []PipelineStep   `json:"pipeline,omitempty"`
+	Name             string             `json:"name"`
+	CompositeTypeRef GVK                `json:"compositeTypeRef"`
+	Mode             string             `json:"mode"` // Pipeline or Resources
+	Pipeline         []PipelineStep     `json:"pipeline,omitempty"`
 	Resources        []ComposedResource `json:"resources,omitempty"`
-	Source           SourceLocation   `json:"source"`
+	Source           SourceLocation     `json:"source"`
 }
 
 // GVK is a GroupVersionKind tuple.
@@ -129,9 +129,9 @@ type PipelineStep struct {
 
 // ComposedResource represents a resource in a legacy (Resources mode) Composition.
 type ComposedResource struct {
-	Name       string            `json:"name"`
-	Base       ResourceBase      `json:"base"`
-	Patches    []PatchInfo       `json:"patches,omitempty"`
+	Name    string       `json:"name"`
+	Base    ResourceBase `json:"base"`
+	Patches []PatchInfo  `json:"patches,omitempty"`
 }
 
 // ResourceBase is the base resource in a composed resource.
@@ -142,23 +142,23 @@ type ResourceBase struct {
 
 // PatchInfo represents a patch in a Composition.
 type PatchInfo struct {
-	Type          string `json:"type"` // FromCompositeFieldPath, ToCompositeFieldPath, etc.
-	FromFieldPath string `json:"fromFieldPath,omitempty"`
-	ToFieldPath   string `json:"toFieldPath,omitempty"`
+	Type          string          `json:"type"` // FromCompositeFieldPath, ToCompositeFieldPath, etc.
+	FromFieldPath string          `json:"fromFieldPath,omitempty"`
+	ToFieldPath   string          `json:"toFieldPath,omitempty"`
 	Transforms    []TransformInfo `json:"transforms,omitempty"`
 }
 
 // TransformInfo represents a transform in a patch.
 type TransformInfo struct {
-	Type    string `json:"type"` // convert, map, match, math, string
+	Type    string `json:"type"`              // convert, map, match, math, string
 	Convert string `json:"convert,omitempty"` // target type for convert transforms
 }
 
 // FunctionInfo represents an installed Crossplane Function.
 type FunctionInfo struct {
-	Name          string   `json:"name"`
-	Package       string   `json:"package"`
-	InputVersions []string `json:"inputVersions"`
+	Name          string         `json:"name"`
+	Package       string         `json:"package"`
+	InputVersions []string       `json:"inputVersions"`
 	Source        SourceLocation `json:"source"`
 }
 
@@ -179,23 +179,23 @@ type ConfigurationInfo struct {
 
 // ResourceInfo represents a Kubernetes resource (XR, MR, or any other).
 type ResourceInfo struct {
-	APIVersion  string            `json:"apiVersion"`
-	Kind        string            `json:"kind"`
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Source      SourceLocation    `json:"source"`
+	APIVersion  string                 `json:"apiVersion"`
+	Kind        string                 `json:"kind"`
+	Name        string                 `json:"name"`
+	Namespace   string                 `json:"namespace,omitempty"`
+	Annotations map[string]string      `json:"annotations,omitempty"`
+	Labels      map[string]string      `json:"labels,omitempty"`
+	Source      SourceLocation         `json:"source"`
 	Raw         map[string]interface{} `json:"-"`
 }
 
 // ArgoApplication represents a parsed Argo CD Application.
 type ArgoApplication struct {
-	Name         string              `json:"name"`
-	Namespace    string              `json:"namespace,omitempty"`
-	TrackingMode string              `json:"trackingMode"` // annotation or label
-	SyncWaves    []SyncWaveEntry     `json:"syncWaves"`
-	Source       SourceLocation      `json:"source"`
+	Name         string          `json:"name"`
+	Namespace    string          `json:"namespace,omitempty"`
+	TrackingMode string          `json:"trackingMode"` // annotation or label
+	SyncWaves    []SyncWaveEntry `json:"syncWaves"`
+	Source       SourceLocation  `json:"source"`
 
 	// Project is the AppProject this Application belongs to (spec.project).
 	// Empty string means "default".
@@ -363,10 +363,10 @@ type ArgoSyncOptions struct {
 
 // ArgoRetryPolicy describes sync retry behavior.
 type ArgoRetryPolicy struct {
-	Limit   int `json:"limit,omitempty"`
-	BackoffDurationSec int `json:"backoffDurationSec,omitempty"`
+	Limit                 int `json:"limit,omitempty"`
+	BackoffDurationSec    int `json:"backoffDurationSec,omitempty"`
 	BackoffMaxDurationSec int `json:"backoffMaxDurationSec,omitempty"`
-	BackoffFactor int `json:"backoffFactor,omitempty"`
+	BackoffFactor         int `json:"backoffFactor,omitempty"`
 }
 
 // ArgoIgnoreDiff describes a field to ignore during Argo CD diff.
@@ -626,6 +626,31 @@ type ImmutableField struct {
 	Reason    string `json:"reason"`
 }
 
+// ViolationKind classifies a single resource-field validation failure.
+type ViolationKind string
+
+const (
+	ViolationUnknownField    ViolationKind = "UnknownField"
+	ViolationWrongType       ViolationKind = "WrongType"
+	ViolationMissingRequired ViolationKind = "MissingRequired"
+	ViolationInvalidEnum     ViolationKind = "InvalidEnum"
+)
+
+// ResourceFieldFact records one schema-validation violation found while walking
+// a concrete manifest against its CRD/XRD schema. Emitted by
+// schemas.ValidateManifest and consumed by Shen rule R17
+// (XPC.A.resource-field-valid).
+type ResourceFieldFact struct {
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	Namespace  string         `json:"namespace,omitempty"`
+	Name       string         `json:"name"`
+	Path       string         `json:"path"` // dotted, array-indexed path e.g. "spec.tags[0]"
+	Violation  ViolationKind  `json:"violation"`
+	Message    string         `json:"message"`
+	Source     SourceLocation `json:"source"`
+}
+
 // SelectorMapping is one entry in the registry of Crossplane selector fields and the
 // concrete resolved paths they populate via late-init. Populated from a static table.
 // SelectorPath is the dotted path of the *Selector field in the manifest;
@@ -677,16 +702,16 @@ type IgnoreDiffEntry struct {
 
 // World is the complete typed representation of a set of manifests.
 type World struct {
-	CRDs           []CRDInfo            `json:"crds"`
-	XRDs           []CRDInfo            `json:"xrds"`
-	Compositions   []CompositionInfo    `json:"compositions"`
-	Functions      []FunctionInfo       `json:"functions"`
-	Providers      []ProviderInfo       `json:"providers"`
-	Configurations []ConfigurationInfo  `json:"configurations"`
-	Resources      []ResourceInfo       `json:"resources"`
-	ArgoApps       []ArgoApplication    `json:"argoApps"`
-	ArgoProjects   []ArgoAppProject     `json:"argoProjects,omitempty"`
-	ArgoAppSets    []ArgoApplicationSet `json:"argoAppSets,omitempty"`
+	CRDs           []CRDInfo             `json:"crds"`
+	XRDs           []CRDInfo             `json:"xrds"`
+	Compositions   []CompositionInfo     `json:"compositions"`
+	Functions      []FunctionInfo        `json:"functions"`
+	Providers      []ProviderInfo        `json:"providers"`
+	Configurations []ConfigurationInfo   `json:"configurations"`
+	Resources      []ResourceInfo        `json:"resources"`
+	ArgoApps       []ArgoApplication     `json:"argoApps"`
+	ArgoProjects   []ArgoAppProject      `json:"argoProjects,omitempty"`
+	ArgoAppSets    []ArgoApplicationSet  `json:"argoAppSets,omitempty"`
 	Schemas        map[string]SchemaInfo `json:"schemas"`
 
 	MountRefs       []MountRef       `json:"mountRefs,omitempty"`
@@ -703,6 +728,12 @@ type World struct {
 	// cross-referenced with the resolved path from SelectorMappings.
 	// Populated by EnrichTrajectoryData.
 	SelectorUsages []SelectorUsage `json:"-"`
+
+	// ResourceFieldFacts records every schema-validation violation detected
+	// while walking a concrete manifest against its CRD/XRD schema. Populated
+	// by EnrichFieldValidation via schemas.ValidateManifest and consumed by
+	// Shen rule R17 (XPC.A.resource-field-valid).
+	ResourceFieldFacts []ResourceFieldFact `json:"-"`
 }
 
 // NewWorld creates an empty World.
@@ -725,12 +756,12 @@ type ObligationRef struct {
 
 // Diagnostic is a single error/warning/info produced by the checker.
 type Diagnostic struct {
-	Code     string         `json:"code"`     // XPC001, XPC002, ...
-	Severity Severity       `json:"severity"`
-	Message  string         `json:"message"`
-	Source   SourceLocation `json:"source"`
-	Detail   string         `json:"detail,omitempty"`
-	Fix      string         `json:"fix,omitempty"`
+	Code     string           `json:"code"` // XPC001, XPC002, ...
+	Severity Severity         `json:"severity"`
+	Message  string           `json:"message"`
+	Source   SourceLocation   `json:"source"`
+	Detail   string           `json:"detail,omitempty"`
+	Fix      string           `json:"fix,omitempty"`
 	Related  []SourceLocation `json:"related,omitempty"`
 	// Obligation links this diagnostic to its obligation provenance.
 	// Nil for legacy rule diagnostics not yet ported to the obligation framework.
