@@ -731,6 +731,41 @@ type SelectorUsage struct {
 	Source SourceLocation `json:"source"`
 }
 
+// LateInitMapping is one entry in the registry of Crossplane provider fields
+// that get late-initialized from observed cloud state (a.k.a. AWS/GCP fills
+// them in after Create, and upjet writes them back into spec.forProvider).
+// ArgoCD sees the write as drift from the git-declared manifest and shows the
+// Application OutOfSync forever unless the ApplicationSet declares an
+// ignoreDifferences entry covering the field.
+//
+// FieldPath is the dotted path of the field that drifts (under the resource,
+// typically under spec.forProvider.*). Array-indexed segments use "[]" as a
+// placeholder, mirroring SelectorMapping.
+//
+// FixPattern is metadata for the diagnostic message: "ignoreDifferences",
+// "managementPolicies-observe", or "omit-late-initialize". R21 suggests all
+// three patterns regardless of which specific MR taught us about this row.
+type LateInitMapping struct {
+	Group      string `json:"group"`
+	Kind       string `json:"kind"`
+	FieldPath  string `json:"fieldPath"`
+	FixPattern string `json:"fixPattern"`
+	Reason     string `json:"reason"`
+}
+
+// LateInitUsage records that a specific resource declares a value at a
+// late-init field path — and therefore that Argo CD will see drift unless
+// suppressed via ignoreDifferences. Populated by extractLateInitUsages by
+// joining LateInitMappings against live Resources.
+type LateInitUsage struct {
+	ResourceGroup     string         `json:"resourceGroup"`
+	ResourceKind      string         `json:"resourceKind"`
+	ResourceName      string         `json:"resourceName"`
+	ResourceNamespace string         `json:"resourceNamespace,omitempty"`
+	FieldPath         string         `json:"fieldPath"`
+	Source            SourceLocation `json:"source"`
+}
+
 // IgnoreDiffEntry is a flattened view of one ignoreDifferences entry on one
 // Argo CD Application, expanded to one row per JSONPointer or JQPathExpression.
 // When both pointer lists are empty, a single row is emitted with empty strings
@@ -775,6 +810,15 @@ type World struct {
 	// cross-referenced with the resolved path from SelectorMappings.
 	// Populated by EnrichTrajectoryData.
 	SelectorUsages []SelectorUsage `json:"-"`
+
+	// LateInitMappings is the static registry of Crossplane fields that
+	// providers late-initialize from observed cloud state. Populated from
+	// pkg/ir/late_init_registry.go; not extracted from YAML.
+	LateInitMappings []LateInitMapping `json:"-"`
+
+	// LateInitUsages records every resource that declares a value at a
+	// late-init field path. Populated by EnrichTrajectoryData.
+	LateInitUsages []LateInitUsage `json:"-"`
 
 	// ResourceFieldFacts records every schema-validation violation detected
 	// while walking a concrete manifest against its CRD/XRD schema. Populated
