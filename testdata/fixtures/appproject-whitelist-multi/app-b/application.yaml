@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: preview-app-b
+  namespace: argocd
+spec:
+  project: preview
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: app-b
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: preview-b

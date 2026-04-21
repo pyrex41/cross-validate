@@ -1,0 +1,8 @@
+apiVersion: sql.crossplane.io/v1alpha1
+kind: Database
+metadata:
+  name: db-a
+  namespace: preview-a
+spec:
+  forProvider:
+    engine: postgres

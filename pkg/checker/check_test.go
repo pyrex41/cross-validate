@@ -2,6 +2,7 @@ package checker
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/pyrex41/cross-validate-/pkg/ir"
@@ -295,6 +296,40 @@ func TestR15_AppProjectWhitelist(t *testing.T) {
 	}
 	if got[0].Severity != types.SeverityError {
 		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+}
+
+// TestR15_NoCartesianAcrossApps guards against the pre-fix cartesian where
+// every resource was blamed against every Application's whitelist. With two
+// apps each owning one whitelist-missing resource, we expect exactly one
+// diagnostic per owning app (2 total), not 4 (2 apps × 2 resources).
+func TestR15_NoCartesianAcrossApps(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-multi")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.D.kind-whitelisted")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 XPC.D.kind-whitelisted diagnostics (one per owning app), got %d: %+v", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, d := range got {
+		// The rule's detail message embeds the Application name; we assert
+		// both owning apps are represented exactly once.
+		if strings.Contains(d.Detail, "preview-app-a") {
+			if seen["a"] {
+				t.Errorf("preview-app-a blamed more than once: %+v", got)
+			}
+			seen["a"] = true
+		}
+		if strings.Contains(d.Detail, "preview-app-b") {
+			if seen["b"] {
+				t.Errorf("preview-app-b blamed more than once: %+v", got)
+			}
+			seen["b"] = true
+		}
+	}
+	if !seen["a"] || !seen["b"] {
+		t.Errorf("expected one diagnostic per app; seen=%+v diags=%+v", seen, got)
 	}
 }
 
