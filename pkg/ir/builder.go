@@ -99,12 +99,98 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	if !b.SkipAppSetExpand {
 		b.expandAppSets()
 	}
+	enrichOwningApp(b.world)
 	EnrichTrajectoryData(b.world)
 	EnrichFieldValidation(b.world)
 	if !b.SkipRender {
 		b.runDeterminismChecks()
 	}
 	return b.world, nil
+}
+
+// enrichOwningApp assigns ResourceInfo.OwningApp for direct-manifest resources
+// by matching each resource's source file against directory prefixes derived
+// from each ArgoApplication's direct-manifest source. Resources that already
+// have OwningApp set (rendered:helm / rendered:kustomize) are left alone.
+//
+// Two prefixes are registered per app, longest-match wins so that the more
+// specific prefix disambiguates between nested apps:
+//  1. filepath.Join(appDir, src.Path) — the ideal case where an app's repo-
+//     relative spec.source.path corresponds to a physical subdirectory on
+//     disk. This is the fg-manifold layout.
+//  2. filepath.Dir(app.Source.File) — fallback for co-located fixtures and
+//     simpler layouts where app YAML and manifests live in the same dir.
+//
+// Resources whose file isn't under any app's prefix remain unowned (empty
+// OwningApp), and per-app rules like R15 simply skip them rather than
+// cartesian-blaming every Application.
+func enrichOwningApp(w *types.World) {
+	if len(w.ArgoApps) == 0 || len(w.Resources) == 0 {
+		return
+	}
+	type prefix struct {
+		dir     string
+		appName string
+	}
+	var prefixes []prefix
+	for _, app := range w.ArgoApps {
+		appDir := filepath.Dir(app.Source.File)
+		absAppDir, err := filepath.Abs(appDir)
+		if err == nil {
+			prefixes = append(prefixes, prefix{dir: absAppDir, appName: app.Name})
+		}
+		for _, src := range app.Sources {
+			if src.Renderer != types.RendererDirectory {
+				continue
+			}
+			if src.Path == "" {
+				continue
+			}
+			abs, err := filepath.Abs(filepath.Join(appDir, src.Path))
+			if err != nil {
+				continue
+			}
+			prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+		}
+	}
+	if len(prefixes) == 0 {
+		return
+	}
+	for i := range w.Resources {
+		if w.Resources[i].OwningApp != "" {
+			continue
+		}
+		resAbs, err := filepath.Abs(w.Resources[i].Source.File)
+		if err != nil {
+			continue
+		}
+		best := ""
+		bestLen := -1
+		for _, p := range prefixes {
+			if !pathUnder(resAbs, p.dir) {
+				continue
+			}
+			if len(p.dir) > bestLen {
+				bestLen = len(p.dir)
+				best = p.appName
+			}
+		}
+		if best != "" {
+			w.Resources[i].OwningApp = best
+		}
+	}
+}
+
+// pathUnder reports whether file is inside dir (or equals it).
+func pathUnder(file, dir string) bool {
+	if file == dir {
+		return true
+	}
+	if !strings.HasPrefix(file, dir) {
+		return false
+	}
+	// Require a separator after dir so /a/b doesn't match /a/bar.
+	return file[len(dir)] == os.PathSeparator
 }
 
 // expandAppSets walks every parsed ApplicationSet, expands its generators
@@ -620,6 +706,7 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 			res := resourceInfoFromDoc(d)
 			res.Source = app.Source
 			res.Provenance = provenance
+			res.OwningApp = app.Name
 			b.world.Resources = append(b.world.Resources, res)
 		}
 		b.world.RenderResults = append(b.world.RenderResults, result)
@@ -687,6 +774,7 @@ func (b *Builder) renderKustomizeSources(app types.ArgoApplication, appFile stri
 			res := resourceInfoFromDoc(d)
 			res.Source = app.Source
 			res.Provenance = provenance
+			res.OwningApp = app.Name
 			b.world.Resources = append(b.world.Resources, res)
 		}
 		b.world.RenderResults = append(b.world.RenderResults, result)

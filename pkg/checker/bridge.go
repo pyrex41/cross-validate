@@ -587,6 +587,7 @@ func resourceToObj(res types.ResourceInfo) kl.Obj {
 		str(res.APIVersion), str(res.Kind), str(res.Name), str(res.Namespace),
 		makeList(anns),
 		sourceToObj(res.Source),
+		str(res.OwningApp),
 	})
 }
 

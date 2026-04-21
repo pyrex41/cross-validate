@@ -193,6 +193,11 @@ type ResourceInfo struct {
 	// source of that Argo Application. Other future renderers will follow
 	// the same "rendered:<kind>:<app-name>" shape.
 	Provenance string `json:"provenance,omitempty"`
+	// OwningApp is the name of the Argo Application that manages this
+	// resource, determined either by path-prefix match against an app's
+	// direct-manifest source or by render provenance. Empty means unowned
+	// (shared/global resource not claimed by any modeled Application).
+	OwningApp string `json:"owningApp,omitempty"`
 }
 
 // ArgoApplication represents a parsed Argo CD Application.
