@@ -396,6 +396,8 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("immutable-fields", w.ImmutableFields, immutableFieldCmp, immutableFieldToObj),
 		sortedSection("selector-mappings", w.SelectorMappings, selectorMappingCmp, selectorMappingToObj),
 		sortedSection("selector-usages", w.SelectorUsages, selectorUsageCmp, selectorUsageToObj),
+		sortedSection("late-init-mappings", w.LateInitMappings, lateInitMappingCmp, lateInitMappingToObj),
+		sortedSection("late-init-usages", w.LateInitUsages, lateInitUsageCmp, lateInitUsageToObj),
 		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
 		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
 		sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj),
@@ -727,6 +729,42 @@ func selectorUsageToObj(u types.SelectorUsage) kl.Obj {
 		sym("selector-usage-fact"),
 		str(u.ResourceGroup), str(u.ResourceKind), str(u.ResourceName), str(u.ResourceNamespace),
 		str(u.SelectorPath), str(u.ResolvedPath),
+		sourceToObj(u.Source),
+	})
+}
+
+func lateInitMappingCmp(a, b types.LateInitMapping) int {
+	if c := cmp.Compare(a.Group, b.Group); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.FieldPath, b.FieldPath)
+}
+
+func lateInitMappingToObj(m types.LateInitMapping) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("late-init-mapping-fact"),
+		str(m.Group), str(m.Kind), str(m.FieldPath), str(m.FixPattern), str(m.Reason),
+	})
+}
+
+func lateInitUsageCmp(a, b types.LateInitUsage) int {
+	if c := cmp.Compare(a.ResourceKind, b.ResourceKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.ResourceName, b.ResourceName); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.FieldPath, b.FieldPath)
+}
+
+func lateInitUsageToObj(u types.LateInitUsage) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("late-init-usage-fact"),
+		str(u.ResourceGroup), str(u.ResourceKind), str(u.ResourceName), str(u.ResourceNamespace),
+		str(u.FieldPath),
 		sourceToObj(u.Source),
 	})
 }
