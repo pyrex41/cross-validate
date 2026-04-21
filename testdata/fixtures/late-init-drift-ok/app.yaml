@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: preview-alb
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: preview
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  ignoreDifferences:
+    - group: elbv2.aws.upbound.io
+      kind: LB
+      jsonPointers:
+        - /spec/forProvider/idleTimeout
+        - /spec/forProvider/clientKeepAlive

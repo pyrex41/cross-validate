@@ -1,0 +1,11 @@
+apiVersion: elbv2.aws.upbound.io/v1beta1
+kind: LB
+metadata:
+  name: fg-preview-public
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-2
+    loadBalancerType: application
+    idleTimeout: 60
+    clientKeepAlive: 3600

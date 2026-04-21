@@ -337,6 +337,33 @@ func TestR16_SelectorDrift(t *testing.T) {
 	}
 }
 
+func TestR21_LateInitDrift(t *testing.T) {
+	// Positive case: LB resource declares spec.forProvider.idleTimeout and
+	// spec.forProvider.clientKeepAlive, both of which upjet late-inits from
+	// AWS-observed state. Owning Application has no ignoreDifferences entries,
+	// so R21 fires once per usage — 2 diagnostics expected.
+	world := loadFixture(t, "../../testdata/fixtures/late-init-drift")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.E.late-init-needs-ignore-diff")
+	if len(got) == 0 {
+		t.Fatalf("late-init-drift: expected at least 1 XPC.E.late-init-needs-ignore-diff diagnostic, got 0: %+v", diags)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+
+	// Negative case: same resource but the Application's ignoreDifferences
+	// covers both late-init fields via jsonPointers. R21 should not fire.
+	world = loadFixture(t, "../../testdata/fixtures/late-init-drift-ok")
+	diags = checkFixture(t, world, Config{})
+
+	gotOk := findDiagByCode(diags, "XPC.E.late-init-needs-ignore-diff")
+	if len(gotOk) != 0 {
+		t.Fatalf("late-init-drift-ok: expected 0 XPC.E.late-init-needs-ignore-diff diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+}
+
 func TestR17_FieldValidation(t *testing.T) {
 	cases := []struct {
 		name     string
