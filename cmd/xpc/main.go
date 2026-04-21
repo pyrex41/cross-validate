@@ -81,6 +81,8 @@ Check flags:
   --skip-appset-expand Skip ApplicationSet generator expansion
   --appset-fixture=<file>  YAML fixture for pullRequest/scmProvider generators
                              (shape: {appset-name: [{key: value, ...}]})
+  --kernel-path=<dir>  Explicit path to the Shen kernel directory (overrides
+                       upward cwd search; also XPC_KERNEL_PATH env var)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -122,6 +124,7 @@ func runCheck(args []string) int {
 	kustomizeBin := ""
 	appsetFixturePath := ""
 	skipAppSetExpand := false
+	kernelPath := os.Getenv("XPC_KERNEL_PATH")
 	var paths []string
 
 	for _, arg := range args {
@@ -144,6 +147,8 @@ func runCheck(args []string) int {
 			kustomizeBin = arg[16:]
 		case len(arg) > 17 && arg[:17] == "--appset-fixture=":
 			appsetFixturePath = arg[17:]
+		case strings.HasPrefix(arg, "--kernel-path="):
+			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -222,6 +227,7 @@ func runCheck(args []string) int {
 	// Run checker
 	cfg := checker.Config{
 		StrictConversions: strictConversions,
+		KernelPath:        kernelPath,
 	}
 
 	result := checker.CheckWithObligations(world, cfg)
