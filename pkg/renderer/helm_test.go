@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -169,6 +171,97 @@ func TestPullRemoteHashStability(t *testing.T) {
 	}
 	if key(a) == key(types.ArgoSource{RepoURL: "r2", Chart: "c", TargetRevision: "1.0"}) {
 		t.Fatal("differing RepoURL did not change cache key")
+	}
+}
+
+// TestPullRemoteAgainstLocalRepo exercises the full PullRemote path
+// (helm pull --repo --version --destination --untar → rename into
+// <cacheDir>/charts/<hash>) against a hermetic local HTTP server serving
+// a packaged chart + generated index.yaml. No external network required.
+// Also verifies the second call is a cache hit (same returned path).
+func TestPullRemoteAgainstLocalRepo(t *testing.T) {
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not on PATH; skipping")
+	}
+
+	// 1. Build a minimal chart source tree.
+	chartSrc := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		full := filepath.Join(chartSrc, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Chart.yaml", "apiVersion: v2\nname: unitchart\nversion: 0.1.0\n")
+	write("values.yaml", "msg: hello\n")
+	write("templates/cm.yaml", `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unit-cm
+data:
+  msg: "{{ .Values.msg }}"
+`)
+
+	// 2. Package the chart into a repo-root dir.
+	repoRoot := t.TempDir()
+	if out, err := exec.Command(helmBin, "package", chartSrc, "--destination", repoRoot).CombinedOutput(); err != nil {
+		t.Fatalf("helm package: %v\n%s", err, out)
+	}
+
+	// 3. Serve repoRoot over HTTP *before* running `helm repo index`, so we
+	//    can point index URLs at the live server.
+	srv := httptest.NewServer(http.FileServer(http.Dir(repoRoot)))
+	defer srv.Close()
+
+	if out, err := exec.Command(helmBin, "repo", "index", repoRoot, "--url", srv.URL).CombinedOutput(); err != nil {
+		t.Fatalf("helm repo index: %v\n%s", err, out)
+	}
+
+	// 4. Call PullRemote and assert the untarred chart landed in the cache.
+	cacheDir := t.TempDir()
+	h := NewHelmRenderer(helmBin, cacheDir)
+	src := types.ArgoSource{
+		Renderer:       types.RendererHelm,
+		Chart:          "unitchart",
+		RepoURL:        srv.URL,
+		TargetRevision: "0.1.0",
+	}
+	cached, err := h.PullRemote(src)
+	if err != nil {
+		t.Fatalf("PullRemote: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cached, "Chart.yaml")); err != nil {
+		t.Fatalf("expected Chart.yaml in cached dir %s: %v", cached, err)
+	}
+	if !strings.HasPrefix(cached, filepath.Join(cacheDir, "charts")+string(filepath.Separator)) {
+		t.Fatalf("cached path %q not under %s/charts/", cached, cacheDir)
+	}
+
+	// 5. Second call should hit the cache and return the same path. We
+	//    close the server first so any network-touching path would error;
+	//    a pure stat-and-return must still succeed.
+	srv.Close()
+	cached2, err := h.PullRemote(src)
+	if err != nil {
+		t.Fatalf("second PullRemote (cache hit, server closed): %v", err)
+	}
+	if cached2 != cached {
+		t.Fatalf("cache-hit returned %q, want same as first call %q", cached2, cached)
+	}
+
+	// 6. End-to-end sanity: RenderChart on the pulled chart produces the
+	//    ConfigMap. Proves the pulled layout is what RenderChart expects.
+	out, err := h.RenderChart(cached, nil, "")
+	if err != nil {
+		t.Fatalf("RenderChart on pulled chart: %v", err)
+	}
+	if !strings.Contains(string(out), "unit-cm") {
+		t.Fatalf("expected ConfigMap in rendered output, got:\n%s", out)
 	}
 }
 
