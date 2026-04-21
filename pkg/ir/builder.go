@@ -139,6 +139,7 @@ func enrichOwningApp(w *types.World) {
 		if err == nil {
 			prefixes = append(prefixes, prefix{dir: absAppDir, appName: app.Name})
 		}
+		repoRoot := findRepoRoot(absAppDir)
 		for _, src := range app.Sources {
 			if src.Renderer != types.RendererDirectory {
 				continue
@@ -146,11 +147,18 @@ func enrichOwningApp(w *types.World) {
 			if src.Path == "" {
 				continue
 			}
-			abs, err := filepath.Abs(filepath.Join(appDir, src.Path))
-			if err != nil {
-				continue
+			// Two candidate resolutions. Argo CD treats spec.source.path as
+			// repo-relative, which is how real repos (fg-manifold) are laid out;
+			// small test fixtures often place the app YAML and its manifests in
+			// the same directory, so the appDir-relative join is a fallback.
+			if repoRoot != "" {
+				if abs, err := filepath.Abs(filepath.Join(repoRoot, src.Path)); err == nil {
+					prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+				}
 			}
-			prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+			if abs, err := filepath.Abs(filepath.Join(appDir, src.Path)); err == nil {
+				prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+			}
 		}
 	}
 	if len(prefixes) == 0 {
@@ -178,6 +186,27 @@ func enrichOwningApp(w *types.World) {
 		if best != "" {
 			w.Resources[i].OwningApp = best
 		}
+	}
+}
+
+// findRepoRoot walks up from dir looking for a .git directory and returns
+// the first ancestor that contains one. Returns "" when nothing is found
+// (dir isn't inside a git repo) — callers should skip the repo-relative
+// resolution in that case.
+func findRepoRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cur := dir
+	for {
+		if info, err := os.Stat(filepath.Join(cur, ".git")); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		cur = parent
 	}
 }
 
