@@ -187,3 +187,48 @@ func TestCachePutGetRoundtrip(t *testing.T) {
 		t.Fatalf("disk-tier Get returned %q, want payload", got2)
 	}
 }
+
+// TestCacheCreatesNestedDirEagerly guards the previous silent failure:
+// MkdirAll was deferred to first Put and its error swallowed, so a caller
+// pointing at a non-existent parent would never see writes land. Now the
+// directory is created at construction time, and subsequent Puts hit disk.
+func TestCacheCreatesNestedDirEagerly(t *testing.T) {
+	parent := t.TempDir()
+	nested := filepath.Join(parent, "new-parent", "renders")
+	c := NewCache(nested)
+	if c.DiskDir != nested {
+		t.Fatalf("expected DiskDir=%q, got %q", nested, c.DiskDir)
+	}
+	info, err := os.Stat(nested)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("expected NewCache to MkdirAll %q: err=%v info=%+v", nested, err, info)
+	}
+	c.Put("k", []byte("v"))
+	if _, err := os.Stat(filepath.Join(nested, "k")); err != nil {
+		t.Fatalf("Put did not persist to disk: %v", err)
+	}
+}
+
+// TestCacheDegradesOnUnwritableDir verifies the cache falls back to memory-
+// only when the disk dir can't be created. On a read-only parent the
+// MkdirAll in NewCache fails and DiskDir is zeroed, so subsequent Puts skip
+// disk cleanly instead of panicking or spinning.
+func TestCacheDegradesOnUnwritableDir(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Skipf("chmod: %v (non-unix?)", err)
+	}
+	defer os.Chmod(parent, 0o700)
+
+	nested := filepath.Join(parent, "cannot-make-this")
+	c := NewCache(nested)
+	if c.DiskDir != "" {
+		t.Fatalf("expected DiskDir zeroed after MkdirAll failure, got %q", c.DiskDir)
+	}
+	// Memory tier still works.
+	c.Put("k", []byte("v"))
+	got, ok := c.Get("k")
+	if !ok || string(got) != "v" {
+		t.Fatalf("memory-only cache broken: ok=%v got=%q", ok, got)
+	}
+}

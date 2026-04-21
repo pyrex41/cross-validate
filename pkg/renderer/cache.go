@@ -52,13 +52,21 @@ type Cache struct {
 }
 
 // NewCache constructs a Cache backed by the given on-disk directory. If
-// diskDir is empty, defaults to ~/.cache/xpc/renders/. A non-existent dir is
-// created lazily on first Put. If the user home directory is inaccessible
-// (unusual), we skip the disk tier silently and remain memory-only.
+// diskDir is empty, defaults to ~/.cache/xpc/renders/. The directory is
+// created eagerly here — if creation fails (read-only home, permission
+// denied), DiskDir is zeroed and the cache degrades to memory-only rather
+// than re-failing on every Put. The previous implementation deferred
+// MkdirAll to the first Put and silently swallowed its error, which is why
+// ~/.cache/xpc/ never populated under some host configurations.
 func NewCache(diskDir string) *Cache {
 	if diskDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
 			diskDir = filepath.Join(home, ".cache", "xpc", "renders")
+		}
+	}
+	if diskDir != "" {
+		if err := os.MkdirAll(diskDir, 0o755); err != nil {
+			diskDir = ""
 		}
 	}
 	return &Cache{DiskDir: diskDir, mem: map[string]cacheEntry{}}
@@ -108,20 +116,24 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 	return data, true
 }
 
-// Put stores bytes under the given key in both tiers. Disk failures are
-// swallowed — the memory tier still succeeds so the current process benefits.
+// Put stores bytes under the given key in both tiers. The memory tier
+// always succeeds. A disk-tier write failure zeroes DiskDir so subsequent
+// Puts don't keep retrying a broken disk — this process stays memory-only
+// for the rest of the run.
 func (c *Cache) Put(key string, data []byte) {
 	c.mu.Lock()
 	c.mem[key] = cacheEntry{Bytes: append([]byte(nil), data...), Rendered: time.Now()}
+	dir := c.DiskDir
 	c.mu.Unlock()
 
-	if c.DiskDir == "" {
+	if dir == "" {
 		return
 	}
-	if err := os.MkdirAll(c.DiskDir, 0o755); err != nil {
-		return
+	if err := os.WriteFile(filepath.Join(dir, key), data, 0o644); err != nil {
+		c.mu.Lock()
+		c.DiskDir = ""
+		c.mu.Unlock()
 	}
-	_ = os.WriteFile(filepath.Join(c.DiskDir, key), data, 0o644)
 }
 
 // HashChartDir computes a stable SHA-256 of the contents of chartPath by
