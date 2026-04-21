@@ -6,7 +6,7 @@
 \* Check a single resource against all CRDs for webhook conversion *\
 (define check-r2-resource
   {(list A) --> (list (list A)) --> (list judgment)}
-  [resource-fact APIVersion Kind Name Namespace Annotations Src] CRDs ->
+  [resource-fact APIVersion Kind Name Namespace Annotations Src _] CRDs ->
     (let Group (api-version->group APIVersion)
          Version (api-version->version APIVersion)
          MatchingCRDs (filter (/. C (crd-matches-gvk? C Group Kind)) CRDs)

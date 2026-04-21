@@ -20,7 +20,10 @@
 \* (function-fact Name Package InputVersions SourceLoc)
    InputVersions = list of strings *\
 
-\* (resource-fact APIVersion Kind Name Namespace Annotations SourceLoc) *\
+\* (resource-fact APIVersion Kind Name Namespace Annotations SourceLoc OwningApp)
+   OwningApp = name of the ArgoApplication that manages this resource, or ""
+   for unowned (shared/global) resources. R15 and related per-app rules filter
+   on this to avoid n×m cartesian emissions. *\
 
 \* (argo-app-fact Name TrackingMode SyncWaves SourceLoc)
    SyncWaves = list of [Kind Name Wave] *\

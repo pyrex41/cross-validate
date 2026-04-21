@@ -57,7 +57,7 @@
 
 (define check-r11-resource
   {(list A) --> (list judgment)}
-  [resource-fact APIVersion Kind Name Namespace Annotations Src] ->
+  [resource-fact APIVersion Kind Name Namespace Annotations Src _] ->
     (if (deprecated-api? APIVersion)
         [(make-warning "XPC011"
           Src

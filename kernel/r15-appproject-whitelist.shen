@@ -56,10 +56,18 @@
   ProjName [_ | Rest] -> (r15-find-appproject ProjName Rest))
 
 
+\* r15-owned-by? — true if Res's OwningApp matches AppName. Used to filter
+   global Resources down to only those the current Application manages,
+   so R15 no longer n×m-blames every (app, resource) pair. *\
+(define r15-owned-by?
+  AppName [resource-fact _ _ _ _ _ _ OwningApp] -> (= AppName OwningApp)
+  _ _ -> false)
+
+
 \* check-r15-resource — check one resource against one app's AppProject.
    Returns a list of judgments (empty when whitelisted). *\
 (define check-r15-resource
-  [resource-fact APIVersion Kind Name Namespace _ ResSrc]
+  [resource-fact APIVersion Kind Name Namespace _ ResSrc _]
     AppName AppProject CRDs ->
       (if (= AppProject [])
           []
@@ -87,14 +95,17 @@
   _ _ _ _ -> [])
 
 
-\* check-r15-app — check all resources against one app's AppProject. *\
+\* check-r15-app — check all resources against one app's AppProject.
+   Filters Resources to only those owned by AppName before the check —
+   unowned resources and those owned by other apps are ignored here. *\
 (define check-r15-app
   [argo-app-fact AppName | _] AppProjLinks AppProjects Resources CRDs ->
     (let ProjName   (r15-lookup-app-project AppName AppProjLinks)
          AppProject (r15-find-appproject ProjName AppProjects)
+         Owned      (filter (/. Res (r15-owned-by? AppName Res)) Resources)
       (flatten (map (/. Res
                       (check-r15-resource Res AppName AppProject CRDs))
-                    Resources)))
+                    Owned)))
   _ _ _ _ _ -> [])
 
 

@@ -6,7 +6,7 @@
 \* Check a resource against XRDs for v1/v2 machinery mismatch *\
 (define check-r8-resource
   {(list A) --> (list (list A)) --> (list judgment)}
-  [resource-fact APIVersion Kind Name Namespace Annotations Src] XRDs ->
+  [resource-fact APIVersion Kind Name Namespace Annotations Src _] XRDs ->
     (let Group (api-version->group APIVersion)
          MatchingXRDs (filter (/. X (xrd-matches-gk? X Group Kind)) XRDs)
       (flatten (map (/. XRD (check-r8-against-xrd Name Kind Src XRD)) MatchingXRDs)))
@@ -50,7 +50,7 @@
 
 (define check-r8-resource-annotation
   {(list A) --> (list judgment)}
-  [resource-fact APIVersion Kind Name Namespace Annotations Src] ->
+  [resource-fact APIVersion Kind Name Namespace Annotations Src _] ->
     (if (has-annotation? Annotations "xpc.dev/v1-machinery-on-v2-xrd" "true")
         [(make-error "XPC008"
           Src

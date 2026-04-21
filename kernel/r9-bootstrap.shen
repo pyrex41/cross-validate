@@ -26,7 +26,7 @@
 (define check-r9-annotated
   {(list (list A)) --> (list judgment)}
   [] -> []
-  [[resource-fact APIVersion Kind Name Namespace Annotations Src] | Rest] ->
+  [[resource-fact APIVersion Kind Name Namespace Annotations Src _] | Rest] ->
     (let BootstrapIssues (check-r9-annotations Name Kind Annotations Src)
       (append BootstrapIssues (check-r9-annotated Rest)))
   [_ | Rest] -> (check-r9-annotated Rest))
