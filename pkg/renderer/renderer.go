@@ -6,7 +6,6 @@ package renderer
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 
 	"github.com/pyrex41/cross-validate-/pkg/types"
@@ -29,18 +28,20 @@ var ErrHelmAbsent = errors.New("renderer: helm binary absent")
 // source whose Renderer kind it doesn't implement.
 var ErrRendererUnsupported = errors.New("renderer: unsupported source kind")
 
+// ErrRemoteChart signals that a Helm source points at a remote chart (no
+// src.Path; src.Chart+RepoURL instead). Callers translate this into a
+// HelmRenderer.PullRemote call when --helm-cache-dir is configured.
+var ErrRemoteChart = errors.New("renderer: remote chart (no path)")
+
 // ResolveChart returns the absolute filesystem path to the chart directory
 // for `src`, resolved relative to `cwd` (usually the directory of the
 // Application YAML). For fg-manifold charts are co-located with the
-// Application, so `src.Path` is treated as a relative path. Remote-repo
-// resolution is deferred — if `src.Chart` is non-empty and `src.Path` is
-// empty, we return ErrRendererUnsupported.
+// Application, so `src.Path` is treated as a relative path. Returns
+// ErrRemoteChart if src.Path=="" (remote chart case: handled by
+// HelmRenderer.PullRemote).
 func ResolveChart(src types.ArgoSource, cwd string) (string, error) {
 	if src.Path == "" {
-		if src.Chart != "" {
-			return "", fmt.Errorf("%w: remote Helm chart %q not supported (Path required)", ErrRendererUnsupported, src.Chart)
-		}
-		return "", fmt.Errorf("%w: source has no path", ErrRendererUnsupported)
+		return "", ErrRemoteChart
 	}
 	if filepath.IsAbs(src.Path) {
 		return filepath.Clean(src.Path), nil

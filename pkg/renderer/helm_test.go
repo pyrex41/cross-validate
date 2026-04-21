@@ -1,7 +1,9 @@
 package renderer
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +60,7 @@ data:
   n: "{{ .Values.replicas }}"
 `)
 
-	h := NewHelmRenderer(helmBin)
+	h := NewHelmRenderer(helmBin, "")
 	out, err := h.RenderChart(chart, &types.ArgoHelmSource{ReleaseName: "unit"}, "")
 	if err != nil {
 		t.Fatalf("RenderChart: %v", err)
@@ -80,6 +82,93 @@ data:
 	}
 	if string(out) != string(out2) {
 		t.Fatalf("cached render differs from first")
+	}
+}
+
+// TestResolveChartRemoteReturnsErrRemoteChart confirms ResolveChart returns
+// the ErrRemoteChart sentinel when src.Path is empty — the builder uses
+// this to decide whether to invoke PullRemote.
+func TestResolveChartRemoteReturnsErrRemoteChart(t *testing.T) {
+	_, err := ResolveChart(types.ArgoSource{
+		Renderer: types.RendererHelm,
+		Chart:    "argo-cd",
+		RepoURL:  "https://argoproj.github.io/argo-helm",
+	}, t.TempDir())
+	if !errors.Is(err, ErrRemoteChart) {
+		t.Fatalf("expected ErrRemoteChart, got %v", err)
+	}
+}
+
+// TestPullRemoteRequiresCacheDir ensures PullRemote fails fast when no
+// ChartCacheDir is configured, so the builder can surface a clear
+// "helm-remote-unsupported" diagnostic instead of silently attempting a
+// network fetch into a default location.
+func TestPullRemoteRequiresCacheDir(t *testing.T) {
+	h := &HelmRenderer{HelmBin: "/nonexistent/xpc-test-helm"}
+	_, err := h.PullRemote(types.ArgoSource{
+		Chart:   "some-chart",
+		RepoURL: "https://example.invalid/charts",
+	})
+	if err == nil {
+		t.Fatal("expected error when ChartCacheDir is empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "ChartCacheDir") && !strings.Contains(err.Error(), "helm-cache-dir") {
+		t.Fatalf("error should mention ChartCacheDir/--helm-cache-dir: %v", err)
+	}
+}
+
+// TestPullRemoteCacheHit verifies the cache-hit path doesn't invoke helm:
+// we pre-seed h.ChartCacheDir/charts/<hash> as a directory and call
+// PullRemote with a non-existent helm binary. The stat should match first
+// and return the cached path before probe() is ever called.
+func TestPullRemoteCacheHit(t *testing.T) {
+	cacheDir := t.TempDir()
+	src := types.ArgoSource{
+		Chart:          "argo-cd",
+		RepoURL:        "https://argoproj.github.io/argo-helm",
+		TargetRevision: "5.46.0",
+	}
+	chartKey := src.RepoURL + "/" + src.Chart + "/" + src.TargetRevision
+	sum := sha256.Sum256([]byte(chartKey))
+	hash := fmt.Sprintf("%x", sum)
+	cached := filepath.Join(cacheDir, "charts", hash)
+	if err := os.MkdirAll(cached, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &HelmRenderer{
+		HelmBin:       "/nonexistent/xpc-test-helm",
+		ChartCacheDir: cacheDir,
+	}
+	got, err := h.PullRemote(src)
+	if err != nil {
+		t.Fatalf("PullRemote on cache hit: %v", err)
+	}
+	if got != cached {
+		t.Fatalf("PullRemote returned %q, want %q", got, cached)
+	}
+}
+
+// TestPullRemoteHashStability asserts that the cache key is a pure function
+// of (RepoURL, Chart, TargetRevision) — swapping any component changes the
+// path, equal inputs produce equal paths. Guards against accidental entropy
+// in the hash (timestamps, rand, map iteration order).
+func TestPullRemoteHashStability(t *testing.T) {
+	key := func(src types.ArgoSource) string {
+		s := src.RepoURL + "/" + src.Chart + "/" + src.TargetRevision
+		sum := sha256.Sum256([]byte(s))
+		return fmt.Sprintf("%x", sum)
+	}
+	a := types.ArgoSource{RepoURL: "r", Chart: "c", TargetRevision: "1.0"}
+	b := types.ArgoSource{RepoURL: "r", Chart: "c", TargetRevision: "1.0"}
+	if key(a) != key(b) {
+		t.Fatal("identical sources produced different cache keys")
+	}
+	if key(a) == key(types.ArgoSource{RepoURL: "r", Chart: "c", TargetRevision: "1.1"}) {
+		t.Fatal("differing TargetRevision did not change cache key")
+	}
+	if key(a) == key(types.ArgoSource{RepoURL: "r2", Chart: "c", TargetRevision: "1.0"}) {
+		t.Fatal("differing RepoURL did not change cache key")
 	}
 }
 

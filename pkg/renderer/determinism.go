@@ -27,7 +27,7 @@ import (
 // mask true non-determinism. We do not mutate the caller's renderer; a
 // local, cache-less copy does the work.
 func DoubleRenderHelm(h *HelmRenderer, chartPath, namespace string, helmSrc *types.ArgoHelmSource) (bool, string, error) {
-	noCache := &HelmRenderer{HelmBin: h.HelmBin}
+	noCache := &HelmRenderer{HelmBin: h.HelmBin, ChartCacheDir: ""}
 	a, err := noCache.RenderChart(chartPath, helmSrc, namespace)
 	if err != nil {
 		return false, "", err

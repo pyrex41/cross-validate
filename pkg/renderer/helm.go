@@ -3,9 +3,11 @@ package renderer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -23,6 +25,10 @@ import (
 // than to stall CI.
 const HelmTimeout = 30 * time.Second
 
+// HelmPullTimeout caps `helm pull` for remote charts. Network-backed, so a
+// bit more generous than template.
+const HelmPullTimeout = 60 * time.Second
+
 // HelmRenderer runs `helm template` to produce Kubernetes YAML. It is safe
 // for concurrent use; each .Render call invokes helm in a fresh subprocess.
 type HelmRenderer struct {
@@ -31,6 +37,10 @@ type HelmRenderer struct {
 	HelmBin string
 	// Cache is the two-tier render cache. Nil means "no caching".
 	Cache *Cache
+	// ChartCacheDir is the on-disk root for pulled remote charts. Empty
+	// disables remote-chart support; PullRemote returns an error when
+	// called with no ChartCacheDir.
+	ChartCacheDir string
 
 	mu         sync.Mutex
 	resolved   string // cached result of resolving HelmBin
@@ -40,10 +50,12 @@ type HelmRenderer struct {
 }
 
 // NewHelmRenderer constructs a HelmRenderer with the default disk-cache dir.
-func NewHelmRenderer(helmBin string) *HelmRenderer {
+// cacheDir is the ChartCacheDir for remote chart pulls; "" disables remote.
+func NewHelmRenderer(helmBin, cacheDir string) *HelmRenderer {
 	return &HelmRenderer{
-		HelmBin: helmBin,
-		Cache:   NewCache(""),
+		HelmBin:       helmBin,
+		Cache:         NewCache(""),
+		ChartCacheDir: cacheDir,
 	}
 }
 
@@ -186,6 +198,81 @@ func (h *HelmRenderer) RenderChart(chartPath string, helmSrc *types.ArgoHelmSour
 		h.Cache.Put(cacheKey, out)
 	}
 	return out, nil
+}
+
+// PullRemote downloads the remote Helm chart named by src.Chart from
+// src.RepoURL (optionally src.TargetRevision) into
+// h.ChartCacheDir/charts/<hash>. Returns the absolute path to the untarred
+// chart dir. Cache hit: stat(h.ChartCacheDir/charts/<hash>). Cache miss:
+// `helm pull --repo --version --destination tmp --untar`, then rename the
+// untarred chart dir into place. Requires ChartCacheDir; returns an error
+// otherwise.
+func (h *HelmRenderer) PullRemote(src types.ArgoSource) (string, error) {
+	if h.ChartCacheDir == "" {
+		return "", fmt.Errorf("remote charts require a configured ChartCacheDir (use --helm-cache-dir)")
+	}
+	if src.Chart == "" {
+		return "", fmt.Errorf("remote chart pull requires src.Chart to be set")
+	}
+	if src.RepoURL == "" {
+		return "", fmt.Errorf("remote chart pull requires src.RepoURL to be set")
+	}
+	chartKey := fmt.Sprintf("%s/%s/%s", src.RepoURL, src.Chart, src.TargetRevision)
+	sum := sha256.Sum256([]byte(chartKey))
+	hash := fmt.Sprintf("%x", sum)
+	cached := filepath.Join(h.ChartCacheDir, "charts", hash)
+	if info, err := os.Stat(cached); err == nil && info.IsDir() {
+		return cached, nil
+	}
+	if err := os.MkdirAll(filepath.Join(h.ChartCacheDir, "charts"), 0o755); err != nil {
+		return "", err
+	}
+	tmpRoot := filepath.Join(h.ChartCacheDir, "tmp")
+	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.MkdirTemp(tmpRoot, hash+"-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+
+	bin, _, err := h.probe()
+	if err != nil {
+		return "", err
+	}
+	args := []string{"pull", src.Chart, "--repo", src.RepoURL, "--destination", tmp, "--untar"}
+	if src.TargetRevision != "" {
+		args = append(args, "--version", src.TargetRevision)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), HelmPullTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		ver := ""
+		if src.TargetRevision != "" {
+			ver = " --version " + src.TargetRevision
+		}
+		return "", fmt.Errorf("helm pull %s --repo %s%s: %v:\n%s", src.Chart, src.RepoURL, ver, err, strings.TrimSpace(string(out)))
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return "", fmt.Errorf("reading helm pull tmp dir %s: %w", tmp, err)
+	}
+	if len(entries) != 1 || !entries[0].IsDir() {
+		return "", fmt.Errorf("helm pull produced %d entries in %s, want exactly 1 untarred chart dir", len(entries), tmp)
+	}
+	chartTmp := filepath.Join(tmp, entries[0].Name())
+	if err := os.Rename(chartTmp, cached); err != nil {
+		// A concurrent pull may have already placed the chart here; treat
+		// that as a successful cache hit.
+		if info, statErr := os.Stat(cached); statErr == nil && info.IsDir() {
+			return cached, nil
+		}
+		return "", fmt.Errorf("rename %s → %s: %w", chartTmp, cached, err)
+	}
+	return cached, nil
 }
 
 // IsHelmAbsent reports whether err is an ErrHelmAbsent wrapper.

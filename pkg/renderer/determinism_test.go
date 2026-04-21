@@ -39,7 +39,7 @@ data:
   n: "{{ .Values.replicas }}"
 `)
 
-	h := NewHelmRenderer(helmBin)
+	h := NewHelmRenderer(helmBin, "")
 	mismatch, summary, err := DoubleRenderHelm(h, chart, "", &types.ArgoHelmSource{ReleaseName: "d"})
 	if err != nil {
 		t.Fatalf("DoubleRenderHelm: %v", err)
@@ -81,7 +81,7 @@ stringData:
   token: "{{ randAlphaNum 16 }}"
 `)
 
-	h := NewHelmRenderer(helmBin)
+	h := NewHelmRenderer(helmBin, "")
 	mismatch, summary, err := DoubleRenderHelm(h, chart, "", &types.ArgoHelmSource{ReleaseName: "nd"})
 	if err != nil {
 		t.Fatalf("DoubleRenderHelm: %v", err)

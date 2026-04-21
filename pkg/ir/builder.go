@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ type Builder struct {
 	// ArgoApplications from ApplicationSet generators. Default is "expand";
 	// CLI surfaces --skip-appset-expand for opt-out.
 	SkipAppSetExpand bool
+	HelmCacheDir     string
 	// AppSetContext provides fixtures for generator kinds that can't be
 	// simulated offline (pullRequest, scmProvider). Nil is fine; only the
 	// PRFixtures-dependent code paths will degrade to an info diag.
@@ -721,7 +723,7 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 	}
 	cwd := filepath.Dir(appFile)
 	if b.helmRenderer == nil {
-		b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin)
+		b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin, b.HelmCacheDir)
 	}
 
 	for _, src := range app.Sources {
@@ -729,7 +731,33 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 			continue
 		}
 		chartPath, resolveErr := renderer.ResolveChart(src, cwd)
-		if resolveErr != nil {
+		if errors.Is(resolveErr, renderer.ErrRemoteChart) {
+			if b.HelmCacheDir == "" {
+				b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
+					AppName:   app.Name,
+					ChartPath: "",
+					Success:   false,
+					Error:     "remote Helm chart requires --helm-cache-dir",
+					ErrorKind: "helm-remote-unsupported",
+					Source:    app.Source,
+				})
+				continue
+			}
+			pulled, pullErr := b.helmRenderer.PullRemote(src)
+			if pullErr != nil {
+				b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
+					AppName:   app.Name,
+					ChartPath: "",
+					Success:   false,
+					Error:     fmt.Sprintf("helm pull: %v", pullErr),
+					ErrorKind: "helm-pull-failed",
+					Source:    app.Source,
+				})
+				continue
+			}
+			chartPath = pulled
+			resolveErr = nil
+		} else if resolveErr != nil {
 			b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
 				AppName:   app.Name,
 				ChartPath: chartPath,
@@ -875,7 +903,7 @@ func (b *Builder) runDeterminismChecks() {
 			switch src.Renderer {
 			case types.RendererHelm:
 				if b.helmRenderer == nil {
-					b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin)
+					b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin, b.HelmCacheDir)
 				}
 				chartPath, err := renderer.ResolveChart(src, cwd)
 				if err != nil {

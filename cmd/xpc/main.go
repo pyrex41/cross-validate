@@ -77,7 +77,8 @@ Check flags:
   --snapshot=<path>    Use a specific snapshot file
   --skip-render        Skip Helm/Kustomize rendering (emits one info diagnostic per skipped Application)
   --helm-bin=<path>    Path to the helm binary (default: first 'helm' on PATH)
-  --kustomize-bin=<path>  Path to the kustomize binary (default: first 'kustomize' on PATH)
+  --helm-cache-dir=<dir>   Dir for remote Helm charts + render cache (enables remote)
+  --kustomize-bin=<path>   Path to the kustomize binary (default: first 'kustomize' on PATH)
   --skip-appset-expand Skip ApplicationSet generator expansion
   --appset-fixture=<file>  YAML fixture for pullRequest/scmProvider generators
                              (shape: {appset-name: [{key: value, ...}]})
@@ -123,6 +124,7 @@ func runCheck(args []string) int {
 	helmBin := ""
 	kustomizeBin := ""
 	appsetFixturePath := ""
+	helmCacheDir := ""
 	skipAppSetExpand := false
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
 	var paths []string
@@ -147,6 +149,8 @@ func runCheck(args []string) int {
 			kustomizeBin = arg[16:]
 		case len(arg) > 17 && arg[:17] == "--appset-fixture=":
 			appsetFixturePath = arg[17:]
+		case strings.HasPrefix(arg, "--helm-cache-dir="):
+			helmCacheDir = strings.TrimPrefix(arg, "--helm-cache-dir=")
 		case strings.HasPrefix(arg, "--kernel-path="):
 			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
 		case arg == "--help" || arg == "-h":
@@ -195,6 +199,7 @@ func runCheck(args []string) int {
 	builder := ir.NewBuilder()
 	builder.SkipRender = skipRender
 	builder.HelmBin = helmBin
+	builder.HelmCacheDir = helmCacheDir
 	builder.KustomizeBin = kustomizeBin
 	builder.SkipAppSetExpand = skipAppSetExpand
 	if appsetFixturePath != "" {
