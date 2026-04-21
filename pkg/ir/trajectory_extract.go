@@ -41,6 +41,44 @@ func EnrichTrajectoryData(w *types.World) {
 	w.ImmutableFields = ImmutableFieldRegistry()
 	w.SelectorMappings = SelectorRegistry()
 	extractSelectorUsages(w)
+	w.LateInitMappings = LateInitRegistry()
+	extractLateInitUsages(w)
+}
+
+// extractLateInitUsages populates w.LateInitUsages by consulting
+// w.LateInitMappings against each resource's Raw map. Same array-path deferral
+// as extractSelectorUsages: entries containing "[]" are skipped on this pass.
+func extractLateInitUsages(w *types.World) {
+	type gk struct{ group, kind string }
+	index := make(map[gk][]types.LateInitMapping)
+	for _, m := range w.LateInitMappings {
+		key := gk{m.Group, m.Kind}
+		index[key] = append(index[key], m)
+	}
+
+	for _, res := range w.Resources {
+		resGroup := groupFromAPIVersion(res.APIVersion)
+		key := gk{resGroup, res.Kind}
+		mappings, ok := index[key]
+		if !ok {
+			continue
+		}
+		for _, m := range mappings {
+			if strings.Contains(m.FieldPath, "[]") {
+				continue
+			}
+			if walkScalarPath(res.Raw, m.FieldPath) {
+				w.LateInitUsages = append(w.LateInitUsages, types.LateInitUsage{
+					ResourceGroup:     resGroup,
+					ResourceKind:      res.Kind,
+					ResourceName:      res.Name,
+					ResourceNamespace: res.Namespace,
+					FieldPath:         m.FieldPath,
+					Source:            res.Source,
+				})
+			}
+		}
+	}
 }
 
 // groupFromAPIVersion extracts the API group from an APIVersion string.
