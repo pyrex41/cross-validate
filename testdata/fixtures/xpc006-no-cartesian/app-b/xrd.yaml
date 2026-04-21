@@ -1,0 +1,26 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xgadgets.platform.example.com
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  group: platform.example.com
+  names:
+    kind: XGadget
+    plural: xgadgets
+  versions:
+    - name: v1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+---
+apiVersion: platform.example.com/v1
+kind: XGadget
+metadata:
+  name: gadget-b
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec: {}

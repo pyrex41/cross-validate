@@ -126,8 +126,8 @@ func TestIsStale(t *testing.T) {
 func TestDiff(t *testing.T) {
 	a := New("cluster-a")
 	a.CRDs = []types.CRDInfo{{
-		Group: "example.com",
-		Kind:  "Foo",
+		Group:    "example.com",
+		Kind:     "Foo",
 		Versions: []types.CRDVersion{{Name: "v1", Served: true, Storage: true}},
 	}}
 	a.ComputeDigest()

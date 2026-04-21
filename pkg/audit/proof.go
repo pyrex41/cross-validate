@@ -90,8 +90,8 @@ type ProofMetadata struct {
 
 // RuleSubtree contains all judgments for a single rule.
 type RuleSubtree struct {
-	RuleID   string     `json:"ruleId"`
-	Digest   string     `json:"digest"`
+	RuleID    string     `json:"ruleId"`
+	Digest    string     `json:"digest"`
 	Judgments []Judgment `json:"judgments"`
 }
 
@@ -99,7 +99,7 @@ type RuleSubtree struct {
 type ResourceSubtree struct {
 	ResourceKey string     `json:"resourceKey"` // kind/name
 	Digest      string     `json:"digest"`
-	Judgments    []Judgment `json:"judgments"`
+	Judgments   []Judgment `json:"judgments"`
 }
 
 // Judgment is a single type-checking judgment (ok or error).

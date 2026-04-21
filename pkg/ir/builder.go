@@ -108,36 +108,28 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	return b.world, nil
 }
 
-// enrichOwningApp assigns ResourceInfo.OwningApp for direct-manifest resources
-// by matching each resource's source file against directory prefixes derived
-// from each ArgoApplication's direct-manifest source. Resources that already
-// have OwningApp set (rendered:helm / rendered:kustomize) are left alone.
-//
-// Two prefixes are registered per app, longest-match wins so that the more
-// specific prefix disambiguates between nested apps:
-//  1. filepath.Join(appDir, src.Path) — the ideal case where an app's repo-
-//     relative spec.source.path corresponds to a physical subdirectory on
-//     disk. This is the fg-manifold layout.
+// ownerPrefix pairs an absolute directory prefix with the Argo Application
+// that claims it. Longest-match wins when resolving a fact's source file so
+// the more specific prefix disambiguates nested apps.
+type ownerPrefix struct {
+	dir     string
+	appName string
+}
+
+// buildOwnerPrefixes collects path prefixes for every ArgoApplication. Two
+// prefixes are registered per app:
+//  1. filepath.Join(repoRoot|appDir, src.Path) — the ideal case where an
+//     app's repo-relative spec.source.path corresponds to a physical
+//     subdirectory on disk. This is the fg-manifold layout.
 //  2. filepath.Dir(app.Source.File) — fallback for co-located fixtures and
 //     simpler layouts where app YAML and manifests live in the same dir.
-//
-// Resources whose file isn't under any app's prefix remain unowned (empty
-// OwningApp), and per-app rules like R15 simply skip them rather than
-// cartesian-blaming every Application.
-func enrichOwningApp(w *types.World) {
-	if len(w.ArgoApps) == 0 || len(w.Resources) == 0 {
-		return
-	}
-	type prefix struct {
-		dir     string
-		appName string
-	}
-	var prefixes []prefix
+func buildOwnerPrefixes(w *types.World) []ownerPrefix {
+	var prefixes []ownerPrefix
 	for _, app := range w.ArgoApps {
 		appDir := filepath.Dir(app.Source.File)
 		absAppDir, err := filepath.Abs(appDir)
 		if err == nil {
-			prefixes = append(prefixes, prefix{dir: absAppDir, appName: app.Name})
+			prefixes = append(prefixes, ownerPrefix{dir: absAppDir, appName: app.Name})
 		}
 		repoRoot := findRepoRoot(absAppDir)
 		for _, src := range app.Sources {
@@ -147,20 +139,54 @@ func enrichOwningApp(w *types.World) {
 			if src.Path == "" {
 				continue
 			}
-			// Two candidate resolutions. Argo CD treats spec.source.path as
-			// repo-relative, which is how real repos (fg-manifold) are laid out;
-			// small test fixtures often place the app YAML and its manifests in
-			// the same directory, so the appDir-relative join is a fallback.
 			if repoRoot != "" {
 				if abs, err := filepath.Abs(filepath.Join(repoRoot, src.Path)); err == nil {
-					prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+					prefixes = append(prefixes, ownerPrefix{dir: abs, appName: app.Name})
 				}
 			}
 			if abs, err := filepath.Abs(filepath.Join(appDir, src.Path)); err == nil {
-				prefixes = append(prefixes, prefix{dir: abs, appName: app.Name})
+				prefixes = append(prefixes, ownerPrefix{dir: abs, appName: app.Name})
 			}
 		}
 	}
+	return prefixes
+}
+
+// resolveOwner returns the app name whose prefix best (longest) contains
+// file, or "" if no prefix matches.
+func resolveOwner(file string, prefixes []ownerPrefix) string {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	bestLen := -1
+	for _, p := range prefixes {
+		if !pathUnder(abs, p.dir) {
+			continue
+		}
+		if len(p.dir) > bestLen {
+			bestLen = len(p.dir)
+			best = p.appName
+		}
+	}
+	return best
+}
+
+// enrichOwningApp assigns OwningApp on every fact type that carries one
+// (ResourceInfo, CRDInfo, CompositionInfo, FunctionInfo, ProviderInfo) by
+// matching each fact's source file against the prefix set derived from the
+// ArgoApplications in w. Facts that already have OwningApp set (rendered
+// resources with "rendered:helm:<app>" provenance) are left alone.
+//
+// Facts whose file isn't under any app's prefix remain unowned (empty
+// OwningApp), and per-app rules (R15, R6a/b/c/d) simply skip them rather
+// than cartesian-blaming every Application.
+func enrichOwningApp(w *types.World) {
+	if len(w.ArgoApps) == 0 {
+		return
+	}
+	prefixes := buildOwnerPrefixes(w)
 	if len(prefixes) == 0 {
 		return
 	}
@@ -168,23 +194,48 @@ func enrichOwningApp(w *types.World) {
 		if w.Resources[i].OwningApp != "" {
 			continue
 		}
-		resAbs, err := filepath.Abs(w.Resources[i].Source.File)
-		if err != nil {
+		if owner := resolveOwner(w.Resources[i].Source.File, prefixes); owner != "" {
+			w.Resources[i].OwningApp = owner
+		}
+	}
+	for i := range w.CRDs {
+		if w.CRDs[i].OwningApp != "" {
 			continue
 		}
-		best := ""
-		bestLen := -1
-		for _, p := range prefixes {
-			if !pathUnder(resAbs, p.dir) {
-				continue
-			}
-			if len(p.dir) > bestLen {
-				bestLen = len(p.dir)
-				best = p.appName
-			}
+		if owner := resolveOwner(w.CRDs[i].Source.File, prefixes); owner != "" {
+			w.CRDs[i].OwningApp = owner
 		}
-		if best != "" {
-			w.Resources[i].OwningApp = best
+	}
+	for i := range w.XRDs {
+		if w.XRDs[i].OwningApp != "" {
+			continue
+		}
+		if owner := resolveOwner(w.XRDs[i].Source.File, prefixes); owner != "" {
+			w.XRDs[i].OwningApp = owner
+		}
+	}
+	for i := range w.Compositions {
+		if w.Compositions[i].OwningApp != "" {
+			continue
+		}
+		if owner := resolveOwner(w.Compositions[i].Source.File, prefixes); owner != "" {
+			w.Compositions[i].OwningApp = owner
+		}
+	}
+	for i := range w.Functions {
+		if w.Functions[i].OwningApp != "" {
+			continue
+		}
+		if owner := resolveOwner(w.Functions[i].Source.File, prefixes); owner != "" {
+			w.Functions[i].OwningApp = owner
+		}
+	}
+	for i := range w.Providers {
+		if w.Providers[i].OwningApp != "" {
+			continue
+		}
+		if owner := resolveOwner(w.Providers[i].Source.File, prefixes); owner != "" {
+			w.Providers[i].OwningApp = owner
 		}
 	}
 }

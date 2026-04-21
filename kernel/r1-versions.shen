@@ -57,7 +57,7 @@
 \* Check a single XRD for version coherence *\
 (define check-r1-xrd
   {(list A) --> (list judgment)}
-  [xrd-fact Group Kind Scope APIVer Versions Src] ->
+  [xrd-fact Group Kind Scope APIVer Versions Src _] ->
     (append (check-r1a-versions Group Kind Versions Src)
             (check-r1b-referenceable Group Kind Versions Src))
   _ -> [])

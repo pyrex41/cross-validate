@@ -92,8 +92,8 @@ func TestSimulate_HookDeletePolicyProducesDeleted(t *testing.T) {
 		{
 			APIVersion: "v1", Kind: "ConfigMap", Name: "tmp", Namespace: "ns",
 			Annotations: map[string]string{
-				"argocd.argoproj.io/sync-wave":         "0",
-				"argocd.argoproj.io/hook":              "Sync",
+				"argocd.argoproj.io/sync-wave":          "0",
+				"argocd.argoproj.io/hook":               "Sync",
 				"argocd.argoproj.io/hook-delete-policy": "HookSucceeded",
 			},
 			Source: types.SourceLocation{File: "tmp.yaml", Line: 1},

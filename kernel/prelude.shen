@@ -10,20 +10,23 @@
    Versions = list of [VersionName Served Storage SchemaRef]
    Conversion = [Strategy CostClass WebhookService] *\
 
-\* (xrd-fact Group Kind Scope APIVersion Versions SourceLoc)
+\* (xrd-fact Group Kind Scope APIVersion Versions SourceLoc OwningApp)
    Versions = list of [VersionName Served Referenceable SchemaRef] *\
 
-\* (composition-fact Name CompositeTypeRef Mode Pipeline SourceLoc)
+\* (composition-fact Name CompositeTypeRef Mode Pipeline SourceLoc OwningApp)
    CompositeTypeRef = [gvk Group Version Kind]
    Pipeline = list of [StepName FunctionRef InputAPIVersion InputKind] *\
 
-\* (function-fact Name Package InputVersions SourceLoc)
+\* (function-fact Name Package InputVersions SourceLoc OwningApp)
    InputVersions = list of strings *\
 
+\* (provider-fact Name Package SourceLoc OwningApp) *\
+
 \* (resource-fact APIVersion Kind Name Namespace Annotations SourceLoc OwningApp)
-   OwningApp = name of the ArgoApplication that manages this resource, or ""
-   for unowned (shared/global) resources. R15 and related per-app rules filter
-   on this to avoid n×m cartesian emissions. *\
+   OwningApp = name of the ArgoApplication that manages this resource (or
+   CRD/XRD/Composition/Function/Provider), or "" for unowned (shared/global)
+   facts. Per-app rules (R6a/b/c/d, R15) filter on this to avoid n×m
+   cartesian emissions. *\
 
 \* (argo-app-fact Name TrackingMode SyncWaves SourceLoc)
    SyncWaves = list of [Kind Name Wave] *\

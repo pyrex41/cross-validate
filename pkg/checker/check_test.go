@@ -177,6 +177,35 @@ func TestR6_WaveOrdering(t *testing.T) {
 	}
 }
 
+// TestR6_NoCartesianAcrossApps guards the XPC006 analogue of R15's cartesian
+// fix: with two apps each owning a distinct XRD+XR pair, the rule should fire
+// once per owning app (2 total), not once per (app × XRD) combination (4).
+func TestR6_NoCartesianAcrossApps(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/xpc006-no-cartesian")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC006")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 XPC006 diagnostics (one per owning app), got %d: %+v", len(got), got)
+	}
+	seenWidget := 0
+	seenGadget := 0
+	for _, d := range got {
+		if strings.Contains(d.Message, "XWidget") {
+			seenWidget++
+		}
+		if strings.Contains(d.Message, "XGadget") {
+			seenGadget++
+		}
+	}
+	if seenWidget != 1 {
+		t.Errorf("expected exactly one diagnostic mentioning XWidget, got %d: %+v", seenWidget, got)
+	}
+	if seenGadget != 1 {
+		t.Errorf("expected exactly one diagnostic mentioning XGadget, got %d: %+v", seenGadget, got)
+	}
+}
+
 func TestR7_LabelTracking(t *testing.T) {
 	world := types.NewWorld()
 	world.ArgoApps = append(world.ArgoApps, types.ArgoApplication{

@@ -17,12 +17,12 @@ import (
 type Format string
 
 const (
-	FormatHuman      Format = "human"
-	FormatAgent      Format = "agent"
-	FormatJSON       Format = "json"
-	FormatLSP        Format = "lsp"
-	FormatJUnit      Format = "junit"
-	FormatSARIF      Format = "sarif"
+	FormatHuman Format = "human"
+	FormatAgent Format = "agent"
+	FormatJSON  Format = "json"
+	FormatLSP   Format = "lsp"
+	FormatJUnit Format = "junit"
+	FormatSARIF Format = "sarif"
 )
 
 // Report writes diagnostics to the given writer in the specified format.
@@ -363,16 +363,16 @@ type sarifDriver struct {
 }
 
 type sarifRule struct {
-	ID               string           `json:"id"`
-	ShortDescription sarifMessage     `json:"shortDescription"`
-	HelpURI          string           `json:"helpUri"`
+	ID               string       `json:"id"`
+	ShortDescription sarifMessage `json:"shortDescription"`
+	HelpURI          string       `json:"helpUri"`
 }
 
 type sarifResult struct {
-	RuleID    string            `json:"ruleId"`
-	Level     string            `json:"level"`
-	Message   sarifMessage      `json:"message"`
-	Locations []sarifLocation   `json:"locations"`
+	RuleID    string          `json:"ruleId"`
+	Level     string          `json:"level"`
+	Message   sarifMessage    `json:"message"`
+	Locations []sarifLocation `json:"locations"`
 }
 
 type sarifMessage struct {

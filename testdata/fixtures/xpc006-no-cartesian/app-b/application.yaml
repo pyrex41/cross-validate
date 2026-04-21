@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: xpc006-app-b
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: app-b
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: team-b

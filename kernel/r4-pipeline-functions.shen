@@ -6,7 +6,7 @@
 \* Check a single Composition's pipeline against installed functions *\
 (define check-r4-composition
   {(list A) --> (list (list A)) --> (list judgment)}
-  [composition-fact Name CTR Pipeline-mode Pipeline Src] Functions ->
+  [composition-fact Name CTR Pipeline-mode Pipeline Src _] Functions ->
     (if (= Pipeline-mode "Pipeline")
         (flatten (map (/. Step (check-r4-step Name Src Step Functions)) Pipeline))
         [])
@@ -44,7 +44,7 @@
 \* R4b: check input version compatibility *\
 (define check-r4b-input-version
   {string --> string --> string --> string --> source-loc --> (list A) --> (list judgment)}
-  CompName StepName FnRef InputAV CompSrc [function-fact _ _ InputVersions FnSrc] ->
+  CompName StepName FnRef InputAV CompSrc [function-fact _ _ InputVersions FnSrc _] ->
     (if (= InputVersions [])
         [] \* unknown function input versions, skip *\
         (if (member InputAV InputVersions)

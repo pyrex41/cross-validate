@@ -519,6 +519,7 @@ func xrdToObj(xrd types.CRDInfo) kl.Obj {
 		str(xrd.Group), str(xrd.Kind), str(xrd.Scope), str(xrd.APIVersion),
 		makeList(vers),
 		sourceToObj(xrd.Source),
+		str(xrd.OwningApp),
 	})
 }
 
@@ -544,6 +545,7 @@ func compositionToObj(comp types.CompositionInfo) kl.Obj {
 		str(comp.Mode),
 		makeList(steps),
 		sourceToObj(comp.Source),
+		str(comp.OwningApp),
 	})
 }
 
@@ -557,6 +559,7 @@ func functionToObj(fn types.FunctionInfo) kl.Obj {
 		str(fn.Name), str(fn.Package),
 		makeList(vers),
 		sourceToObj(fn.Source),
+		str(fn.OwningApp),
 	})
 }
 
@@ -565,6 +568,7 @@ func providerToObj(p types.ProviderInfo) kl.Obj {
 		sym("provider-fact"),
 		str(p.Name), str(p.Package),
 		sourceToObj(p.Source),
+		str(p.OwningApp),
 	})
 }
 

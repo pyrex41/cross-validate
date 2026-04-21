@@ -79,6 +79,11 @@ type CRDInfo struct {
 	Source     SourceLocation `json:"source"`
 	IsXRD      bool           `json:"isXRD"`
 	APIVersion string         `json:"apiVersion,omitempty"` // for XRDs: apiextensions.crossplane.io/v1 or v2
+	// OwningApp is the name of the Argo Application that manages this CRD/XRD,
+	// determined by path-prefix match against an app's direct-manifest source.
+	// Empty means unowned (shared/global CRD not claimed by any modeled
+	// Application). Used by per-app rules to avoid cartesian blame across apps.
+	OwningApp string `json:"owningApp,omitempty"`
 }
 
 // StorageVersion returns the storage version name, or "" if none.
@@ -109,6 +114,8 @@ type CompositionInfo struct {
 	Pipeline         []PipelineStep     `json:"pipeline,omitempty"`
 	Resources        []ComposedResource `json:"resources,omitempty"`
 	Source           SourceLocation     `json:"source"`
+	// OwningApp — see CRDInfo.OwningApp.
+	OwningApp string `json:"owningApp,omitempty"`
 }
 
 // GVK is a GroupVersionKind tuple.
@@ -160,6 +167,8 @@ type FunctionInfo struct {
 	Package       string         `json:"package"`
 	InputVersions []string       `json:"inputVersions"`
 	Source        SourceLocation `json:"source"`
+	// OwningApp — see CRDInfo.OwningApp.
+	OwningApp string `json:"owningApp,omitempty"`
 }
 
 // ProviderInfo represents an installed Crossplane Provider.
@@ -168,6 +177,8 @@ type ProviderInfo struct {
 	Package     string            `json:"package"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Source      SourceLocation    `json:"source"`
+	// OwningApp — see CRDInfo.OwningApp.
+	OwningApp string `json:"owningApp,omitempty"`
 }
 
 // ConfigurationInfo represents an installed Crossplane Configuration.

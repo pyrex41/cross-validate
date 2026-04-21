@@ -6,7 +6,7 @@
 \* Check a single Composition's compositeTypeRef against all XRDs *\
 (define check-r3-composition
   {(list A) --> (list (list A)) --> (list judgment)}
-  [composition-fact Name [gvk Group Version Kind] Mode Pipeline Src] XRDs ->
+  [composition-fact Name [gvk Group Version Kind] Mode Pipeline Src _] XRDs ->
     (let Matching (filter (/. X (xrd-matches-gk? X Group Kind)) XRDs)
       (if (= Matching [])
           \* R3a: no XRD found *\
@@ -30,7 +30,7 @@
 \* R3b: check that the version used by the Composition is referenceable on the XRD *\
 (define check-r3b-version
   {string --> string --> string --> string --> source-loc --> (list A) --> (list judgment)}
-  CompName Group Version Kind CompSrc [xrd-fact _ _ _ _ Versions XrdSrc] ->
+  CompName Group Version Kind CompSrc [xrd-fact _ _ _ _ Versions XrdSrc _] ->
     (let RefVersions (filter (/. V (version-referenceable? V)) Versions)
          HasVersion (member-version? Version RefVersions)
       (if HasVersion

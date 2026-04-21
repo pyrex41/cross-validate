@@ -73,7 +73,7 @@
 
 (define check-r11-composition
   {(list A) --> (list judgment)}
-  [composition-fact CompName [gvk Group Version Kind] Mode Pipeline Src] ->
+  [composition-fact CompName [gvk Group Version Kind] Mode Pipeline Src _] ->
     (let APIVer (cn Group (cn "/" Version))
       (if (deprecated-api? APIVer)
           [(make-warning "XPC011"
@@ -168,7 +168,7 @@
 
 (define check-r11-provider
   {(list A) --> (list judgment)}
-  [provider-fact ProvName Package Src] ->
+  [provider-fact ProvName Package Src _] ->
     (check-r11-provider-entries ProvName Package Src (provider-deprecations))
   _ -> [])
 

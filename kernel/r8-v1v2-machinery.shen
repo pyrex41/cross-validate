@@ -21,7 +21,7 @@
 \* Check if a v2 XRD resource uses v1-style machinery *\
 (define check-r8-against-xrd
   {string --> string --> source-loc --> (list A) --> (list judgment)}
-  ResName ResKind ResSrc [xrd-fact _ _ _ APIVer _ XrdSrc] ->
+  ResName ResKind ResSrc [xrd-fact _ _ _ APIVer _ XrdSrc _] ->
     (if (is-v2-api-version? APIVer)
         \* The Go side will annotate resources with "xpc.dev/has-top-level-machinery"
            if they have top-level publishConnectionDetailsTo, writeConnectionSecretToRef,

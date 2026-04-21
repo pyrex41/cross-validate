@@ -231,7 +231,7 @@ func TestEnrichTrajectoryData_RBACRules(t *testing.T) {
 	w := types.NewWorld()
 	w.Resources = append(w.Resources, types.ResourceInfo{
 		APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole",
-		Name: "web-role",
+		Name:   "web-role",
 		Source: types.SourceLocation{File: "rbac.yaml", Line: 1},
 		Raw: map[string]interface{}{
 			"rules": []interface{}{
