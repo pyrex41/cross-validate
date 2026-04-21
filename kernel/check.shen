@@ -35,6 +35,7 @@
 (load "r18-helm-renders.shen")
 (load "r19-values-well-typed.shen")
 (load "r20-render-deterministic.shen")
+(load "r21-late-init-needs-ignore-diff.shen")
 
 \* ===== IR reading ===== *\
 
@@ -80,6 +81,8 @@
          ImmutableFields (extract-section immutable-fields Sections)
          SelectorMappings (extract-section selector-mappings Sections)
          SelectorUsages (extract-section selector-usages Sections)
+         LateInitMappings (extract-section late-init-mappings Sections)
+         LateInitUsages (extract-section late-init-usages Sections)
          IgnoreDiffEntries (extract-section ignore-diff-entries Sections)
          ResourceFieldFacts (extract-section resource-field-facts Sections)
          RenderResults (extract-section render-results Sections)
@@ -111,10 +114,11 @@
          R18 (mark-rule "XPC.H.helm-renders" (check-r18 RenderResults))
          R19 (mark-rule "XPC.H.values-well-typed" (check-r19 RenderResults))
          R20 (mark-rule "XPC.H.render-deterministic" (check-r20 DeterminismResults))
+         R21 (mark-rule "XPC.E.late-init-needs-ignore-diff" (check-r21 LateInitUsages IgnoreDiffEntries))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 R20))))))))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 R21)))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
