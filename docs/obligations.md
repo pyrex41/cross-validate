@@ -93,6 +93,7 @@ Prune without targets is a no-op.
 - `prune-target-exists` -- Prune has something to prune
 - `createnamespace-not-colliding` -- CreateNamespace doesn't conflict
 - `selector-needs-ignore-diff` -- selector field's resolved path suppressed by ignoreDifferences (**implemented** — R16 / `XPC.E.selector-needs-ignore-diff`, scalar-path first pass; array-indexed paths deferred to follow-up)
+- `late-init-needs-ignore-diff` -- provider late-init fields suppressed by ignoreDifferences, managementPolicies omitting LateInitialize, or `omitLateInitialize` (**implemented** — R21 / `XPC.E.late-init-needs-ignore-diff`, scalar-path first pass; registry seeded from fg-manifold MRs !1048, !893, !1502)
 
 **Absorbs**: (new -- no legacy rule)
 
