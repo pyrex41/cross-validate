@@ -111,6 +111,7 @@ Recomputed against the ~500-MR fg-manifold history in `thoughts/shared/research/
 - **Shen uppercase identifiers are variables** — emit lowercase-dashed symbols from Go as fact discriminators; never `true`/`false`.
 - **Shen `check-world` paren discipline** — each new `append` adds exactly one `)` to the trailing line. Off-by-one yields `Panic: &{22}` at kernel load. Smoke with `go run ./cmd/xpc check testdata/fixtures/basic` after every kernel edit.
 - **Shen string literals do not support `\"`** — use `cn` concatenation over pre-built quote-free segments.
+- **Shen `cn` is strictly 2-argument** — `(cn a b c)` does NOT concatenate three strings. It partially applies `cn` to `(a, b)`, yielding a string, then tries to apply *that string* to `c` and panics with `can't apply object`. Always nest pairwise: `(cn a (cn b c))`. R22's initial Opus attempt crashed on this exact pattern; see commit `fd0934f`.
 - **Prelude `string-contains?`** — arg order is `(Haystack Needle)`.
 - **Loader skips `templates/`** adjacent to `Chart.yaml` (`pkg/loader/loader.go`) — the carve-out pattern to remember for any renderer-owned raw-template subdir.
 - **Helm v4 enforces values.schema.json during `template`** — R18 and R19 both fire on a schema-violating chart. Integration test (`helm-values-mismatch` fixture) asserts this explicitly.
