@@ -46,8 +46,9 @@ func EnrichTrajectoryData(w *types.World) {
 }
 
 // extractLateInitUsages populates w.LateInitUsages by consulting
-// w.LateInitMappings against each resource's Raw map. Same array-path deferral
-// as extractSelectorUsages: entries containing "[]" are skipped on this pass.
+// w.LateInitMappings against each resource's Raw map. Array-indexed paths
+// (containing "[]" or "[*]") are expanded via WalkPath, so every matching
+// array element produces its own usage row.
 func extractLateInitUsages(w *types.World) {
 	type gk struct{ group, kind string }
 	index := make(map[gk][]types.LateInitMapping)
@@ -64,16 +65,18 @@ func extractLateInitUsages(w *types.World) {
 			continue
 		}
 		for _, m := range mappings {
-			if strings.Contains(m.FieldPath, "[]") {
-				continue
-			}
-			if walkScalarPath(res.Raw, m.FieldPath) {
+			for _, hit := range WalkPath(res.Raw, m.FieldPath) {
+				// For scalar paths, hit.Path is the same as m.FieldPath; for
+				// array-indexed paths it is the concrete rendered form (e.g.
+				// "spec.forProvider.launchTemplate[0].id"). Use the concrete
+				// form so each array element surfaces as its own usage row
+				// rather than collapsing into duplicates.
 				w.LateInitUsages = append(w.LateInitUsages, types.LateInitUsage{
 					ResourceGroup:     resGroup,
 					ResourceKind:      res.Kind,
 					ResourceName:      res.Name,
 					ResourceNamespace: res.Namespace,
-					FieldPath:         m.FieldPath,
+					FieldPath:         hit.Path,
 					Source:            res.Source,
 				})
 			}
@@ -92,34 +95,11 @@ func groupFromAPIVersion(apiVersion string) string {
 	return ""
 }
 
-// walkScalarPath walks a dotted path (no "[]" segments) in a raw map and
-// reports whether the field exists and is non-nil.
-// e.g. "spec.forProvider.vpcZoneIdentifierSelector" → true when present.
-func walkScalarPath(raw map[string]interface{}, path string) bool {
-	if raw == nil || path == "" {
-		return false
-	}
-	parts := strings.SplitN(path, ".", 2)
-	key := parts[0]
-	val, ok := raw[key]
-	if !ok || val == nil {
-		return false
-	}
-	if len(parts) == 1 {
-		return true
-	}
-	next, ok := val.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	return walkScalarPath(next, parts[1])
-}
-
 // extractSelectorUsages populates w.SelectorUsages by consulting
-// w.SelectorMappings against each resource's Raw map.
-// Array-indexed paths (containing "[]") are skipped with a TODO: the entries
-// are present in the registry for completeness but require element-wise
-// walking which is deferred to a follow-up pass.
+// w.SelectorMappings against each resource's Raw map. Both scalar and
+// array-indexed paths (templates containing "[]" or "[*]") are handled via
+// WalkPath — each array element that declares the selector surfaces its own
+// SelectorUsage, with the ResolvedPath specialized to the same concrete index.
 func extractSelectorUsages(w *types.World) {
 	// Build a lookup index: (group, kind) → []SelectorMapping for fast access.
 	type gk struct{ group, kind string }
@@ -137,25 +117,100 @@ func extractSelectorUsages(w *types.World) {
 			continue
 		}
 		for _, m := range mappings {
-			// Skip array-indexed paths on first pass; their resolution
-			// requires iterating slice elements which is not yet implemented.
-			// TODO: implement array-path walking (spec step 3 note).
-			if strings.Contains(m.SelectorPath, "[]") {
-				continue
-			}
-			if walkScalarPath(res.Raw, m.SelectorPath) {
+			// Walk the SelectorPath template. For scalar paths this produces
+			// 0 or 1 hit; for array-indexed templates one hit per element that
+			// declares the selector. We intentionally do not also gate on the
+			// ResolvedPath existing — the whole point of R16 is that the
+			// resolved path is typically absent pre-reconcile (Crossplane
+			// populates it later) and Argo then fights it.
+			hits := WalkPath(res.Raw, m.SelectorPath)
+			for _, hit := range hits {
+				// Specialize the ResolvedPath template with the same index
+				// signature as the SelectorPath hit, so a
+				// "launchTemplate[*].idSelector" hit at index 0 produces a
+				// usage whose ResolvedPath is "launchTemplate[0].id".
+				resolved := specializeIndices(m.ResolvedPath, hit.Path, m.SelectorPath)
 				w.SelectorUsages = append(w.SelectorUsages, types.SelectorUsage{
 					ResourceGroup:     resGroup,
 					ResourceKind:      res.Kind,
 					ResourceName:      res.Name,
 					ResourceNamespace: res.Namespace,
-					SelectorPath:      m.SelectorPath,
-					ResolvedPath:      m.ResolvedPath,
+					SelectorPath:      hit.Path,
+					ResolvedPath:      resolved,
 					Source:            res.Source,
 				})
 			}
 		}
 	}
+}
+
+// specializeIndices substitutes the wildcard bracket placeholders in
+// resolvedTemplate with the concrete "[N]" indices taken from concreteSelector.
+// selectorTemplate is used to identify which bracket positions are wildcards
+// (as opposed to explicit indices, which should be preserved verbatim).
+//
+// For paths with no wildcards, resolvedTemplate is returned unchanged.
+func specializeIndices(resolvedTemplate, concreteSelector, selectorTemplate string) string {
+	if !strings.Contains(resolvedTemplate, "[]") && !strings.Contains(resolvedTemplate, "[*]") {
+		return resolvedTemplate
+	}
+	// Extract the concrete index sequence from the rendered selector path —
+	// anything between "[" and "]" becomes the next replacement token.
+	indices := extractBracketContents(concreteSelector)
+	if len(indices) == 0 {
+		return resolvedTemplate
+	}
+	return substituteWildcards(resolvedTemplate, indices)
+}
+
+// extractBracketContents returns the content of every "[...]" pair in s,
+// in left-to-right order. For "xs[0].ys[1]" it returns ["0", "1"].
+func extractBracketContents(s string) []string {
+	var out []string
+	for {
+		i := strings.Index(s, "[")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(s[i:], "]")
+		if j < 0 {
+			return out
+		}
+		out = append(out, s[i+1:i+j])
+		s = s[i+j+1:]
+	}
+}
+
+// substituteWildcards walks template and replaces each wildcard bracket
+// ("[]" or "[*]") with "[<index>]" pulled in order from indices. Explicit
+// numeric brackets in the template are left untouched.
+func substituteWildcards(template string, indices []string) string {
+	var b strings.Builder
+	var cur int
+	for i := 0; i < len(template); {
+		if template[i] != '[' {
+			b.WriteByte(template[i])
+			i++
+			continue
+		}
+		end := strings.Index(template[i:], "]")
+		if end < 0 {
+			// Malformed — bail and emit the remainder verbatim.
+			b.WriteString(template[i:])
+			break
+		}
+		inside := template[i+1 : i+end]
+		if (inside == "" || inside == "*") && cur < len(indices) {
+			b.WriteByte('[')
+			b.WriteString(indices[cur])
+			b.WriteByte(']')
+			cur++
+		} else {
+			b.WriteString(template[i : i+end+1])
+		}
+		i += end + 1
+	}
+	return b.String()
 }
 
 // extractFromPodSpec walks a PodSpec-shaped map and emits MountRefs for each
