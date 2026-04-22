@@ -6,10 +6,11 @@ import "github.com/pyrex41/cross-validate-/pkg/types"
 // and the concrete sibling paths they resolve to via late-init. Expand by
 // appending to this slice — one entry per (Group, Kind, SelectorPath, ResolvedPath).
 //
-// Array-indexed paths use "[]" as a placeholder segment, e.g.
-// "spec.forProvider.launchTemplate[].idSelector". The enrichment loop skips
-// array-path entries during the first pass (they require element-wise walking)
-// but the entries are present for completeness and future enablement.
+// Array-indexed paths use "[]" as a wildcard placeholder segment, e.g.
+// "spec.forProvider.launchTemplate[].idSelector". These expand through
+// ir.WalkPath during extractSelectorUsages — each declared array element
+// produces its own SelectorUsage with the ResolvedPath specialized to the
+// matching concrete index.
 //
 // Citations are anchored to fg-manifold commit SHAs or "CRD-doc" reads;
 // the commit SHAs map to GitLab MRs noted in parentheses.

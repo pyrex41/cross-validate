@@ -401,6 +401,48 @@ func TestR16_SelectorDrift(t *testing.T) {
 	}
 }
 
+func TestR16_SelectorDrift_ArrayPath(t *testing.T) {
+	// Array-indexed registry entries (networkInterfaces[].subnetIdSelector,
+	// securityGroupSelector) should expand per array element. The fixture's
+	// LaunchTemplate has two networkInterfaces entries:
+	//   [0] has both subnetIdSelector and securityGroupSelector
+	//   [1] has only subnetIdSelector
+	//
+	// Registry maps subnetIdSelector → {subnetId, subnetIdRef} (2 resolved
+	// paths) and securityGroupSelector → {securityGroups, securityGroupRefs}
+	// (2 resolved paths). So expected diagnostics:
+	//   [0]: 2 (subnetId paths) + 2 (securityGroup paths) = 4
+	//   [1]: 2 (subnetId paths) = 2
+	//   total: 6
+	//
+	// The owning Application has no ignoreDifferences entries, so every
+	// usage surfaces a diagnostic.
+	world := loadFixture(t, "../../testdata/fixtures/selector-drift-array")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.E.selector-needs-ignore-diff")
+	if len(got) != 6 {
+		t.Fatalf("selector-drift-array: expected 6 XPC.E.selector-needs-ignore-diff diagnostics, got %d: %+v", len(got), got)
+	}
+
+	// Confirm the concrete array indices appear in the diagnostic messages —
+	// we want [0] AND [1] to both show up, proving the wildcard expanded.
+	sawIdx0 := false
+	sawIdx1 := false
+	for _, d := range got {
+		if strings.Contains(d.Message, "[0]") {
+			sawIdx0 = true
+		}
+		if strings.Contains(d.Message, "[1]") {
+			sawIdx1 = true
+		}
+	}
+	if !sawIdx0 || !sawIdx1 {
+		t.Errorf("expected diagnostics covering both [0] and [1]; sawIdx0=%v sawIdx1=%v: %+v",
+			sawIdx0, sawIdx1, got)
+	}
+}
+
 func TestR21_LateInitDrift(t *testing.T) {
 	// Positive case: LB resource declares spec.forProvider.idleTimeout and
 	// spec.forProvider.clientKeepAlive, both of which upjet late-inits from

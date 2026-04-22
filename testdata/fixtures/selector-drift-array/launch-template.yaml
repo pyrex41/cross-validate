@@ -1,0 +1,22 @@
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: LaunchTemplate
+metadata:
+  name: preview-lt
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    networkInterfaces:
+      - deviceIndex: 0
+        subnetIdSelector:
+          matchLabels:
+            env: preview
+            tier: public
+        securityGroupSelector:
+          matchLabels:
+            env: preview
+      - deviceIndex: 1
+        subnetIdSelector:
+          matchLabels:
+            env: preview
+            tier: private
