@@ -291,8 +291,11 @@ func instantiateTemplate(as types.ArgoApplicationSet, params map[string]string) 
 }
 
 // substituteSource applies substitution to the template-variable fields of
-// an ArgoSource. We intentionally don't substitute into Helm values / the
-// kustomize block — those are already concrete at template time.
+// an ArgoSource. AppSet templates legally carry `{{ .key }}` placeholders in
+// `source.helm.valueFiles` (e.g. `$values/{{provider}}/{{region}}/values.yaml`),
+// so we walk the Helm string fields too. ValuesObject is left untouched —
+// it's a nested map[string]interface{} and no current fg-manifold signal
+// calls for a recursive walk.
 func substituteSource(src types.ArgoSource, params map[string]string) (types.ArgoSource, bool) {
 	repo, ok := substituteTemplate(src.RepoURL, params)
 	if !ok {
@@ -314,7 +317,59 @@ func substituteSource(src types.ArgoSource, params map[string]string) (types.Arg
 	src.Path = path
 	src.TargetRevision = target
 	src.Chart = chart
+	if src.Helm != nil {
+		helm, ok5 := substituteHelm(src.Helm, params)
+		if !ok5 {
+			return src, false
+		}
+		src.Helm = helm
+	}
 	return src, true
+}
+
+// substituteHelm walks the string-valued Helm source fields through
+// substituteTemplate. Returns a fresh *ArgoHelmSource so the AppSet
+// template's Helm block is never mutated in place (callers expand the
+// same template once per generator parameter set).
+func substituteHelm(h *types.ArgoHelmSource, params map[string]string) (*types.ArgoHelmSource, bool) {
+	out := *h
+	values, ok := substituteTemplate(h.Values, params)
+	if !ok {
+		return h, false
+	}
+	release, ok2 := substituteTemplate(h.ReleaseName, params)
+	if !ok2 {
+		return h, false
+	}
+	out.Values = values
+	out.ReleaseName = release
+	if len(h.ValueFiles) > 0 {
+		files := make([]string, len(h.ValueFiles))
+		for i, vf := range h.ValueFiles {
+			s, ok := substituteTemplate(vf, params)
+			if !ok {
+				return h, false
+			}
+			files[i] = s
+		}
+		out.ValueFiles = files
+	}
+	if len(h.Parameters) > 0 {
+		params2 := make([]types.ArgoHelmParam, len(h.Parameters))
+		for i, p := range h.Parameters {
+			name, ok := substituteTemplate(p.Name, params)
+			if !ok {
+				return h, false
+			}
+			val, ok2 := substituteTemplate(p.Value, params)
+			if !ok2 {
+				return h, false
+			}
+			params2[i] = types.ArgoHelmParam{Name: name, Value: val}
+		}
+		out.Parameters = params2
+	}
+	return &out, true
 }
 
 // unsupportedGeneratorDiag is the single shape of the info-level diagnostic
