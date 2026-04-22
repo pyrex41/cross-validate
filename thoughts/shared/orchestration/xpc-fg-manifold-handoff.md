@@ -75,11 +75,11 @@ Recomputed against the ~500-MR fg-manifold history in `thoughts/shared/research/
 | AppProject whitelist misses | ~2% | ✅ R15 (S5 AppSet expansion extends surface to preview fleet) |
 | Wave / Composition / Function ref | <3% combined | ✅ R6 / R6c / R3 / R4 |
 | Provider-package bugs | ~5% | ◐ partial (R11 deprecation-calendar subset + R2 webhook-conversion subset) |
-| Late-init field drift | ~15% | ❌ deferred (reuses S2 registry shape) |
-| SSA × managementPolicies | ~2–3% | ❌ deferred (Category E, unbuilt) |
+| Late-init field drift | ~15% | ✅ R21 (post-S5); array-path lift 2026-04-22 activates the 13 previously-inert registry rows on top of the scalar ones |
+| SSA × managementPolicies | ~2–3% | ◐ attempted 2026-04-22 — Go side ready on `claude/t2-ssa-mp-rule` @ `f00c7c6`, kernel rule broken, not merged |
 | External-name normalization | ~1% | ❌ deferred (Category I, unbuilt) |
 
-**Primary coverage: ~62% of historical MR volume** (target was ≥50%). Rendering (S4/S5) is a force multiplier — without it, R15/R16/R17 would see only direct-manifest Applications, missing most of fg-manifold's claim-driven workloads. R20 is preventative, not tied to a historical bucket.
+**Primary coverage: ~62% of historical MR volume** at plan close (target was ≥50%). Post-plan additions take it to ~77% (R21 late-init, +15%). The 2026-04-22 array-path lift doesn't add a new bucket but multiplies R16+R21 signal fidelity on the activated rows. SSA×managementPolicies (~2–3%) remains not-yet-merged (see followup #7). Rendering (S4/S5) is a force multiplier — without it, R15/R16/R17 would see only direct-manifest Applications, missing most of fg-manifold's claim-driven workloads. R20 is preventative, not tied to a historical bucket.
 
 ### Reusable surfaces delivered by the plan
 
@@ -97,17 +97,13 @@ Recomputed against the ~500-MR fg-manifold history in `thoughts/shared/research/
 4. ~~**Render cache not populating**~~ — ✅ silent-failure fixed (`pkg/renderer/cache.go` now MkdirAlls eagerly, surfaces write errors, zeroes `DiskDir` on failure). Unit tests cover both success and read-only-parent paths. `~/.cache/xpc/renders/` now exists after first run. With #5 resolved, disk hits on the fg-manifold workload are now observable on a warm replay with `--helm-cache-dir` set.
 5. ~~**Remote Helm chart "Path required"**~~ — ✅ fixed via `--helm-cache-dir=<dir>` + `HelmRenderer.PullRemote` (`helm pull --repo --version --destination tmp --untar`, then rename into `<cacheDir>/charts/<sha256(RepoURL/Chart/TargetRevision)>`). `ResolveChart` now returns `renderer.ErrRemoteChart` when `src.Path == ""`; the builder catches it and invokes `PullRemote`, or emits `helm-remote-unsupported` when the flag is absent. Unblocks warm-cache perf measurement on fg-manifold. Commit: `fa027fb`.
 6. ~~**xpc `--kernel-path` flag**~~ — ✅ `--kernel-path=<dir>` + `XPC_KERNEL_PATH` env var now supported. Replay-v2 ran from `/tmp` cwd to prove it works outside the xpc repo tree.
-7. **SSA × managementPolicies rule** — Category E, reclaims ~2–3%. Pattern: cross-check `serverSideApply` flag + `managementPolicies` value against resource kind.
-8. **S2's array-path selector-registry TODO** (18/53 rows inert, `pkg/ir/trajectory_extract.go:extractSelectorUsages:105`) — S3's array-path walker in `pkg/schemas/validate_manifest.go:168` partially addresses it; full fix lifts that walker into `extractSelectorUsages`. R21's `extractLateInitUsages` would benefit from the same lift.
+7. **SSA × managementPolicies rule** — Category E, reclaims ~2–3%. Pattern: cross-check `serverSideApply` flag + `managementPolicies` value against resource kind. Attempted in parallel wave 2026-04-22 on branch `claude/t2-ssa-mp-rule` @ `f00c7c6`; implementer hit `Prompt is too long` mid-debug of the kernel rule (`kernel/r22-ssa-managementpolicies-safety.shen`). Go side (types `SSAMPConflict`, `--ssa-mp-mode` flag, bridge section, `extractSSAMPConflicts`, three fixtures + three tests) is preserved on that branch; Shen rule emits malformed terms ("can't apply object" panic in `TestR22_SSAMPObserve`). Pick up by rewriting the emit path against `kernel/r21-late-init-needs-ignore-diff.shen` as the closest-working template.
+8. ~~**S2's array-path selector-registry TODO**~~ — ✅ shipped 2026-04-22 via `pkg/ir/path_walk.go` (`WalkPath` utility) wired into `extractSelectorUsages` + `extractLateInitUsages`. All 13 previously-inert registry rows now activate. New fixture `testdata/fixtures/selector-drift-array/` + `TestR16_SelectorDrift_ArrayPath` asserts 6 diagnostics across array elements. Commits: `2df298f` + `85bf746` + `ba7fdce`.
 9. **External-name normalization** — ~1% of MRs; requires a maintained provider-capability table.
 10. **R18/r18-helm-renders.shen rename** — file now covers both Helm and Kustomize; pure hygiene.
-11. ~~**Manual fg-manifold replay**~~ — ✅ executed post-S5 against 3 main tips. Results: `thoughts/shared/verify/replay-results.md`. Re-run after P0 fixes to validate signal-to-noise improvement.
-   ```bash
-   xpc check --appset-fixture=<2-pr-stub.yaml> ~/fg/fg-manifold/deploy/facilitygrid/ops/applicationsets/preview-environments.yaml
-   xpc check ~/fg/fg-manifold/   # full-repo; expect <2 min with cache warm
-   ```
-   Not attempted from this session.
-7. **CI integration doc** (base plan line 431) — publish a `gitlab-ci.yml` snippet for fg-manifold: `xpc check --format=sarif . > xpc.sarif` + GitLab SAST integration. Was the explicit "useful in CI" bar from the research doc; not blocking.
+11. ~~**Manual fg-manifold replay (v3)**~~ — ✅ re-executed 2026-04-22 against the same 3 main tips. Results: `thoughts/shared/verify/replay-results-v3.md`. XPC006 prediction held (1,980 → ~30, −98%); `XPC.H.helm-renders` stayed at 34 because `helm template` still fails on the pulled remote charts (pull works, template fails — new followup #12 below). Warm-cache chart-pull hit rate = 100% / 13 MB / 19 charts; render cache stays empty because template-step never completes.
+12. ~~**CI integration doc**~~ — ✅ shipped 2026-04-22 as `docs/ci-integration.md` + `docs/templates/gitlab-ci.yml` (GitLab SAST via `--format=sarif`). Commit: `80c1b2f`.
+13. **R18 template-failure triage** (new, from replay-v3) — remote-chart pull works but `helm template` on the pulled charts fails with the scrubbed message `"<release>: helm template failed"`. Probable causes: missing subchart dependencies (`helm dependency update` not run), unresolved values, or pre-apply CRDs. First move is an xpc-side observability fix: capture and surface the real helm stderr instead of collapsing it into the generic error. See `replay-results-v3.md` §#4b for the full diagnosis.
 
 ### Gotcha ledger (still load-bearing for any future rule additions)
 
