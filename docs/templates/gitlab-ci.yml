@@ -1,0 +1,64 @@
+# GitLab CI template for running `xpc check` and publishing findings as a
+# SAST report artifact. GitLab will parse the SARIF file and surface
+# findings as MR annotations and on the Security tab.
+#
+# Include this from your project's .gitlab-ci.yml with:
+#
+#   include:
+#     - local: docs/templates/gitlab-ci.yml
+#
+# Or copy the `xpc` job below into your pipeline verbatim.
+
+stages:
+  - test
+
+xpc:
+  stage: test
+  # Go image has `go install` available; swap for a smaller base if you vendor
+  # an xpc binary instead of building it on the fly.
+  image: golang:1.22
+  # GitLab SAST convention: surface findings without blocking merge while the
+  # team builds trust in the ruleset. Flip to `false` for a hard gate once
+  # your backlog is triaged. See docs/ci-integration.md for the trade-off.
+  allow_failure: true
+  variables:
+    # Cache remote Helm chart pulls + renders between pipeline runs.
+    XPC_CACHE_DIR: "$CI_PROJECT_DIR/.xpc-cache"
+  cache:
+    key: xpc-cache
+    paths:
+      - .xpc-cache/
+  before_script:
+    # Install helm (required for Applications with Helm sources; xpc renders
+    # them to inspect the actual manifests Argo CD will apply).
+    - apt-get update && apt-get install -y curl
+    - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    # Install kustomize (optional; only needed for kustomize-sourced Apps).
+    - curl -fsSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+    - mv kustomize /usr/local/bin/
+    # Option A: install xpc from source (simple, requires module access).
+    - go install github.com/pyrex41/cross-validate-/cmd/xpc@latest
+    # Option B: vendor a prebuilt xpc binary in your repo at ./tools/xpc
+    # and use it directly — delete the `go install` line above and add:
+    #   - cp tools/xpc /usr/local/bin/xpc
+    #   - chmod +x /usr/local/bin/xpc
+  script:
+    # Run xpc against the repo root; emit SARIF for GitLab to ingest.
+    # The trailing `|| true` is NOT needed because `allow_failure: true`
+    # already prevents a non-zero exit from failing the pipeline. Remove
+    # `allow_failure` and add `|| true` here only if you want soft-fail
+    # semantics on a job-by-job basis.
+    - xpc check --format=sarif --helm-cache-dir=$XPC_CACHE_DIR . > xpc.sarif
+  artifacts:
+    when: always
+    reports:
+      # GitLab auto-parses the SARIF file and surfaces findings as MR
+      # annotations and on the Security tab.
+      sast: xpc.sarif
+    paths:
+      - xpc.sarif
+    expire_in: 30 days
+  rules:
+    # Run on merge requests and on the default branch.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
