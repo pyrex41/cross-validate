@@ -1,7 +1,8 @@
 ---
 date: 2026-04-22
-mainline: claude/build-xpc-type-checker-TfgsT @ 1373987
+mainline: claude/build-xpc-type-checker-TfgsT @ fd0934f
 preceding handoff: thoughts/shared/orchestration/xpc-fg-manifold-handoff.md
+status: BOTH PICKUP TRACKS CLOSED (see **Resolution** section at end)
 ---
 
 # Post-parallel-wave handoff
@@ -94,3 +95,13 @@ ba7fdce checker: add R16 array-path fixture + test for selector wildcard drift
 - Do not dispatch R22 on Opus — the prior agent overflowed. Use Sonnet or Haiku; the remaining surface is small.
 - Do not use `Agent(isolation: "worktree")` — wrong default base. The `.claude/worktrees/t2-ssa-mp-rule` worktree is already pre-made off the correct branch; agents should `cd` into it as their first step.
 - Do not revert any of the Go-side T2 work without reading the test panic first — the Go side is almost certainly fine; the crash is in the Shen kernel.
+
+---
+
+## Resolution (2026-04-22, both tracks closed)
+
+**Track A — R22** landed on mainline via a Sonnet pickup. Root cause of the `can't apply object` panic: Shen's `cn` (string concatenation) is strictly 2-argument. The original rule called `(cn a b c)`, which partially applies `cn` to `(a, b)` returning a string, then tries to invoke *that string* as a function on `c` — hence the panic. Fix: rewrote all multi-string concatenations as nested pairwise chains, replaced `map`+`flatten` with a tail-recursive accumulator, replaced nested `and`/`or` with sequential `if` chains, and switched symbol-pattern mode gating to `(= Mode sym)` equality. Three R22 tests pass. Landed on mainline via cherry-pick of `claude/t2-ssa-mp-rule` @ `1817784` (branch had an older merge-base than mainline, so a fast-forward was not possible; cherry-pick split into `a15af7b` Go-side and `fd0934f` kernel-side). Worktree and branch cleaned up.
+
+**Track B — #13 helm stderr surfacing** landed as commits `6e54d1c` (renderer: new `subprocessErrTail` helper, wired into `helm.go` + `kustomize.go`, with regression tests at both renderer and end-to-end kernel-bridge layers) and `582f70e` (docs). Re-running `xpc check` on fg-manifold HEAD confirms the diagnostic Detail field now carries the real helm stderr — 0 empty tails across 35 helm-renders diagnostics. The new visibility splits the 35 into two distinct root causes, both opened as new followups on the preceding handoff's ledger: **#14** (22/35 — unresolved `{{provider}}/{{region}}/{{cluster}}` template vars in AppSet-expanded `$values` refs — real xpc AppSet-expansion gap) and **#15** (13/35 — missing local `lib/charts/crossplane-*` paths — fg-manifold repo-state artifact or xpc path-resolution bug). Details: `replay-results-v3.md` §#4b update.
+
+**Mainline tip**: `fd0934f`. `go test ./... -count=1` green across all 9 packages.
