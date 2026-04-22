@@ -51,6 +51,13 @@ type Builder struct {
 	// AppSet expansion (e.g. unsupported generator kinds). The caller
 	// merges these into the final diagnostic stream.
 	ExpansionDiags []types.Diagnostic
+
+	// SSAMPMode governs which R22 sub-codes fire. Valid values:
+	//   "observe"  — only XPC.E.ssa-managementpolicies-observe (default)
+	//   "partial"  — observe + XPC.E.ssa-managementpolicies-partial
+	//   "any"      — all three sub-codes including -nondefault
+	// Empty string is treated as "observe" by the kernel.
+	SSAMPMode string
 }
 
 // NewBuilder creates a new IR builder.
@@ -62,6 +69,9 @@ func NewBuilder() *Builder {
 
 // Build processes all loaded documents and returns the World.
 func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
+	// Propagate R22 mode from CLI through to the World so the bridge can
+	// emit a single-symbol ssa-mp-mode section for the Shen kernel.
+	b.world.SSAMPMode = b.SSAMPMode
 	for _, doc := range docs {
 		category := loader.ClassifyDocument(doc)
 		var err error

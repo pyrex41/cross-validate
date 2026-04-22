@@ -402,6 +402,8 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
 		sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj),
 		sortedSection("determinism-results", w.DeterminismResults, determinismResultCmp, determinismResultToObj),
+		sortedSection("ssa-mp-conflicts", w.SSAMPConflicts, ssaMPConflictCmp, ssaMPConflictToObj),
+		ssaMPModeSection(w.SSAMPMode),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -899,6 +901,66 @@ func determinismResultToObj(d types.DeterminismResult) kl.Obj {
 		sym(statusSym),
 		str(d.DiffSummary),
 		sourceToObj(d.Source),
+	})
+}
+
+// ssaMPConflictCmp orders SSAMPConflicts deterministically so the Shen
+// `ssa-mp-conflicts` section is stable across runs.
+func ssaMPConflictCmp(a, b types.SSAMPConflict) int {
+	if c := cmp.Compare(a.AppName, b.AppName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.ResourceKind, b.ResourceKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.ResourceNamespace, b.ResourceNamespace); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ResourceName, b.ResourceName)
+}
+
+// ssaMPConflictToObj serializes one SSAMPConflict as the s-expression Shen
+// rule R22 expects to pattern-match. The boolean ServerSideApply is
+// projected to `ssa-yes` / `ssa-no` symbols (never Shen booleans) so the
+// pattern match is a plain symbol compare — uppercase identifiers are Shen
+// variables, so every discriminator stays lowercase-dashed.
+func ssaMPConflictToObj(c types.SSAMPConflict) kl.Obj {
+	ssaSym := "ssa-no"
+	if c.ServerSideApply {
+		ssaSym = "ssa-yes"
+	}
+	policyObjs := make([]kl.Obj, 0, len(c.ManagementPolicies))
+	for _, p := range c.ManagementPolicies {
+		policyObjs = append(policyObjs, str(p))
+	}
+	return makeList([]kl.Obj{
+		sym("ssa-mp-conflict-fact"),
+		str(c.AppName),
+		sym(ssaSym),
+		makeList(policyObjs),
+		str(c.ResourceGroup),
+		str(c.ResourceKind),
+		str(c.ResourceName),
+		str(c.ResourceNamespace),
+		sourceToObj(c.Source),
+	})
+}
+
+// ssaMPModeSection emits the R22 mode as a single-symbol section the Shen
+// kernel can extract with `extract-section`. Empty or unknown modes fall
+// back to `observe` — the narrowest setting — so a bridge bug never
+// silently upgrades diagnostic coverage. The symbol is always
+// lowercase-dashed (observe/partial/any) so it doesn't collide with Shen's
+// uppercase-variable convention.
+func ssaMPModeSection(mode string) kl.Obj {
+	normalized := "observe"
+	switch mode {
+	case "observe", "partial", "any":
+		normalized = mode
+	}
+	return makeList([]kl.Obj{
+		sym("ssa-mp-mode"),
+		sym(normalized),
 	})
 }
 

@@ -43,6 +43,7 @@ func EnrichTrajectoryData(w *types.World) {
 	extractSelectorUsages(w)
 	w.LateInitMappings = LateInitRegistry()
 	extractLateInitUsages(w)
+	extractSSAMPConflicts(w)
 }
 
 // extractLateInitUsages populates w.LateInitUsages by consulting
@@ -427,4 +428,87 @@ func extractRBACRules(w *types.World, res types.ResourceInfo) {
 		}
 		w.RBACRules = append(w.RBACRules, rule)
 	}
+}
+
+// extractSSAMPConflicts walks every resource whose owning Argo Application
+// sets syncPolicy.syncOptions.ServerSideApply and records one SSAMPConflict
+// per (resource, managementPolicies) pair. Every SSA+managementPolicies
+// combination is emitted unconditionally — the Shen rule R22 inspects the
+// World.SSAMPMode fact to decide which sub-code fires for each row.
+//
+// Resources whose OwningApp is empty (unclaimed by any Application) are
+// skipped: without a join key to SSA we cannot make a safe statement.
+// Resources whose owning Application has SSA=false are also skipped —
+// there is no SSA/managementPolicies interaction to report.
+//
+// Kept as a purely additive tail of this file to avoid merge conflict with
+// parallel array-path walker work.
+func extractSSAMPConflicts(w *types.World) {
+	if w == nil || len(w.Resources) == 0 || len(w.ArgoApps) == 0 {
+		return
+	}
+
+	// Build a one-shot lookup from Application name to ServerSideApply.
+	ssaByApp := make(map[string]bool, len(w.ArgoApps))
+	for _, app := range w.ArgoApps {
+		ssaByApp[app.Name] = app.SyncPolicy.SyncOptions.ServerSideApply
+	}
+
+	for _, res := range w.Resources {
+		if res.OwningApp == "" {
+			continue
+		}
+		ssa, known := ssaByApp[res.OwningApp]
+		if !known || !ssa {
+			// Only flag rows whose owning app opts into SSA. Resources
+			// owned by non-SSA apps have no interaction to report.
+			continue
+		}
+		policies := readManagementPolicies(res.Raw)
+		if policies == nil {
+			// No managementPolicies declared — the default is "all
+			// policies active", which by construction cannot conflict
+			// with SSA in ways R22 catches. Skip.
+			continue
+		}
+		w.SSAMPConflicts = append(w.SSAMPConflicts, types.SSAMPConflict{
+			AppName:            res.OwningApp,
+			ServerSideApply:    true,
+			ManagementPolicies: policies,
+			ResourceGroup:      groupFromAPIVersion(res.APIVersion),
+			ResourceKind:       res.Kind,
+			ResourceName:       res.Name,
+			ResourceNamespace:  res.Namespace,
+			Source:             res.Source,
+		})
+	}
+}
+
+// readManagementPolicies returns spec.managementPolicies as a []string if
+// present and list-shaped, or nil if absent / malformed. A non-nil empty
+// slice means the resource declared an explicit empty list — R22 treats
+// this as "Observe"-equivalent (Crossplane does nothing).
+func readManagementPolicies(raw map[string]interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	spec, ok := raw["spec"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	mp, ok := spec["managementPolicies"]
+	if !ok {
+		return nil
+	}
+	items, ok := mp.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if s, ok := it.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }

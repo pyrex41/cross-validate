@@ -1,0 +1,15 @@
+apiVersion: elbv2.aws.upbound.io/v1beta1
+kind: LB
+metadata:
+  name: fg-full-default
+  namespace: crossplane-system
+spec:
+  managementPolicies:
+  - Observe
+  - Create
+  - Update
+  - Delete
+  - LateInitialize
+  forProvider:
+    region: us-east-2
+    loadBalancerType: application

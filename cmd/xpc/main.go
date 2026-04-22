@@ -84,6 +84,8 @@ Check flags:
                              (shape: {appset-name: [{key: value, ...}]})
   --kernel-path=<dir>  Explicit path to the Shen kernel directory (overrides
                        upward cwd search; also XPC_KERNEL_PATH env var)
+  --ssa-mp-mode=<mode> R22 (ServerSideApply × managementPolicies) strictness:
+                       observe (default, narrow), partial, any (broadest)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -127,6 +129,7 @@ func runCheck(args []string) int {
 	helmCacheDir := ""
 	skipAppSetExpand := false
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
+	ssaMPMode := "observe"
 	var paths []string
 
 	for _, arg := range args {
@@ -153,6 +156,15 @@ func runCheck(args []string) int {
 			helmCacheDir = strings.TrimPrefix(arg, "--helm-cache-dir=")
 		case strings.HasPrefix(arg, "--kernel-path="):
 			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
+		case strings.HasPrefix(arg, "--ssa-mp-mode="):
+			val := strings.TrimPrefix(arg, "--ssa-mp-mode=")
+			switch val {
+			case "observe", "partial", "any":
+				ssaMPMode = val
+			default:
+				fmt.Fprintf(os.Stderr, "invalid --ssa-mp-mode=%s (must be one of: observe, partial, any)\n", val)
+				return 1
+			}
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -202,6 +214,7 @@ func runCheck(args []string) int {
 	builder.HelmCacheDir = helmCacheDir
 	builder.KustomizeBin = kustomizeBin
 	builder.SkipAppSetExpand = skipAppSetExpand
+	builder.SSAMPMode = ssaMPMode
 	if appsetFixturePath != "" {
 		fixtures, fxErr := loadAppSetFixtures(appsetFixturePath)
 		if fxErr != nil {

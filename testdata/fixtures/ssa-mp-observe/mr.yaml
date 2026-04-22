@@ -1,0 +1,11 @@
+apiVersion: elbv2.aws.upbound.io/v1beta1
+kind: LB
+metadata:
+  name: fg-observe-only
+  namespace: crossplane-system
+spec:
+  managementPolicies:
+  - Observe
+  forProvider:
+    region: us-east-2
+    loadBalancerType: application

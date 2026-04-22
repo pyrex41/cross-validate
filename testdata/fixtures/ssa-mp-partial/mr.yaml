@@ -1,0 +1,14 @@
+apiVersion: elbv2.aws.upbound.io/v1beta1
+kind: LB
+metadata:
+  name: fg-partial-writes
+  namespace: crossplane-system
+spec:
+  managementPolicies:
+  - Observe
+  - Create
+  - LateInitialize
+  - Delete
+  forProvider:
+    region: us-east-2
+    loadBalancerType: application

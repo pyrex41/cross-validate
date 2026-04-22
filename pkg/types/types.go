@@ -782,6 +782,41 @@ type LateInitUsage struct {
 	Source            SourceLocation `json:"source"`
 }
 
+// SSAMPConflict records a potential interaction between Argo CD's
+// ServerSideApply sync option and a managed resource's managementPolicies
+// declaration. R22 (XPC.E.ssa-managementpolicies-*) joins these per
+// OwningApp + World.SSAMPMode to decide which of the three sub-codes
+// (-observe, -partial, -nondefault) fires.
+//
+// The Go layer emits one SSAMPConflict per (SSA+managementPolicies) pair
+// unconditionally — the Shen rule decides the emission path based on the
+// mode fact. That keeps this struct a pure data carrier.
+type SSAMPConflict struct {
+	// AppName is the owning Argo CD Application for ResourceKind / ResourceName.
+	// Populated from ResourceInfo.OwningApp. Empty when the resource is
+	// unowned, in which case R22 skips the pairing.
+	AppName string `json:"appName"`
+	// ServerSideApply mirrors the owning Application's
+	// syncPolicy.syncOptions.ServerSideApply at extraction time.
+	ServerSideApply bool `json:"serverSideApply"`
+	// ManagementPolicies is the list under spec.managementPolicies on the
+	// resource. Empty slice means "unset" (Crossplane default = all
+	// policies active); a non-nil empty/explicit default slice preserves
+	// the author's intent so the kernel can distinguish "default" from
+	// "explicit narrow-down".
+	ManagementPolicies []string `json:"managementPolicies"`
+	// ResourceGroup/ResourceKind/ResourceName/ResourceNamespace identify
+	// the managed resource that carries the managementPolicies decl.
+	ResourceGroup     string `json:"resourceGroup"`
+	ResourceKind      string `json:"resourceKind"`
+	ResourceName      string `json:"resourceName"`
+	ResourceNamespace string `json:"resourceNamespace,omitempty"`
+	// Source points at the resource manifest — where the fix (narrowing
+	// managementPolicies, or removing ServerSideApply from the app) needs
+	// to be applied.
+	Source SourceLocation `json:"source"`
+}
+
 // IgnoreDiffEntry is a flattened view of one ignoreDifferences entry on one
 // Argo CD Application, expanded to one row per JSONPointer or JQPathExpression.
 // When both pointer lists are empty, a single row is emitted with empty strings
@@ -852,6 +887,21 @@ type World struct {
 	// renderable source. Populated by pkg/renderer/determinism.go and
 	// consumed by Shen rule R20 (XPC.H.render-deterministic).
 	DeterminismResults []DeterminismResult `json:"-"`
+
+	// SSAMPConflicts records every (SSA+managementPolicies) pair extracted
+	// from managed resources whose owning Application sets
+	// syncPolicy.syncOptions.ServerSideApply. Populated by
+	// extractSSAMPConflicts and consumed by Shen rule R22 (the
+	// XPC.E.ssa-managementpolicies-* family). One row per resource; the
+	// kernel picks the sub-code based on SSAMPMode + ManagementPolicies.
+	SSAMPConflicts []SSAMPConflict `json:"-"`
+
+	// SSAMPMode is the user-configurable gating mode for R22. One of
+	// "observe" (default), "partial", or "any" — progressively broader
+	// strictness. Plumbed from --ssa-mp-mode on the CLI through
+	// Builder.SSAMPMode; emitted as a single-symbol section on the Shen
+	// world so R22 can branch.
+	SSAMPMode string `json:"-"`
 }
 
 // DeterminismResult records whether rendering the same source twice in a row
