@@ -443,6 +443,96 @@ func TestR16_SelectorDrift_ArrayPath(t *testing.T) {
 	}
 }
 
+// loadFixtureWithSSAMPMode builds the World with SkipRender=true and a
+// specific R22 mode. Mirrors loadFixture for R22 tests that need to vary
+// --ssa-mp-mode to confirm the mode-gating works.
+func loadFixtureWithSSAMPMode(t *testing.T, path, mode string) *types.World {
+	t.Helper()
+	docs, err := loader.LoadDirectory(path)
+	if err != nil {
+		t.Fatalf("loading %s: %v", path, err)
+	}
+	builder := ir.NewBuilder()
+	builder.SkipRender = true
+	builder.SSAMPMode = mode
+	world, err := builder.Build(docs)
+	if err != nil {
+		t.Fatalf("building IR for %s: %v", path, err)
+	}
+	return world
+}
+
+func TestR22_SSAMPObserve(t *testing.T) {
+	// The -observe sub-code is unconditional — it fires under every mode
+	// because the Observe-only + SSA combination is the clearest bug.
+	for _, mode := range []string{"observe", "partial", "any"} {
+		t.Run(mode, func(t *testing.T) {
+			world := loadFixtureWithSSAMPMode(t, "../../testdata/fixtures/ssa-mp-observe", mode)
+			diags := checkFixture(t, world, Config{})
+			got := findDiagByCode(diags, "XPC.E.ssa-managementpolicies-observe")
+			if len(got) == 0 {
+				t.Fatalf("ssa-mp-observe[%s]: expected at least 1 XPC.E.ssa-managementpolicies-observe, got 0; all diags: %+v", mode, diags)
+			}
+			if got[0].Severity != types.SeverityError {
+				t.Errorf("expected error severity, got %s", got[0].Severity)
+			}
+		})
+	}
+}
+
+func TestR22_SSAMPPartial_DefaultSuppressed(t *testing.T) {
+	// The -partial sub-code ONLY fires at mode >= partial. At the default
+	// mode (observe), the partial fixture must produce zero -partial
+	// diagnostics — this is the core "default is narrow" guarantee.
+	world := loadFixtureWithSSAMPMode(t, "../../testdata/fixtures/ssa-mp-partial", "observe")
+	diags := checkFixture(t, world, Config{})
+	if got := findDiagByCode(diags, "XPC.E.ssa-managementpolicies-partial"); len(got) != 0 {
+		t.Fatalf("ssa-mp-partial[observe]: expected 0 -partial diagnostics, got %d: %+v", len(got), got)
+	}
+
+	// At mode=partial, the same fixture must fire -partial at least once.
+	world = loadFixtureWithSSAMPMode(t, "../../testdata/fixtures/ssa-mp-partial", "partial")
+	diags = checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, "XPC.E.ssa-managementpolicies-partial")
+	if len(got) == 0 {
+		t.Fatalf("ssa-mp-partial[partial]: expected at least 1 -partial diagnostic, got 0; all diags: %+v", diags)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+
+	// At mode=any, both -partial and -nondefault fire on the same row
+	// (managementPolicies != full default AND write-ops-without-Update).
+	world = loadFixtureWithSSAMPMode(t, "../../testdata/fixtures/ssa-mp-partial", "any")
+	diags = checkFixture(t, world, Config{})
+	if got := findDiagByCode(diags, "XPC.E.ssa-managementpolicies-partial"); len(got) == 0 {
+		t.Fatalf("ssa-mp-partial[any]: expected -partial to still fire, got 0")
+	}
+	if got := findDiagByCode(diags, "XPC.E.ssa-managementpolicies-nondefault"); len(got) == 0 {
+		t.Fatalf("ssa-mp-partial[any]: expected -nondefault to fire, got 0")
+	}
+}
+
+func TestR22_SSAMPSafe(t *testing.T) {
+	// The ok fixture has the full default managementPolicies even with
+	// SSA=true — no sub-code should fire under any mode.
+	for _, mode := range []string{"observe", "partial", "any"} {
+		t.Run(mode, func(t *testing.T) {
+			world := loadFixtureWithSSAMPMode(t, "../../testdata/fixtures/ssa-mp-ok", mode)
+			diags := checkFixture(t, world, Config{})
+			for _, code := range []string{
+				"XPC.E.ssa-managementpolicies-observe",
+				"XPC.E.ssa-managementpolicies-partial",
+				"XPC.E.ssa-managementpolicies-nondefault",
+			} {
+				if got := findDiagByCode(diags, code); len(got) != 0 {
+					t.Errorf("ssa-mp-ok[%s]: expected 0 %s diagnostics, got %d: %+v", mode, code, len(got), got)
+				}
+			}
+		})
+	}
+}
+
 func TestR21_LateInitDrift(t *testing.T) {
 	// Positive case: LB resource declares spec.forProvider.idleTimeout and
 	// spec.forProvider.clientKeepAlive, both of which upjet late-inits from
