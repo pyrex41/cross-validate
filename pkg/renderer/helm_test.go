@@ -87,6 +87,58 @@ data:
 	}
 }
 
+// TestRenderChart_PropagatesHelmStderr guards against the "scrubbed error"
+// regression surfaced by fg-manifold replay-v3: when `helm template` fails,
+// the real helm stderr must flow into the returned error (and thus into the
+// XPC.H.helm-renders diagnostic's Detail field). A broken template produces
+// a very specific helm message ("parse error", "unclosed action") — asserting
+// on that text locks in propagation end-to-end.
+func TestRenderChart_PropagatesHelmStderr(t *testing.T) {
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not on PATH; skipping")
+	}
+
+	chart := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		full := filepath.Join(chart, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Chart.yaml", "apiVersion: v2\nname: broken\nversion: 0.1.0\n")
+	write("values.yaml", "")
+	// Template with an unclosed action — helm will reject with a "parse
+	// error" on stderr.
+	write("templates/broken.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\ndata:\n  k: {{ .Values.replicas\n")
+
+	h := NewHelmRenderer(helmBin, "")
+	_, err = h.RenderChart(chart, &types.ArgoHelmSource{ReleaseName: "rel"}, "")
+	if err == nil {
+		t.Fatal("expected error rendering broken chart, got nil")
+	}
+	msg := err.Error()
+	// The two substrings below are what helm v3/v4 consistently emit for
+	// an unclosed Go-template action. If helm changes this wording, pick
+	// whatever identifiable text its stderr now produces — the invariant
+	// under test is "real helm stderr is in the error", not the exact phrase.
+	if !strings.Contains(msg, "parse error") {
+		t.Errorf("error should contain real helm stderr 'parse error', got: %s", msg)
+	}
+	if !strings.Contains(msg, "unclosed action") {
+		t.Errorf("error should contain real helm stderr 'unclosed action', got: %s", msg)
+	}
+	// Guard against the old scrubbed format ("helm template <path> failed: exit status 1:")
+	// with an empty tail — that's exactly the regression this test exists to prevent.
+	if strings.HasSuffix(strings.TrimSpace(msg), ":") {
+		t.Errorf("error tail is empty — stderr was dropped: %s", msg)
+	}
+}
+
 // TestResolveChartRemoteReturnsErrRemoteChart confirms ResolveChart returns
 // the ErrRemoteChart sentinel when src.Path is empty — the builder uses
 // this to decide whether to invoke PullRemote.

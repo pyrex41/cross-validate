@@ -129,7 +129,7 @@ func (k *KustomizeRenderer) RenderOverlay(overlayPath string, kustSrc *types.Arg
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("kustomize build %s failed: %v: %s", overlayPath, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("kustomize build %s failed: %v: %s", overlayPath, err, subprocessErrTail(&stdout, &stderr))
 	}
 
 	out := stdout.Bytes()

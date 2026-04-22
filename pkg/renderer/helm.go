@@ -190,7 +190,7 @@ func (h *HelmRenderer) RenderChart(chartPath string, helmSrc *types.ArgoHelmSour
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("helm template %s failed: %v: %s", chartPath, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("helm template %s failed: %v: %s", chartPath, err, subprocessErrTail(&stdout, &stderr))
 	}
 
 	out := stdout.Bytes()
@@ -277,6 +277,27 @@ func (h *HelmRenderer) PullRemote(src types.ArgoSource) (string, error) {
 
 // IsHelmAbsent reports whether err is an ErrHelmAbsent wrapper.
 func IsHelmAbsent(err error) bool { return errors.Is(err, ErrHelmAbsent) }
+
+// subprocessErrTail picks the most informative tail from a failed subprocess
+// run. Prefer stderr (where helm and kustomize write template errors); fall
+// back to stdout (some broken wrappers mis-route errors), and cap at 4 KiB
+// so a malformed chart can't blow up a diagnostic. Shared by helm.go and
+// kustomize.go — the propagation path into XPC.H.{helm,kustomize}-renders'
+// Detail field is regression-tested in helm_test.go.
+func subprocessErrTail(stdout, stderr *bytes.Buffer) string {
+	pick := strings.TrimSpace(stderr.String())
+	if pick == "" {
+		pick = strings.TrimSpace(stdout.String())
+	}
+	if pick == "" {
+		return "(no output)"
+	}
+	const maxTail = 4096
+	if len(pick) > maxTail {
+		pick = "..." + pick[len(pick)-maxTail:]
+	}
+	return pick
+}
 
 // mergeValuesBytes produces the canonical bytes the cache hashes and helm
 // sees as the effective values. It unions (in order of precedence) the

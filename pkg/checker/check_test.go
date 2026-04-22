@@ -599,6 +599,15 @@ func TestR18_HelmRenders(t *testing.T) {
 		if got[0].Severity != types.SeverityError {
 			t.Errorf("helm-render-fail: expected error severity, got %s", got[0].Severity)
 		}
+		// End-to-end propagation check: the real helm stderr ("parse
+		// error"/"unclosed action" from the fixture's broken template)
+		// must reach the diagnostic's Detail field so users can diagnose
+		// the chart without re-running helm manually. Partner assertion
+		// to TestRenderChart_PropagatesHelmStderr — that one covers the
+		// renderer layer; this covers the kernel-bridge-reporter chain.
+		if !containsStr(got[0].Detail, "parse error") {
+			t.Errorf("helm-render-fail: expected 'parse error' in diagnostic Detail, got: %s", got[0].Detail)
+		}
 
 		// A failed render must not contribute rendered resources to the
 		// World — we don't want downstream rules reasoning about partially
