@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: helm-values-ref
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://example.com/repo.git
+      path: ./chart
+      helm:
+        releaseName: ref-ok
+        valueFiles:
+          - $values/deploy/values/override.yaml
+    - repoURL: https://example.com/repo.git
+      targetRevision: main
+      path: ./values-repo
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default

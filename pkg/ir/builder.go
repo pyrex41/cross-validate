@@ -779,20 +779,48 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 			continue
 		}
 
+		// Resolve Argo multi-source `$<ref>/...` valueFile prefixes to
+		// absolute filesystem paths so `helm template` doesn't read them
+		// as literal directory names. Must happen before schema validation
+		// (MergedValues would otherwise try to read `$values/...`).
+		helmSrc, refOutcomes := rewriteHelmValueFiles(src.Helm, app.Sources, cwd)
+		for i, o := range refOutcomes {
+			switch o {
+			case valueRefUnknownRef:
+				b.ExpansionDiags = append(b.ExpansionDiags, types.Diagnostic{
+					Code:     "XPC.H.values-ref-unknown",
+					Severity: types.SeverityInfo,
+					Source:   app.Source,
+					Message:  fmt.Sprintf("%s: valueFile %q names an unknown source ref", app.Name, src.Helm.ValueFiles[i]),
+					Detail:   "No sibling source on this Application has a matching `ref:` field.",
+					Fix:      "add the missing source, or fix the ref name in valueFiles.",
+				})
+			case valueRefRemote:
+				b.ExpansionDiags = append(b.ExpansionDiags, types.Diagnostic{
+					Code:     "XPC.H.values-ref-remote",
+					Severity: types.SeverityInfo,
+					Source:   app.Source,
+					Message:  fmt.Sprintf("%s: valueFile %q resolves to a remote repo not locally checked out", app.Name, src.Helm.ValueFiles[i]),
+					Detail:   "xpc's first cut only resolves $<ref>/... when the values repo is the same as the appfile's (walk-up to .git). Remote-repo values are not cloned.",
+					Fix:      "run xpc from inside a checkout of the values repo, or inline the values.",
+				})
+			}
+		}
+
 		// Values-schema validation comes FIRST so we report issues even
 		// if the render itself happens to fail (and symmetrically so we
 		// still flag schema violations on successful renders).
 		var valuesIssues []types.ValuesIssue
 		schemaPath := filepath.Join(chartPath, "values.schema.json")
 		if schemaBytes, err := readFileQuietly(schemaPath); err == nil && len(schemaBytes) > 0 {
-			merged, _ := renderer.MergedValues(chartPath, src.Helm)
+			merged, _ := renderer.MergedValues(chartPath, helmSrc)
 			issues, verr := renderer.ValidateValues(schemaBytes, merged)
 			if verr == nil {
 				valuesIssues = issues
 			}
 		}
 
-		rendered, renderErr := b.helmRenderer.RenderChart(chartPath, src.Helm, app.Destination.Namespace)
+		rendered, renderErr := b.helmRenderer.RenderChart(chartPath, helmSrc, app.Destination.Namespace)
 		result := types.RenderResult{
 			AppName:      app.Name,
 			ChartPath:    chartPath,
@@ -1053,6 +1081,7 @@ func (b *Builder) parseArgoSource(m map[string]interface{}) types.ArgoSource {
 	src.Path, _ = m["path"].(string)
 	src.TargetRevision, _ = m["targetRevision"].(string)
 	src.Chart, _ = m["chart"].(string)
+	src.Ref, _ = m["ref"].(string)
 
 	if helm := getMap(m, "helm"); helm != nil {
 		src.Renderer = types.RendererHelm

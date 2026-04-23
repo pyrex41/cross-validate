@@ -263,6 +263,9 @@ type ArgoSource struct {
 	TargetRevision string `json:"targetRevision,omitempty"`
 	// Chart is the Helm chart name (for Helm repo sources).
 	Chart string `json:"chart,omitempty"`
+	// Ref names this source for Argo multi-source "$<ref>/..." references
+	// from sibling sources' Helm valueFiles. Empty on single-source Apps.
+	Ref string `json:"ref,omitempty"`
 	// Renderer identifies which renderer config is active.
 	Renderer RendererKind `json:"renderer"`
 

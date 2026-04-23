@@ -739,6 +739,84 @@ func TestR18_HelmRenders(t *testing.T) {
 	})
 }
 
+// TestR18_HelmRenders_ValuesRefResolved covers the Argo multi-source
+// `$<ref>/...` valueFile case. Positive fixture: a sibling source with
+// `ref: values` resolves the prefix to a local values file that actually
+// exists, helm template succeeds, R18 stays silent. Negative fixture: the
+// referenced file is absent on disk, helm template fails, R18 fires and
+// the resolved absolute path (post-substitution) appears in the detail so
+// users can diagnose without re-running helm.
+func TestR18_HelmRenders_ValuesRefResolved(t *testing.T) {
+	helmBin, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm not on PATH; skipping R18 values-ref tests")
+	}
+
+	t.Run("helm-values-ref-resolved", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-values-ref", helmBin)
+		diags := checkFixture(t, world, Config{})
+
+		if got := findDiagByCode(diags, "XPC.H.helm-renders"); len(got) != 0 {
+			t.Fatalf("helm-values-ref: expected 0 R18 diagnostics after $values resolution, got %d: %+v", len(got), got)
+		}
+		// Confirm the override actually reached helm: the base values set
+		// replicas=1, the override sets replicas=3. If our resolver
+		// silently dropped the valueFile, helm would have rendered with
+		// the base value.
+		var deployment *types.ResourceInfo
+		for i := range world.Resources {
+			r := &world.Resources[i]
+			if r.Kind == "Deployment" && r.Provenance == "rendered:helm:helm-values-ref" {
+				deployment = r
+				break
+			}
+		}
+		if deployment == nil {
+			t.Fatal("expected rendered Deployment from helm-values-ref, got none")
+		}
+		// Replicas comes through as an int after YAML round-trip.
+		spec, _ := deployment.Raw["spec"].(map[string]interface{})
+		if spec == nil {
+			t.Fatalf("rendered Deployment has no spec: %+v", deployment.Raw)
+		}
+		replicas := spec["replicas"]
+		switch v := replicas.(type) {
+		case int:
+			if v != 3 {
+				t.Errorf("expected override replicas=3, got %d", v)
+			}
+		case float64:
+			if int(v) != 3 {
+				t.Errorf("expected override replicas=3, got %v", v)
+			}
+		default:
+			t.Errorf("unexpected replicas type %T: %v", replicas, replicas)
+		}
+	})
+
+	t.Run("helm-values-ref-missing", func(t *testing.T) {
+		world := loadFixtureWithHelm(t, "../../testdata/fixtures/helm-values-ref-missing", helmBin)
+		diags := checkFixture(t, world, Config{})
+
+		got := findDiagByCode(diags, "XPC.H.helm-renders")
+		if len(got) != 1 {
+			t.Fatalf("helm-values-ref-missing: expected exactly 1 R18 diagnostic, got %d: %+v", len(got), got)
+		}
+		if got[0].Severity != types.SeverityError {
+			t.Errorf("helm-values-ref-missing: expected error severity, got %s", got[0].Severity)
+		}
+		// Resolver must have rewritten $values/... into a concrete
+		// (absolute) path under values-repo/; that path must be what
+		// appears in helm's stderr (no lingering `$values` literal).
+		if containsStr(got[0].Detail, "$values") {
+			t.Errorf("helm-values-ref-missing: diagnostic detail still contains literal `$values`: %s", got[0].Detail)
+		}
+		if !containsStr(got[0].Detail, "values-repo/deploy/values/override.yaml") {
+			t.Errorf("helm-values-ref-missing: expected resolved path `values-repo/deploy/values/override.yaml` in detail, got: %s", got[0].Detail)
+		}
+	})
+}
+
 // TestSkipRender_EmitsInfoDiagnostic is covered by the CLI wrapper, but we
 // also assert the typed Builder path: with SkipRender=true, no resources
 // are rendered into the World and no RenderResults are recorded. The info
