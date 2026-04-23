@@ -239,6 +239,18 @@ type ArgoApplication struct {
 	// Hooks are sync-hook annotations found on managed resources.
 	// Populated during rendering or from manifest scan.
 	Hooks []ArgoHook `json:"hooks,omitempty"`
+
+	// Finalizers from metadata.finalizers. When this list contains
+	// `resources-finalizer.argocd.argoproj.io`, ArgoCD cascades DELETE through
+	// every resource the Application owns on Application removal. Combined
+	// with spec.syncPolicy.preserveResourcesOnDeletion != true, this is the
+	// fg-synapse INC-6 trigger at the Application level. Consumed by R26
+	// (plan-level cascade-risk rule).
+	Finalizers []string `json:"finalizers,omitempty"`
+
+	// Annotations from metadata.annotations. Consumed by R26's bypass check
+	// (xpc.io/allow-delete / policy.facilitygrid.io/allow-delete).
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // RendererKind identifies which renderer an Argo source uses.
@@ -355,6 +367,13 @@ type ArgoSyncPolicy struct {
 	SyncOptions ArgoSyncOptions `json:"syncOptions"`
 	// Retry configures sync retry behavior.
 	Retry *ArgoRetryPolicy `json:"retry,omitempty"`
+	// PreserveResourcesOnDeletion, when true on an Application's
+	// spec.syncPolicy, tells ArgoCD NOT to cascade-delete owned resources
+	// when the Application is removed. Pairs with the Finalizers field on
+	// ArgoApplication for R26's cascade-risk computation. Independent of
+	// the AppSet-level field of the same name (which lives on
+	// ArgoAppSetSyncPolicy and gates R24).
+	PreserveResourcesOnDeletion bool `json:"preserveResourcesOnDeletion,omitempty"`
 }
 
 // ArgoAutomatedSync describes automated sync settings.

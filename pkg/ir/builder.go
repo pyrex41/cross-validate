@@ -34,6 +34,11 @@ type Builder struct {
 	// KustomizeBin is the path to the kustomize binary. Empty means "look
 	// up kustomize on PATH when first needed".
 	KustomizeBin string
+	// CrossplaneBin is the path to the crossplane binary. Empty means "look
+	// up crossplane on PATH when first needed". Used by the composition
+	// render pass; absent binary is handled via the same warning-severity
+	// sentinel pattern as HelmBin.
+	CrossplaneBin string
 	// SkipAppSetExpand suppresses the ExpandAppSet pass that synthesizes
 	// ArgoApplications from ApplicationSet generators. Default is "expand";
 	// CLI surfaces --skip-appset-expand for opt-out.
@@ -663,14 +668,23 @@ func (b *Builder) addArgoApplication(doc loader.LoadedDocument) error {
 		Source:       doc.Source,
 	}
 
-	// Check for tracking mode annotation
+	// Check for tracking mode annotation + capture the full annotation map
+	// (R26 reads xpc.io/allow-delete + policy.facilitygrid.io/allow-delete
+	// from it on the base side of a plan delta).
 	if metadata != nil {
 		annotations := getMap(metadata, "annotations")
 		if annotations != nil {
-			if tm, ok := annotations["argocd.argoproj.io/tracking-method"].(string); ok {
+			app.Annotations = make(map[string]string, len(annotations))
+			for k, v := range annotations {
+				if vs, ok := v.(string); ok {
+					app.Annotations[k] = vs
+				}
+			}
+			if tm := app.Annotations["argocd.argoproj.io/tracking-method"]; tm != "" {
 				app.TrackingMode = tm
 			}
 		}
+		app.Finalizers = getStringSlice(metadata, "finalizers")
 	}
 
 	spec := getMap(doc.Raw, "spec")
@@ -1173,6 +1187,11 @@ func (b *Builder) parseArgoSyncPolicy(m map[string]interface{}) types.ArgoSyncPo
 		a.Prune, _ = auto["prune"].(bool)
 		a.SelfHeal, _ = auto["selfHeal"].(bool)
 		sp.Automated = a
+	}
+
+	// preserveResourcesOnDeletion gates R26's cascade-risk computation.
+	if v, ok := m["preserveResourcesOnDeletion"].(bool); ok {
+		sp.PreserveResourcesOnDeletion = v
 	}
 
 	// Parse syncOptions — Argo stores these as a list of "Key=Value" strings

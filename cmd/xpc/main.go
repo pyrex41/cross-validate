@@ -16,6 +16,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
+	"github.com/pyrex41/cross-validate-/pkg/plan"
 	"github.com/pyrex41/cross-validate-/pkg/report"
 	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
@@ -42,6 +43,8 @@ func main() {
 		os.Exit(runProof(os.Args[2:]))
 	case "bisect":
 		os.Exit(runBisect(os.Args[2:]))
+	case "plan":
+		os.Exit(runPlan(os.Args[2:]))
 	case "explain":
 		os.Exit(runExplain(os.Args[2:]))
 	case "version":
@@ -67,6 +70,7 @@ Usage:
   xpc verify <proof-file>          Verify a proof file
   xpc proof <subcommand>           Proof operations (show, diff)
   xpc bisect [flags]               Find the commit that broke a rule
+  xpc plan [flags] <path>          Diff two refs; report destructive changes
   xpc explain <code>               Show docs for an error code (e.g., XPC002)
   xpc version                      Print version
 
@@ -102,7 +106,17 @@ Bisect flags:
   --good=<ref>         Known-good git ref
   --bad=<ref>          Known-bad git ref (default: HEAD)
 
+Plan flags:
+  --base=<ref>         Base git ref (or directory for hermetic tests)
+  --head=<ref>         Head git ref (or directory; default: HEAD)
+  --format=<fmt>       Output format: json, markdown (default: markdown)
+  --kernel-path=<dir>  Explicit kernel directory (as in 'check')
+  (most 'check' flags pass through: --helm-bin, --helm-cache-dir, --skip-render,
+   --skip-appset-expand, --appset-fixture, --ssa-mp-mode)
+
 Examples:
+  xpc plan --base=main --head=HEAD ./deploy
+  xpc plan --base=main --head=HEAD --format=json ./deploy
   xpc check ./manifests
   xpc check --format=sarif ./manifests > results.sarif
   xpc check --proof --snapshot=prod.xpcsnap ./manifests
@@ -617,6 +631,151 @@ func runBisect(args []string) int {
 	return 0
 }
 
+func runPlan(args []string) int {
+	baseRef := ""
+	headRef := "HEAD"
+	format := plan.FormatMarkdown
+	skipRender := true // plan runs default to skip-render; callers opt in via --render
+	enableRender := false
+	helmBin := ""
+	helmCacheDir := ""
+	kustomizeBin := ""
+	crossplaneBin := ""
+	appsetFixturePath := ""
+	skipAppSetExpand := false
+	ssaMPMode := "observe"
+	kernelPath := os.Getenv("XPC_KERNEL_PATH")
+	strictConversions := false
+	var paths []string
+
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--base="):
+			baseRef = strings.TrimPrefix(arg, "--base=")
+		case strings.HasPrefix(arg, "--head="):
+			headRef = strings.TrimPrefix(arg, "--head=")
+		case strings.HasPrefix(arg, "--format="):
+			f := strings.TrimPrefix(arg, "--format=")
+			switch f {
+			case "json":
+				format = plan.FormatJSON
+			case "markdown", "md":
+				format = plan.FormatMarkdown
+			default:
+				fmt.Fprintf(os.Stderr, "unknown --format=%s (want json or markdown)\n", f)
+				return 1
+			}
+		case arg == "--render":
+			enableRender = true
+		case arg == "--skip-render":
+			skipRender = true
+		case strings.HasPrefix(arg, "--helm-bin="):
+			helmBin = strings.TrimPrefix(arg, "--helm-bin=")
+		case strings.HasPrefix(arg, "--helm-cache-dir="):
+			helmCacheDir = strings.TrimPrefix(arg, "--helm-cache-dir=")
+		case strings.HasPrefix(arg, "--kustomize-bin="):
+			kustomizeBin = strings.TrimPrefix(arg, "--kustomize-bin=")
+		case strings.HasPrefix(arg, "--crossplane-bin="):
+			crossplaneBin = strings.TrimPrefix(arg, "--crossplane-bin=")
+		case strings.HasPrefix(arg, "--appset-fixture="):
+			appsetFixturePath = strings.TrimPrefix(arg, "--appset-fixture=")
+		case arg == "--skip-appset-expand":
+			skipAppSetExpand = true
+		case strings.HasPrefix(arg, "--ssa-mp-mode="):
+			val := strings.TrimPrefix(arg, "--ssa-mp-mode=")
+			switch val {
+			case "observe", "partial", "any":
+				ssaMPMode = val
+			default:
+				fmt.Fprintf(os.Stderr, "invalid --ssa-mp-mode=%s\n", val)
+				return 1
+			}
+		case strings.HasPrefix(arg, "--kernel-path="):
+			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
+		case arg == "--strict-conversions":
+			strictConversions = true
+		case arg == "--help" || arg == "-h":
+			printUsage()
+			return 0
+		case len(arg) > 0 && arg[0] == '-':
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			return 1
+		default:
+			paths = append(paths, arg)
+		}
+	}
+
+	if baseRef == "" {
+		fmt.Fprintln(os.Stderr, "error: --base is required")
+		return 1
+	}
+	if len(paths) == 0 {
+		paths = append(paths, ".")
+	}
+	if len(paths) > 1 {
+		fmt.Fprintln(os.Stderr, "error: xpc plan accepts at most one path")
+		return 1
+	}
+
+	if enableRender {
+		skipRender = false
+	}
+
+	cfg := plan.Config{
+		BaseRef:          baseRef,
+		HeadRef:          headRef,
+		Path:             paths[0],
+		SkipRender:       skipRender,
+		HelmBin:          helmBin,
+		HelmCacheDir:     helmCacheDir,
+		KustomizeBin:     kustomizeBin,
+		CrossplaneBin:    crossplaneBin,
+		SkipAppSetExpand: skipAppSetExpand,
+		SSAMPMode:        ssaMPMode,
+		CheckerConfig: checker.Config{
+			StrictConversions: strictConversions,
+			KernelPath:        kernelPath,
+		},
+	}
+
+	if appsetFixturePath != "" {
+		fixtures, err := loadAppSetFixtures(appsetFixturePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading --appset-fixture=%s: %v\n", appsetFixturePath, err)
+			return 1
+		}
+		cfg.AppSetFixtures = fixtures
+	}
+
+	p, cleanup, err := plan.Run(cfg)
+	defer cleanup()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plan failed: %v\n", err)
+		return 1
+	}
+
+	switch format {
+	case plan.FormatJSON:
+		if err := plan.WriteJSON(os.Stdout, p); err != nil {
+			fmt.Fprintf(os.Stderr, "write json: %v\n", err)
+			return 1
+		}
+	case plan.FormatMarkdown:
+		if err := plan.WriteMarkdown(os.Stdout, p); err != nil {
+			fmt.Fprintf(os.Stderr, "write markdown: %v\n", err)
+			return 1
+		}
+	}
+
+	// Exit non-zero when destructive section is non-empty (R26, forthcoming).
+	for _, d := range p.Diagnostics {
+		if strings.HasPrefix(d.Code, "XPC.P.") && d.Severity == types.SeverityError {
+			return 1
+		}
+	}
+	return 0
+}
+
 func runExplain(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no error code specified")
@@ -934,6 +1093,42 @@ Causes:
 
 Fix: Depends on the ErrorKind — see the diagnostic detail for the concrete
 helm failure message.`,
+
+	"XPC.P.destructive-delete": `XPC.P.destructive-delete: state-bearing Crossplane MR about to be removed across a plan
+
+Emitted only by 'xpc plan --base --head'. A resource whose (Group, Kind) is
+in xpc's state-bearing allowlist is present on --base and absent on --head,
+and the base-side spec.deletionPolicy is not Orphan. Applying this change
+will run a real destructive call against the external cloud object (DROP
+DATABASE, DeleteCluster, DeleteKey, DeleteBucket, ...).
+
+This is the dynamic / across-variant counterpart of R23
+(XPC.S.crossplane-state-needs-orphan, which catches the configuration on a
+single tip). Both fire intentionally when the same commit both (a) declared
+a non-Orphan policy and (b) schedules removal.
+
+Fix: one of (a) keep the resource on HEAD (revert the removal from the PR),
+(b) edit the base-side manifest to add spec.deletionPolicy: Orphan so the
+cascade is non-destructive, (c) add annotation xpc.io/allow-delete=true to
+the base manifest (the bypass is recognized on either the primary or the
+policy.facilitygrid.io alias) if destruction is genuinely intended.`,
+
+	"XPC.P.cascade-risk": `XPC.P.cascade-risk: ArgoCD Application removal with cascading finalizer
+
+Emitted only by 'xpc plan --base --head'. An argoproj.io Application is
+present on --base and absent on --head, the base manifest carries the
+cascading finalizer resources-finalizer.argocd.argoproj.io in
+metadata.finalizers, and spec.syncPolicy.preserveResourcesOnDeletion is not
+true. Removing this Application will cascade DELETE through every resource
+it owns. This is the fg-synapse INC-6 trigger applied at the per-Application
+level (as opposed to the AppSet-level R24 static check).
+
+Fix: one of (a) keep the Application on HEAD (revert the removal),
+(b) set spec.syncPolicy.preserveResourcesOnDeletion: true on the base
+manifest before removing the Application, (c) drop the
+resources-finalizer.argocd.argoproj.io entry from metadata.finalizers if
+cascade is not intended, or (d) add annotation xpc.io/allow-delete=true on
+the base side if destruction is genuinely intended.`,
 
 	"XPC.H.values-well-typed": `XPC.H.values-well-typed: Helm values violate values.schema.json
 
