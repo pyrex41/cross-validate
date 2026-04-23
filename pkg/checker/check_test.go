@@ -314,14 +314,27 @@ func TestR12_DanglingMount(t *testing.T) {
 	}
 }
 
-func TestR13_RuleLoaded(t *testing.T) {
-	// R13 is framework-only in this phase — Delta.Updated is always empty so
-	// it never fires on real input. This test just verifies the rule loads
-	// and runs without panicking against a non-trivial fixture.
-	world := loadFixture(t, "../../testdata/fixtures/basic")
-	diags := checkFixture(t, world, Config{})
-	if xpc013 := findDiagByCode(diags, "XPC013"); len(xpc013) > 0 {
-		t.Errorf("expected no XPC013 errors in phase 1 (Delta.Updated is empty), got %d", len(xpc013))
+func TestR13_Retired_R27_Covers(t *testing.T) {
+	// R13 (XPC013 / no-immutable-change) was retired in P4.d (2026-04-23).
+	// It is now subsumed by R27 / XPC.P.immutable-change (plan-mode,
+	// variant-axis); see pkg/plan/r27.go and pkg/plan/r27_test.go for the
+	// positive coverage on the plan-immutable-change fixture.
+	//
+	// This test documents the retirement: the kernel no longer loads the
+	// rule file (kernel/check.shen), so XPC013 must never appear in any
+	// checker-side diagnostic output — including against the immutable-
+	// change fixture that R27 flags in plan mode.
+	fixtures := []string{
+		"../../testdata/fixtures/basic",
+		"../../testdata/fixtures/plan-immutable-change/head",
+	}
+	for _, fx := range fixtures {
+		world := loadFixture(t, fx)
+		diags := checkFixture(t, world, Config{})
+		if xpc013 := findDiagByCode(diags, "XPC013"); len(xpc013) > 0 {
+			t.Errorf("fixture %s: XPC013 is retired but got %d diagnostic(s): %+v",
+				fx, len(xpc013), xpc013)
+		}
 	}
 }
 

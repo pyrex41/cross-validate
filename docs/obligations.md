@@ -108,7 +108,7 @@ verify temporal invariants hold at every step.
 
 **Generators**:
 - `no-dangling-mount` → `XPC012` — no Pod references a pruned ConfigMap/Secret mid-sync *(implemented)*
-- `no-immutable-change` → `XPC013` — no update touches an immutable field *(framework present; update detection pending follow-up — the simulator's `Delta.Updated` is empty until a multi-snapshot extension lands)*
+- `no-immutable-change` → `XPC013` — **Retired** — subsumed by R27 / `XPC.P.immutable-change` (plan-mode, variant-axis). The trajectory-axis form required a simulator refactor with small payoff; the natural data shape for immutable-change is two Worlds, which is what R27 consumes.
 - `no-rbac-regression` → `XPC014` — ServiceAccount permissions hold across steps *(implemented)*
 - `trajectory-wave-order` → `XPC006` — dependency ordering, including R6a (XRD<XR), R6b (Function<Composition), R6c (Provider<MR), R6d (Composition≤XR) *(absorbs R6)*
 - `trajectory-bootstrap` → `XPC009` — required resources exist at step 0 *(absorbs R9)*
@@ -221,7 +221,7 @@ Legacy codes `XPC001`-`XPC014` remain as aliases. `XPC012`, `XPC013`, and
 [ADR-002](adr/002-shen-as-canonical-spec-and-trajectory-simulator.md):
 
 - `XPC012` — `no-dangling-mount`
-- `XPC013` — `no-immutable-change` (framework-only until update detection lands)
+- `XPC013` — `no-immutable-change` **Retired** (P4.d, 2026-04-23) — subsumed by R27 / `XPC.P.immutable-change` (plan-mode, variant-axis)
 - `XPC014` — `no-rbac-regression`
 
 New obligations use structured codes:

@@ -1,3 +1,9 @@
+\* =====================================================================
+   RETIRED by P4.d (2026-04-23) in favour of R27 / XPC.P.immutable-change
+   (plan-mode, variant-axis). Kept as dormant reference; not loaded by
+   check.shen. See pkg/plan/r27.go.
+===================================================================== *\
+
 \* r13-no-immutable-change.shen — XPC013 no-immutable-change
 
    Emits a diagnostic when a resource in a step's Updated set has a

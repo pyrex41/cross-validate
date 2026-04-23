@@ -1237,7 +1237,6 @@ func obligationRefForCode(code string) *types.ObligationRef {
 		"XPC010": {"K", "secret-source-sink"},
 		"XPC011": {"L", "api-deprecation-calendar"},
 		"XPC012": {"F", "no-dangling-mount"},
-		"XPC013": {"F", "no-immutable-change"},
 		"XPC014": {"F", "no-rbac-regression"},
 	}
 	e, ok := table[code]

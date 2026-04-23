@@ -27,7 +27,6 @@
 (load "r11-api-deprecation.shen")
 (load "r6c-provider-wave.shen")
 (load "r12-no-dangling-mount.shen")
-(load "r13-no-immutable-change.shen")
 (load "r14-no-rbac-regression.shen")
 (load "r15-appproject-whitelist.shen")
 (load "r16-selector-needs-ignore-diff.shen")
@@ -115,7 +114,6 @@
          R10 (mark-rule "XPC010" (check-r10 ResolvedPatches))
          R11 (mark-rule "XPC011" (check-r11 Resources Compositions Providers CRDs))
          R12 (mark-rule "XPC012" (check-r12-cross Trajectory MountRefs))
-         R13 (mark-rule "XPC013" (check-r13 Trajectory ImmutableFields))
          R14 (mark-rule "XPC014" (check-r14-cross Trajectory SARefs RBACBindings))
          R15 (mark-rule "XPC.D.kind-whitelisted" (check-r15 ArgoApps ArgoAppProjLinks ArgoAppProjects Resources CRDs))
          R16 (mark-rule "XPC.E.selector-needs-ignore-diff" (check-r16 SelectorUsages IgnoreDiffEntries))
@@ -132,7 +130,7 @@
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 R25)))))))))))))))))))))))))))
+          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 R25))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 
