@@ -253,3 +253,43 @@ func TestEnrichTrajectoryData_RBACRules(t *testing.T) {
 		t.Errorf("unexpected rule: %+v", r)
 	}
 }
+
+// TestEnrichTrajectoryData_SeesRenderedRBAC guards the P4.a ordering fix:
+// EnrichTrajectoryData must run AFTER renderCompositions so rendered
+// Crossplane MRs (marked with Provenance "rendered:composition:*" and a
+// composition-scoped OwningApp) are visible to the RBAC extractor. A
+// regression — if enrichment is reordered back before rendering — would
+// leave this World's rendered RoleBinding invisible to extractRBACBinding
+// and w.RBACBindings would stay empty.
+func TestEnrichTrajectoryData_SeesRenderedRBAC(t *testing.T) {
+	w := &types.World{
+		Resources: []types.ResourceInfo{
+			{
+				APIVersion: "rbac.authorization.k8s.io/v1",
+				Kind:       "RoleBinding",
+				Name:       "test-rendered-rb",
+				Namespace:  "default",
+				Provenance: "rendered:composition:xr-test",
+				OwningApp:  "composition:comp-test/xr-test",
+				Raw: map[string]interface{}{
+					"roleRef": map[string]interface{}{
+						"kind": "Role",
+						"name": "test-role",
+					},
+					"subjects": []interface{}{
+						map[string]interface{}{
+							"kind":      "ServiceAccount",
+							"name":      "test-sa",
+							"namespace": "default",
+						},
+					},
+				},
+				Source: types.SourceLocation{File: "synthetic"},
+			},
+		},
+	}
+	EnrichTrajectoryData(w)
+	if len(w.RBACBindings) < 1 {
+		t.Fatalf("expected RBACBindings >= 1 after enrichment of rendered RoleBinding, got %d", len(w.RBACBindings))
+	}
+}

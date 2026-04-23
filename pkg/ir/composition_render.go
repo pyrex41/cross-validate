@@ -116,12 +116,19 @@ func (b *Builder) renderCompositions(docs []loader.LoadedDocument) {
 			}
 
 			provenance := "rendered:composition:" + xrName
+			owningApp := compositionAppName(comp.Name, xrName)
 			for _, d := range parsedDocs {
 				res := resourceInfoFromDoc(d)
 				// Tag every rendered resource's Source at the Composition
 				// file so diagnostics land somewhere an author can edit.
 				res.Source = comp.Source
 				res.Provenance = provenance
+				// Stamp OwningApp with the same "<composition>:<xrName>"
+				// label used for RenderResult so per-app scoped downstream
+				// rules (SSA/MP, RBAC, etc.) don't silently skip rendered
+				// Crossplane MRs. Mirrors the Helm-rendered convention
+				// (res.OwningApp = app.Name) from renderApp.
+				res.OwningApp = owningApp
 				b.world.Resources = append(b.world.Resources, res)
 			}
 			b.world.RenderResults = append(b.world.RenderResults, result)

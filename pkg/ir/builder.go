@@ -119,12 +119,18 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 		b.expandAppSets()
 	}
 	enrichOwningApp(b.world)
-	EnrichTrajectoryData(b.world)
-	EnrichFieldValidation(b.world)
 	if !b.SkipRender {
 		b.runDeterminismChecks()
 		b.renderCompositions(docs)
 	}
+	// Enrichment runs AFTER composition rendering so every downstream
+	// extractor (mount refs, SA refs, RBAC bindings, field-validation
+	// facts, late-init usages, CP deletion-policy facts, SSA/MP
+	// conflicts, etc.) also sees rendered Crossplane MRs. Previously
+	// these extractors walked w.Resources before renderCompositions
+	// appended to it, leaving rendered resources invisible.
+	EnrichTrajectoryData(b.world)
+	EnrichFieldValidation(b.world)
 	return b.world, nil
 }
 
