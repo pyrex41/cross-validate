@@ -52,6 +52,8 @@ type Builder struct {
 	helmRenderer *renderer.HelmRenderer
 	// kustomizeRenderer is constructed lazily on first render attempt.
 	kustomizeRenderer *renderer.KustomizeRenderer
+	// compositionRenderer is constructed lazily on first render attempt.
+	compositionRenderer *renderer.CompositionRenderer
 	// ExpansionDiags collects info-level diagnostics produced during
 	// AppSet expansion (e.g. unsupported generator kinds). The caller
 	// merges these into the final diagnostic stream.
@@ -121,6 +123,7 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	EnrichFieldValidation(b.world)
 	if !b.SkipRender {
 		b.runDeterminismChecks()
+		b.renderCompositions(docs)
 	}
 	return b.world, nil
 }

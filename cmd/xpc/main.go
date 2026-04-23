@@ -83,6 +83,9 @@ Check flags:
   --helm-bin=<path>    Path to the helm binary (default: first 'helm' on PATH)
   --helm-cache-dir=<dir>   Dir for remote Helm charts + render cache (enables remote)
   --kustomize-bin=<path>   Path to the kustomize binary (default: first 'kustomize' on PATH)
+  --crossplane-bin=<path>  Path to the crossplane binary (default: first 'crossplane' on PATH)
+                           Used by the composition-render pass; absent binary
+                           degrades to a warning-severity XPC.H.composition-renders.
   --skip-appset-expand Skip ApplicationSet generator expansion
   --appset-fixture=<file>  YAML fixture for pullRequest/scmProvider generators
                              (shape: {appset-name: [{key: value, ...}]})
@@ -139,6 +142,7 @@ func runCheck(args []string) int {
 	skipRender := false
 	helmBin := ""
 	kustomizeBin := ""
+	crossplaneBin := ""
 	appsetFixturePath := ""
 	helmCacheDir := ""
 	skipAppSetExpand := false
@@ -164,6 +168,8 @@ func runCheck(args []string) int {
 			helmBin = arg[11:]
 		case len(arg) > 16 && arg[:16] == "--kustomize-bin=":
 			kustomizeBin = arg[16:]
+		case strings.HasPrefix(arg, "--crossplane-bin="):
+			crossplaneBin = strings.TrimPrefix(arg, "--crossplane-bin=")
 		case len(arg) > 17 && arg[:17] == "--appset-fixture=":
 			appsetFixturePath = arg[17:]
 		case strings.HasPrefix(arg, "--helm-cache-dir="):
@@ -227,6 +233,7 @@ func runCheck(args []string) int {
 	builder.HelmBin = helmBin
 	builder.HelmCacheDir = helmCacheDir
 	builder.KustomizeBin = kustomizeBin
+	builder.CrossplaneBin = crossplaneBin
 	builder.SkipAppSetExpand = skipAppSetExpand
 	builder.SSAMPMode = ssaMPMode
 	if appsetFixturePath != "" {
@@ -1129,6 +1136,27 @@ manifest before removing the Application, (c) drop the
 resources-finalizer.argocd.argoproj.io entry from metadata.finalizers if
 cascade is not intended, or (d) add annotation xpc.io/allow-delete=true on
 the base side if destruction is genuinely intended.`,
+
+	"XPC.H.composition-renders": `XPC.H.composition-renders: Crossplane Composition rendering failed
+
+An xpc check that has ` + "`SkipRender=false`" + ` (i.e. no ` + "`--skip-render`" + `) walks every
+Crossplane Composition that has an XR to render against, shells out to
+'crossplane render <xr> <composition> <functions>', and feeds the rendered
+managed resources back into World.Resources with provenance tag
+'rendered:composition:<xr-name>'. When that shell-out fails, this diagnostic
+fires.
+
+Severity is warning when the crossplane binary is absent (CI machines
+without crossplane still complete their other checks, with reduced coverage);
+error on template failures or timeouts.
+
+ErrorKind classifiers (surfaced in the diagnostic detail):
+  - crossplane-absent         — no crossplane binary on PATH.
+  - crossplane-render-failed  — crossplane exited non-zero; detail has stderr.
+  - crossplane-timeout        — render exceeded ` + "`CompositionRenderTimeout`" + ` (30s).
+
+Fix: depends on the ErrorKind — see the diagnostic detail for the concrete
+message and the fix-hint keyed off the kind.`,
 
 	"XPC.H.values-well-typed": `XPC.H.values-well-typed: Helm values violate values.schema.json
 

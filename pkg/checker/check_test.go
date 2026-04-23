@@ -27,6 +27,29 @@ func loadFixture(t *testing.T, path string) *types.World {
 	return world
 }
 
+// loadFixtureWithRender builds the World with SkipRender=false. Used by
+// tests that exercise the composition-render pipeline (which probes the
+// crossplane binary and gracefully degrades when absent — so the test does
+// NOT need crossplane on PATH to run).
+func loadFixtureWithRender(t *testing.T, path string) *types.World {
+	t.Helper()
+	docs, err := loader.LoadDirectory(path)
+	if err != nil {
+		t.Fatalf("loading %s: %v", path, err)
+	}
+	builder := ir.NewBuilder()
+	builder.SkipRender = false
+	// Force helm/kustomize lookups to fail fast so we only exercise the
+	// composition-render branch the test cares about.
+	builder.HelmBin = "/nonexistent-helm"
+	builder.KustomizeBin = "/nonexistent-kustomize"
+	world, err := builder.Build(docs)
+	if err != nil {
+		t.Fatalf("building IR for %s: %v", path, err)
+	}
+	return world
+}
+
 // loadFixtureWithHelm builds the World with the actual Helm renderer
 // wired in. Used by R18/R19 tests; callers should t.Skip when helm is
 // absent.
@@ -557,6 +580,31 @@ func TestR21_LateInitDrift(t *testing.T) {
 	gotOk := findDiagByCode(diags, "XPC.E.late-init-needs-ignore-diff")
 	if len(gotOk) != 0 {
 		t.Fatalf("late-init-drift-ok: expected 0 XPC.E.late-init-needs-ignore-diff diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+}
+
+// TestR18_CompositionRenders_AbsentBinary exercises the P3 composition-render
+// plumbing end-to-end in the "crossplane binary absent" case — which is the
+// default on most developer machines. The fixture contains an XRD,
+// Composition, XR, and Function; SkipRender=false forces the render path;
+// absent crossplane produces a warning-severity XPC.H.composition-renders
+// diagnostic routed through R18.
+func TestR18_CompositionRenders_AbsentBinary(t *testing.T) {
+	world := loadFixtureWithRender(t, "../../testdata/fixtures/composition-render-absent")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.H.composition-renders")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 XPC.H.composition-renders diagnostic, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityWarning {
+		t.Errorf("expected warning severity for absent binary, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "crossplane binary absent") {
+		t.Errorf("expected 'crossplane binary absent' in message, got %q", got[0].Message)
+	}
+	if !strings.Contains(got[0].Message, "xbucket-default") {
+		t.Errorf("expected composition name in message, got %q", got[0].Message)
 	}
 }
 

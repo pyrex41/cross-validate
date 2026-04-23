@@ -20,30 +20,37 @@
      - nothing when Success=true. *\
 
 
-\* r18-error-label — human-readable kind label. Covers helm + kustomize. *\
+\* r18-error-label — human-readable kind label. Covers helm, kustomize,
+   and (P3) crossplane composition-render error kinds. *\
 (define r18-error-label
-  helm-absent            -> "helm binary absent"
-  helm-template-failed   -> "helm template failed"
-  helm-timeout           -> "helm template timed out"
-  kustomize-absent       -> "kustomize binary absent"
-  kustomize-build-failed -> "kustomize build failed"
-  kustomize-timeout      -> "kustomize build timed out"
-  other                  -> "render failed"
-  none                   -> "render failed"
-  K                      -> "render failed")
+  helm-absent              -> "helm binary absent"
+  helm-template-failed     -> "helm template failed"
+  helm-timeout             -> "helm template timed out"
+  kustomize-absent         -> "kustomize binary absent"
+  kustomize-build-failed   -> "kustomize build failed"
+  kustomize-timeout        -> "kustomize build timed out"
+  crossplane-absent        -> "crossplane binary absent"
+  crossplane-render-failed -> "crossplane render failed"
+  crossplane-timeout       -> "crossplane render timed out"
+  other                    -> "render failed"
+  none                     -> "render failed"
+  K                        -> "render failed")
 
 
 \* r18-fix-hint — remediation hint keyed off the error kind. *\
 (define r18-fix-hint
-  helm-absent            -> "Install helm or pass --helm-bin=<path> so xpc can render this Application's Helm sources."
-  helm-template-failed   -> "Run 'helm template' locally on the chart to reproduce and fix the template error."
-  helm-timeout           -> "The chart takes >30s to render. Simplify the chart or raise the timeout."
-  kustomize-absent       -> "Install kustomize or put it on PATH so xpc can render this Application's Kustomize sources."
-  kustomize-build-failed -> "Run 'kustomize build' locally on the overlay to reproduce and fix the build error."
-  kustomize-timeout      -> "The overlay takes >30s to render. Simplify the overlay tree or raise the timeout."
-  other                  -> "Inspect the render error and fix the chart or values."
-  none                   -> "Inspect the render error and fix the chart or values."
-  K                      -> "Inspect the render error and fix the chart or values.")
+  helm-absent              -> "Install helm or pass --helm-bin=<path> so xpc can render this Application's Helm sources."
+  helm-template-failed     -> "Run 'helm template' locally on the chart to reproduce and fix the template error."
+  helm-timeout             -> "The chart takes >30s to render. Simplify the chart or raise the timeout."
+  kustomize-absent         -> "Install kustomize or put it on PATH so xpc can render this Application's Kustomize sources."
+  kustomize-build-failed   -> "Run 'kustomize build' locally on the overlay to reproduce and fix the build error."
+  kustomize-timeout        -> "The overlay takes >30s to render. Simplify the overlay tree or raise the timeout."
+  crossplane-absent        -> "Install crossplane (https://docs.crossplane.io) or pass --crossplane-bin=<path> so xpc can render this Composition's pipeline."
+  crossplane-render-failed -> "Run 'crossplane render <xr.yaml> <composition.yaml> <functions.yaml>' locally to reproduce and fix the render error."
+  crossplane-timeout       -> "The Composition takes >30s to render. Check for function loops or heavy templating; simplify the pipeline."
+  other                    -> "Inspect the render error and fix the chart or values."
+  none                     -> "Inspect the render error and fix the chart or values."
+  K                        -> "Inspect the render error and fix the chart or values.")
 
 
 \* r18-is-kustomize-kind? — does this ErrorKind identify a Kustomize
@@ -56,13 +63,23 @@
   _                      -> false)
 
 
+\* r18-is-composition-kind? — mirror for Crossplane composition renders. *\
+(define r18-is-composition-kind?
+  crossplane-absent        -> true
+  crossplane-render-failed -> true
+  crossplane-timeout       -> true
+  _                        -> false)
+
+
 \* r18-code-for-kind — pick the diagnostic code: helm-renders vs
-   kustomize-renders. Using distinct codes lets the obligation ledger
-   tick both generators independently. *\
+   kustomize-renders vs composition-renders. Distinct codes let the
+   obligation ledger tick each generator independently. *\
 (define r18-code-for-kind
   K -> (if (r18-is-kustomize-kind? K)
            "XPC.H.kustomize-renders"
-           "XPC.H.helm-renders"))
+           (if (r18-is-composition-kind? K)
+               "XPC.H.composition-renders"
+               "XPC.H.helm-renders")))
 
 
 \* r18-check-result — emit one judgment per failed render-result.
@@ -84,6 +101,13 @@
        (cn AppName (cn ": " (r18-error-label kustomize-absent)))
        (cn ChartPath (cn ": " Error))
        (r18-fix-hint kustomize-absent)
+       [])]
+  [render-result AppName ChartPath render-failed crossplane-absent Error Issues Src] ->
+    [(make-warning "XPC.H.composition-renders"
+       Src
+       (cn AppName (cn ": " (r18-error-label crossplane-absent)))
+       (cn ChartPath (cn ": " Error))
+       (r18-fix-hint crossplane-absent)
        [])]
   [render-result AppName ChartPath render-failed ErrorKind Error Issues Src] ->
     [(make-error (r18-code-for-kind ErrorKind)

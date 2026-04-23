@@ -1,0 +1,7 @@
+apiVersion: platform.example.com/v1
+kind: XBucket
+metadata:
+  name: primary-bucket
+spec:
+  parameters:
+    region: us-east-1
