@@ -1,0 +1,13 @@
+apiVersion: rds.aws.upbound.io/v1beta1
+kind: Cluster
+metadata:
+  name: aurora-scratch-cluster
+  namespace: crossplane-system
+  annotations:
+    xpc.io/allow-delete: "true"
+spec:
+  deletionPolicy: Delete
+  forProvider:
+    region: us-east-1
+    engine: aurora-postgresql
+    databaseName: scratch

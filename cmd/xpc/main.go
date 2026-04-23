@@ -793,7 +793,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.selector-needs-ignore-diff, XPC.H.helm-renders, XPC.H.values-well-typed")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.S.crossplane-state-needs-orphan")
 		return 1
 	}
 
@@ -1136,6 +1136,92 @@ manifest before removing the Application, (c) drop the
 resources-finalizer.argocd.argoproj.io entry from metadata.finalizers if
 cascade is not intended, or (d) add annotation xpc.io/allow-delete=true on
 the base side if destruction is genuinely intended.`,
+
+	"XPC.S.crossplane-state-needs-orphan": `XPC.S.crossplane-state-needs-orphan: state-bearing Crossplane MR lacks deletionPolicy: Orphan
+
+A Crossplane managed resource whose (Group, Kind) is on xpc's state-bearing
+allowlist declares spec.deletionPolicy anything other than Orphan, OR omits
+the field entirely (Crossplane's default is Delete).
+
+The allowlist currently covers kinds whose underlying AWS/SQL/KMS object
+holds real external state — destroying the CR runs a real destructive call
+against the backing system:
+
+  - rds.aws.upbound.io/Cluster, ClusterInstance          (Aurora)
+  - docdb.aws.upbound.io/Cluster, ClusterInstance        (DocDB)
+  - mysql.sql.crossplane.io/Database, User, Grant        (SQL data)
+  - kms.aws.upbound.io/Key                               (CMK)
+  - s3.aws.upbound.io/Bucket                             (objects)
+  - ec2.aws.upbound.io/VPC                               (network identity)
+
+This list mirrors fg-manifold's crossplane-state-require-orphan
+ValidatingAdmissionPolicy. fg-manifold enforces at runtime; xpc enforces in
+CI (across all envs, not just prod).
+
+Rationale: fg-synapse INC-6 (2026-04-22, SEV-2). A cascade delete through
+an AppSet-owned Application reached ~70 managed resources; data survived by
+pure ordering luck. Setting Orphan decouples the CR lifecycle from the
+external object's lifecycle so ArgoCD / Crossplane removals are non-destructive.
+
+Bypass: if destruction is genuinely intended (throwaway test, decommissioning),
+add one of these annotations to the resource metadata:
+  xpc.io/allow-delete: "true"                  (primary)
+  policy.facilitygrid.io/allow-delete: "true"  (alias — matches the runtime VAP)
+
+Resources whose name contains "alb-logs" are carved out — ALB access-log
+buckets are separately managed and intentionally destroyable.
+
+Fix: Add spec.deletionPolicy: Orphan to the resource.`,
+
+	"XPC.E.prod-appset-autosync": `XPC.E.prod-appset-autosync: prod-named ApplicationSet enables automated sync
+
+An ArgoCD ApplicationSet whose metadata.name matches a prod pattern (contains
+"-prod" or "prod-") enables spec.template.spec.syncPolicy.automated, meaning
+every generated Application auto-syncs any git change without a human click.
+
+Rationale: INC-6 (fg-synapse, 2026-04-22) was triggered by an out-of-band
+delete, but the same cascade would have landed via any commit that reduced the
+generator's output — e.g. a filter change that drops a cluster. With automated
+sync enabled, a destructive git change has no human gate. fg-manifold's
+remediation (commit a5f77a3b8) dropped spec.template.spec.syncPolicy.automated
+from 5 prod AppSets; this rule catches any regression.
+
+R25 pairs with R23 (deletionPolicy) and R24 (preserveResourcesOnDeletion) as
+the static floor for INC-6-shape incidents. They describe different properties:
+R23/R24 limit the blast radius of a destructive event; R25 limits how easily
+one can be triggered.
+
+Name patterns are currently hardcoded. A kernel config file (xpc.yaml) that
+surfaces prodAppSetNamePatterns is a P1 follow-up.
+
+Fix: Remove spec.template.spec.syncPolicy.automated from the ApplicationSet
+template, forcing manual sync for each generated Application. If automated
+sync is genuinely required for a prod AppSet, rename the AppSet so it does
+not match the prod pattern, or split into a non-prod-named sibling that
+targets the same clusters.`,
+
+	"XPC.E.appset-finalizer-without-preserve": `XPC.E.appset-finalizer-without-preserve: ApplicationSet cascading finalizer without preserveResourcesOnDeletion
+
+An ArgoCD ApplicationSet bakes the ` + "`resources-finalizer.argocd.argoproj.io`" + ` finalizer
+into every generated Application via spec.template.metadata.finalizers, but the
+AppSet itself does NOT set spec.syncPolicy.preserveResourcesOnDeletion: true.
+
+The combination is the root cause of fg-synapse INC-6 (2026-04-22, SEV-2). When
+a generator stops producing a parameter set, or the AppSet is deleted, ArgoCD
+cascades the delete to every resource each generated Application owns. If any
+of those resources are state-bearing Crossplane managed resources defaulting to
+deletionPolicy: Delete, the cascade runs real DROP DATABASE / DeleteCluster /
+DeleteVolume calls against production infrastructure.
+
+This rule catches the configuration on a single tip. For detecting the actual
+destructive change across a PR — a state-bearing resource about to disappear —
+see XPC.P.destructive-delete (xpc plan, forthcoming R26).
+
+Fix: Set spec.syncPolicy.preserveResourcesOnDeletion: true on the ApplicationSet,
+OR drop the resources-finalizer.argocd.argoproj.io entry from
+spec.template.metadata.finalizers. Preservation is strongly preferred: keeping
+the finalizer without preservation is the unsafe combination, not the finalizer
+by itself.`,
 
 	"XPC.H.composition-renders": `XPC.H.composition-renders: Crossplane Composition rendering failed
 

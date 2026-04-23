@@ -94,6 +94,8 @@ Prune without targets is a no-op.
 - `createnamespace-not-colliding` -- CreateNamespace doesn't conflict
 - `selector-needs-ignore-diff` -- selector field's resolved path suppressed by ignoreDifferences (**implemented** — R16 / `XPC.E.selector-needs-ignore-diff`, scalar-path first pass; array-indexed paths deferred to follow-up)
 - `late-init-needs-ignore-diff` -- provider late-init fields suppressed by ignoreDifferences, managementPolicies omitting LateInitialize, or `omitLateInitialize` (**implemented** — R21 / `XPC.E.late-init-needs-ignore-diff`, scalar-path first pass; registry seeded from fg-manifold MRs !1048, !893, !1502)
+- `appset-finalizer-without-preserve` -- ApplicationSet bakes `resources-finalizer.argocd.argoproj.io` into its template without setting `spec.syncPolicy.preserveResourcesOnDeletion: true` on the AppSet (**implemented** — R24 / `XPC.E.appset-finalizer-without-preserve`, the static floor for fg-synapse INC-6)
+- `prod-appset-autosync` -- ApplicationSet whose name matches a prod pattern (`-prod`, `prod-`) enables `spec.template.spec.syncPolicy.automated` (**implemented** — R25 / `XPC.E.prod-appset-autosync`, static floor pairing with R24/R23; patterns hardcoded pending a kernel config file follow-up)
 
 **Absorbs**: (new -- no legacy rule)
 
@@ -182,6 +184,22 @@ and pipelines, errors if tainted values reach untainted sinks.
 - `secret-source-sink` -- secret material flows only to secret sinks (absorbs R10)
 
 **Absorbs**: R10
+
+### S: Safety / state-preservation obligations
+
+**Scope**: `(kind x deletionPolicy x bypass)` per Crossplane managed resource.
+
+Catch configuration that would allow Crossplane's default destructive behavior
+to reach "real" external state. State-bearing kinds (Aurora, DocDB, MySQL, KMS,
+S3, VPC) default to `deletionPolicy: Delete` — the CR's deletion runs
+`DROP DATABASE` / `DeleteCluster` / `DeleteKey` against the backing system.
+The invariant: every such resource declares `spec.deletionPolicy: Orphan`,
+unless an explicit bypass annotation opts it out.
+
+**Generators**:
+- `crossplane-state-needs-orphan` -- state-bearing Crossplane MR missing `deletionPolicy: Orphan` (**implemented** — R23 / `XPC.S.crossplane-state-needs-orphan`, kind allowlist mirrors fg-manifold's `crossplane-state-require-orphan` VAP; bypass `xpc.io/allow-delete` primary + `policy.facilitygrid.io/allow-delete` alias; name carve-out for `alb-logs`)
+
+**Absorbs**: (new — static floor for fg-synapse INC-6)
 
 ### L: Deprecation/calendar obligations
 

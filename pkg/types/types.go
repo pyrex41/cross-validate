@@ -522,6 +522,23 @@ type ArgoApplicationSet struct {
 
 	// Template is the Application template to instantiate per generator element.
 	Template ArgoAppSetTemplate `json:"template"`
+
+	// SyncPolicy is the AppSet-level syncPolicy (distinct from the
+	// per-generated-Application syncPolicy under spec.template.spec.syncPolicy).
+	// Controls preservation behavior when generated Applications are removed.
+	SyncPolicy ArgoAppSetSyncPolicy `json:"appsetSyncPolicy"`
+}
+
+// ArgoAppSetSyncPolicy holds spec.syncPolicy of an ApplicationSet.
+// ArgoCD's ApplicationSet controller uses this to decide what to do with the
+// generated Applications (and their resources) when a generator stops producing
+// them or the AppSet itself is deleted.
+type ArgoAppSetSyncPolicy struct {
+	// PreserveResourcesOnDeletion, when true, tells the ApplicationSet
+	// controller NOT to cascade deletes to the resources owned by the
+	// generated Applications. Combined with the `resources-finalizer.argocd.argoproj.io`
+	// finalizer on the template, its absence is the INC-6 trigger.
+	PreserveResourcesOnDeletion bool `json:"preserveResourcesOnDeletion,omitempty"`
 }
 
 // ArgoAppSetGeneratorKind identifies the type of ApplicationSet generator.
@@ -587,6 +604,12 @@ type ArgoAppSetTemplate struct {
 	Name string `json:"name,omitempty"`
 	// Namespace for the generated Application.
 	Namespace string `json:"namespace,omitempty"`
+	// Finalizers from spec.template.metadata.finalizers. When this list
+	// contains `resources-finalizer.argocd.argoproj.io`, ArgoCD will cascade
+	// delete the generated Application's managed resources on Application
+	// deletion — the INC-6 trigger when combined with an AppSet-level
+	// syncPolicy that lacks preserveResourcesOnDeletion.
+	Finalizers []string `json:"finalizers,omitempty"`
 	// Project for the generated Application.
 	Project string `json:"project,omitempty"`
 	// Source template.
@@ -924,6 +947,36 @@ type World struct {
 	// Builder.SSAMPMode; emitted as a single-symbol section on the Shen
 	// world so R22 can branch.
 	SSAMPMode string `json:"-"`
+
+	// CPDeletionPolicyFacts records every Crossplane managed resource whose
+	// (Group, Kind) is in the state-bearing allowlist (see
+	// pkg/ir/state_bearing_registry.go). Populated by
+	// extractCPDeletionPolicyFacts; consumed by Shen rule R23
+	// (XPC.S.crossplane-state-needs-orphan). One row per state-bearing
+	// resource; the kernel decides whether to fire based on DeletionPolicy,
+	// bypass annotations, and name carve-outs.
+	CPDeletionPolicyFacts []CPDeletionPolicyFact `json:"-"`
+}
+
+// CPDeletionPolicyFact captures the deletionPolicy declaration of a single
+// Crossplane managed resource whose kind is in the state-bearing allowlist.
+// Emitted unconditionally for every in-scope resource; the Shen rule inspects
+// DeletionPolicy + Bypass + Name to decide whether to fire.
+type CPDeletionPolicyFact struct {
+	Group     string `json:"group"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	// DeletionPolicy is the literal spec.deletionPolicy string. Empty when
+	// the field is absent — which is the worst case (Crossplane defaults to
+	// Delete).
+	DeletionPolicy string `json:"deletionPolicy"`
+	// Bypass is true when metadata.annotations carries either
+	//   xpc.io/allow-delete: "true"                      (primary)
+	//   policy.facilitygrid.io/allow-delete: "true"      (alias)
+	// Both spellings trip the bypass; the Shen rule sees a single symbol.
+	Bypass bool           `json:"bypass,omitempty"`
+	Source SourceLocation `json:"source"`
 }
 
 // DeterminismResult records whether rendering the same source twice in a row

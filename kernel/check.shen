@@ -37,6 +37,9 @@
 (load "r20-render-deterministic.shen")
 (load "r21-late-init-needs-ignore-diff.shen")
 (load "r22-ssa-managementpolicies-safety.shen")
+(load "r23-crossplane-state-needs-orphan.shen")
+(load "r24-appset-finalizer-without-preserve.shen")
+(load "r25-prod-appset-autosync.shen")
 
 \* ===== IR reading ===== *\
 
@@ -90,6 +93,9 @@
          DeterminismResults (extract-section determinism-results Sections)
          SSAMPConflicts (extract-section ssa-mp-conflicts Sections)
          SSAMPMode     (extract-section ssa-mp-mode Sections)
+         CPDeletionPolicyFacts (extract-section crossplane-deletion-policy-facts Sections)
+         AppSetFinalizerFacts (extract-section appset-finalizer-facts Sections)
+         AppSetAutosyncFacts (extract-section appset-autosync-facts Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -120,10 +126,13 @@
          R21 (mark-rule "XPC.E.late-init-needs-ignore-diff" (check-r21 LateInitUsages IgnoreDiffEntries))
          R22All (check-r22 SSAMPConflicts SSAMPMode)
          R22 (mark-r22-rules R22All)
+         R23 (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts))
+         R24 (mark-rule "XPC.E.appset-finalizer-without-preserve" (check-r24 AppSetFinalizerFacts))
+         R25 (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 R22))))))))))))))))))))))))
+          (append R11 (append R12 (append R13 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 R25)))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

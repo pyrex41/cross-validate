@@ -44,6 +44,45 @@ func EnrichTrajectoryData(w *types.World) {
 	w.LateInitMappings = LateInitRegistry()
 	extractLateInitUsages(w)
 	extractSSAMPConflicts(w)
+	extractCPDeletionPolicyFacts(w)
+}
+
+// extractCPDeletionPolicyFacts walks every resource whose (Group, Kind) is in
+// the state-bearing allowlist (see StateBearingKindsRegistry) and emits one
+// fact per match. The Shen rule R23 decides whether to fire based on the fact
+// contents — this function emits unconditionally so the kernel has full
+// visibility into the invariant.
+func extractCPDeletionPolicyFacts(w *types.World) {
+	if w == nil || len(w.Resources) == 0 {
+		return
+	}
+	allow := make(map[string]bool, 16)
+	for _, gk := range StateBearingKindsRegistry() {
+		allow[gk.Group+"/"+gk.Kind] = true
+	}
+	for _, res := range w.Resources {
+		group := groupFromAPIVersion(res.APIVersion)
+		if !allow[group+"/"+res.Kind] {
+			continue
+		}
+		policy := ""
+		if spec, ok := res.Raw["spec"].(map[string]interface{}); ok {
+			if dp, ok := spec["deletionPolicy"].(string); ok {
+				policy = dp
+			}
+		}
+		bypass := res.Annotations["xpc.io/allow-delete"] == "true" ||
+			res.Annotations["policy.facilitygrid.io/allow-delete"] == "true"
+		w.CPDeletionPolicyFacts = append(w.CPDeletionPolicyFacts, types.CPDeletionPolicyFact{
+			Group:          group,
+			Kind:           res.Kind,
+			Name:           res.Name,
+			Namespace:      res.Namespace,
+			DeletionPolicy: policy,
+			Bypass:         bypass,
+			Source:         res.Source,
+		})
+	}
 }
 
 // extractLateInitUsages populates w.LateInitUsages by consulting

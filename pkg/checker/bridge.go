@@ -387,6 +387,8 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("argo-apps", w.ArgoApps, argoAppCmp, argoAppToObj),
 		sortedSection("argo-app-proj-links", w.ArgoApps, argoAppCmp, argoAppProjLinkToObj),
 		sortedSection("argo-appprojects", w.ArgoProjects, argoAppProjectCmp, argoAppProjectToObj),
+		sortedSection("appset-finalizer-facts", w.ArgoAppSets, appSetFinalizerCmp, appSetFinalizerToObj),
+		sortedSection("appset-autosync-facts", w.ArgoAppSets, appSetFinalizerCmp, appSetAutosyncToObj),
 		section("schemas", nil),
 		section("resolved-patches", patchObjs),
 		sortedSection("mount-refs", w.MountRefs, mountRefCmp, mountRefToObj),
@@ -404,6 +406,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("determinism-results", w.DeterminismResults, determinismResultCmp, determinismResultToObj),
 		sortedSection("ssa-mp-conflicts", w.SSAMPConflicts, ssaMPConflictCmp, ssaMPConflictToObj),
 		ssaMPModeSection(w.SSAMPMode),
+		sortedSection("crossplane-deletion-policy-facts", w.CPDeletionPolicyFacts, cpDeletionPolicyCmp, cpDeletionPolicyToObj),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -650,6 +653,55 @@ func argoAppProjLinkToObj(app types.ArgoApplication) kl.Obj {
 		sym("argo-app-proj-link"),
 		str(app.Name),
 		str(proj),
+	})
+}
+
+// appSetAutosyncToObj emits one `(appset-autosync-fact Name AutoSym Src)`
+// row per ApplicationSet. AutoSym is `auto-yes` when the template's
+// syncPolicy has an `automated` block (any non-nil pointer counts — presence
+// is the trigger, regardless of prune/selfHeal subfields), else `auto-no`.
+// Same symbol-as-discriminator convention as R22/R23/R24.
+func appSetAutosyncToObj(a types.ArgoApplicationSet) kl.Obj {
+	autoSym := "auto-no"
+	if a.Template.SyncPolicy.Automated != nil {
+		autoSym = "auto-yes"
+	}
+	return makeList([]kl.Obj{
+		sym("appset-autosync-fact"),
+		str(a.Name),
+		sym(autoSym),
+		sourceToObj(a.Source),
+	})
+}
+
+func appSetFinalizerCmp(a, b types.ArgoApplicationSet) int {
+	if c := cmp.Compare(a.Source.File, b.Source.File); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Name, b.Name)
+}
+
+// appSetFinalizerToObj emits one `(appset-finalizer-fact …)` row per
+// ApplicationSet. PreserveOnDeletion is projected to `preserve-yes` /
+// `preserve-no` symbols (never Shen booleans) so the Shen pattern match is a
+// plain symbol compare — uppercase identifiers are Shen variables, so every
+// discriminator stays lowercase-dashed. This matches the `ssa-yes`/`ssa-no`
+// convention already established by R22.
+func appSetFinalizerToObj(a types.ArgoApplicationSet) kl.Obj {
+	preserveSym := "preserve-no"
+	if a.SyncPolicy.PreserveResourcesOnDeletion {
+		preserveSym = "preserve-yes"
+	}
+	finalizers := make([]kl.Obj, 0, len(a.Template.Finalizers))
+	for _, f := range a.Template.Finalizers {
+		finalizers = append(finalizers, str(f))
+	}
+	return makeList([]kl.Obj{
+		sym("appset-finalizer-fact"),
+		str(a.Name),
+		makeList(finalizers),
+		sym(preserveSym),
+		sourceToObj(a.Source),
 	})
 }
 
@@ -943,6 +995,42 @@ func ssaMPConflictToObj(c types.SSAMPConflict) kl.Obj {
 		str(c.ResourceName),
 		str(c.ResourceNamespace),
 		sourceToObj(c.Source),
+	})
+}
+
+// cpDeletionPolicyCmp orders CPDeletionPolicyFacts deterministically so the
+// Shen `crossplane-deletion-policy-facts` section is stable across runs.
+func cpDeletionPolicyCmp(a, b types.CPDeletionPolicyFact) int {
+	if c := cmp.Compare(a.Group, b.Group); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Name, b.Name)
+}
+
+// cpDeletionPolicyToObj serializes one CPDeletionPolicyFact as the s-expression
+// Shen rule R23 expects to pattern-match. Bypass is projected to
+// `bypass-yes` / `bypass-no` symbols (never Shen booleans) so the pattern match
+// is a plain symbol compare — uppercase identifiers are Shen variables, so
+// every discriminator stays lowercase-dashed. Same convention as R22's
+// `ssa-yes`/`ssa-no` and R24's `preserve-yes`/`preserve-no`.
+func cpDeletionPolicyToObj(f types.CPDeletionPolicyFact) kl.Obj {
+	bypassSym := "bypass-no"
+	if f.Bypass {
+		bypassSym = "bypass-yes"
+	}
+	return makeList([]kl.Obj{
+		sym("cp-deletion-policy-fact"),
+		str(f.Group), str(f.Kind),
+		str(f.Name), str(f.Namespace),
+		str(f.DeletionPolicy),
+		sym(bypassSym),
+		sourceToObj(f.Source),
 	})
 }
 

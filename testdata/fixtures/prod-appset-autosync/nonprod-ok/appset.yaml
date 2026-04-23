@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: crossplane-platform-aws-staging
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: staging-us-east-1
+  template:
+    metadata:
+      name: '{{ .cluster }}-platform'
+    spec:
+      project: default
+      source:
+        repoURL: https://example.com/repo.git
+        path: ./platform/{{ .cluster }}
+        targetRevision: HEAD
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: crossplane-system
+      syncPolicy:
+        automated:
+          prune: true

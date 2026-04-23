@@ -1368,6 +1368,13 @@ func (b *Builder) addArgoApplicationSet(doc loader.LoadedDocument) error {
 		if tmpl := getMap(spec, "template"); tmpl != nil {
 			appSet.Template = b.parseAppSetTemplate(tmpl)
 		}
+
+		// Parse AppSet-level syncPolicy (distinct from template.spec.syncPolicy).
+		if sp := getMap(spec, "syncPolicy"); sp != nil {
+			if v, ok := sp["preserveResourcesOnDeletion"].(bool); ok {
+				appSet.SyncPolicy.PreserveResourcesOnDeletion = v
+			}
+		}
 	}
 
 	b.world.ArgoAppSets = append(b.world.ArgoAppSets, appSet)
@@ -1463,6 +1470,7 @@ func (b *Builder) parseAppSetTemplate(m map[string]interface{}) types.ArgoAppSet
 	if meta := getMap(m, "metadata"); meta != nil {
 		tmpl.Name, _ = meta["name"].(string)
 		tmpl.Namespace, _ = meta["namespace"].(string)
+		tmpl.Finalizers = getStringSlice(meta, "finalizers")
 	}
 
 	if spec := getMap(m, "spec"); spec != nil {

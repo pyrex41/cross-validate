@@ -583,6 +583,42 @@ func TestR21_LateInitDrift(t *testing.T) {
 	}
 }
 
+func TestR23_CrossplaneStateNeedsOrphan(t *testing.T) {
+	// Positive: rds.aws.upbound.io/Cluster with no deletionPolicy set.
+	// Crossplane default is Delete → fires.
+	world := loadFixture(t, "../../testdata/fixtures/crossplane-state-needs-orphan/positive")
+	diags := checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, "XPC.S.crossplane-state-needs-orphan")
+	if len(got) != 1 {
+		t.Fatalf("positive: expected 1 XPC.S.crossplane-state-needs-orphan, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "aurora-prod-cluster") {
+		t.Errorf("expected resource name in message, got %q", got[0].Message)
+	}
+
+	cases := []struct {
+		name    string
+		fixture string
+	}{
+		{"orphan-ok", "../../testdata/fixtures/crossplane-state-needs-orphan/orphan-ok"},
+		{"bypass-primary", "../../testdata/fixtures/crossplane-state-needs-orphan/bypass-primary"},
+		{"bypass-alias", "../../testdata/fixtures/crossplane-state-needs-orphan/bypass-alias"},
+		{"alb-logs-carveout", "../../testdata/fixtures/crossplane-state-needs-orphan/alb-logs-carveout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			world := loadFixture(t, tc.fixture)
+			diags := checkFixture(t, world, Config{})
+			if got := findDiagByCode(diags, "XPC.S.crossplane-state-needs-orphan"); len(got) != 0 {
+				t.Fatalf("%s: expected 0 diagnostics, got %d: %+v", tc.name, len(got), got)
+			}
+		})
+	}
+}
+
 // TestR18_CompositionRenders_AbsentBinary exercises the P3 composition-render
 // plumbing end-to-end in the "crossplane binary absent" case — which is the
 // default on most developer machines. The fixture contains an XRD,
@@ -605,6 +641,69 @@ func TestR18_CompositionRenders_AbsentBinary(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Message, "xbucket-default") {
 		t.Errorf("expected composition name in message, got %q", got[0].Message)
+	}
+}
+
+func TestR25_ProdAppSetAutosync(t *testing.T) {
+	// Positive: AppSet name `crossplane-platform-aws-prod` (matches `-prod`
+	// substring) AND template.spec.syncPolicy.automated set → fires.
+	world := loadFixture(t, "../../testdata/fixtures/prod-appset-autosync/positive")
+	diags := checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, "XPC.E.prod-appset-autosync")
+	if len(got) != 1 {
+		t.Fatalf("positive: expected 1 diagnostic, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "crossplane-platform-aws-prod") {
+		t.Errorf("expected AppSet name in message, got %q", got[0].Message)
+	}
+
+	// Negative: same prod-named AppSet but no automated block — silent.
+	world = loadFixture(t, "../../testdata/fixtures/prod-appset-autosync/manual-ok")
+	diags = checkFixture(t, world, Config{})
+	if gotOk := findDiagByCode(diags, "XPC.E.prod-appset-autosync"); len(gotOk) != 0 {
+		t.Fatalf("manual-ok: expected 0 diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+
+	// Negative: non-prod name with automated — silent (name pattern does not match).
+	world = loadFixture(t, "../../testdata/fixtures/prod-appset-autosync/nonprod-ok")
+	diags = checkFixture(t, world, Config{})
+	if gotOk := findDiagByCode(diags, "XPC.E.prod-appset-autosync"); len(gotOk) != 0 {
+		t.Fatalf("nonprod-ok: expected 0 diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+}
+
+func TestR24_AppSetFinalizerWithoutPreserve(t *testing.T) {
+	// Positive: AppSet bakes the ArgoCD cascading finalizer into its template
+	// and does NOT set spec.syncPolicy.preserveResourcesOnDeletion. This is the
+	// literal fg-synapse INC-6 trigger.
+	world := loadFixture(t, "../../testdata/fixtures/appset-finalizer-without-preserve")
+	diags := checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, "XPC.E.appset-finalizer-without-preserve")
+	if len(got) != 1 {
+		t.Fatalf("appset-finalizer-without-preserve: expected 1 diagnostic, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "crossplane-platform-aws-prod") {
+		t.Errorf("expected AppSet name in message, got %q", got[0].Message)
+	}
+
+	// Negative: finalizer present but preserveResourcesOnDeletion: true — silent.
+	world = loadFixture(t, "../../testdata/fixtures/appset-finalizer-with-preserve")
+	diags = checkFixture(t, world, Config{})
+	if gotOk := findDiagByCode(diags, "XPC.E.appset-finalizer-without-preserve"); len(gotOk) != 0 {
+		t.Fatalf("appset-finalizer-with-preserve: expected 0 diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+
+	// Negative: no finalizer on template — silent (no cascade in the first place).
+	world = loadFixture(t, "../../testdata/fixtures/appset-no-finalizer")
+	diags = checkFixture(t, world, Config{})
+	if gotOk := findDiagByCode(diags, "XPC.E.appset-finalizer-without-preserve"); len(gotOk) != 0 {
+		t.Fatalf("appset-no-finalizer: expected 0 diagnostics, got %d: %+v", len(gotOk), gotOk)
 	}
 }
 
