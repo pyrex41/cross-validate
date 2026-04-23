@@ -1,0 +1,61 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dangling-mount-cross-wave
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+# ConfigMap applied at wave 0, persistent (no hook-delete).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+data:
+  key: value
+---
+# Pod applied at wave 0 with a non-optional mount of the ConfigMap.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: consumer
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      volumeMounts:
+        - name: cfg
+          mountPath: /etc/cfg
+  volumes:
+    - name: cfg
+      configMap:
+        name: app-config
+---
+# The SAME ConfigMap re-asserted at wave 2 with a hook-delete-policy
+# annotation. The simulator processes this as create+delete at wave 2,
+# so the ConfigMap is absent from the wave-2 trajectory state while the
+# Pod (applied at wave 0, never deleted) is still present and still
+# mounts the ConfigMap -> XPC012 fires at step wave=2.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+data:
+  key: value

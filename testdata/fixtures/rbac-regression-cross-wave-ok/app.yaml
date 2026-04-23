@@ -1,0 +1,96 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rbac-regression-cross-wave-ok
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-role
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-binding
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-role
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker-pod
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceAccountName: worker
+  containers:
+    - name: app
+      image: busybox:1.36
+---
+# Binding hook-deleted at wave 3 AND the Pod is also hook-deleted at
+# wave 3: nothing dangling at step wave=3, silent fixture.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-binding
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-role
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker-pod
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  serviceAccountName: worker
+  containers:
+    - name: app
+      image: busybox:1.36

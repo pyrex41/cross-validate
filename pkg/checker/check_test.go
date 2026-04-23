@@ -338,6 +338,66 @@ func TestR14_RbacRegression(t *testing.T) {
 	}
 }
 
+// TestR12_DanglingMount_CrossWave_Positive — Pod at wave 0 mounts a
+// ConfigMap that is hook-deleted at wave 2. The cross-step rule must
+// fire on the wave-2 step where the ConfigMap is absent from the
+// trajectory state while the Pod is still present.
+func TestR12_DanglingMount_CrossWave_Positive(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/dangling-mount-cross-wave")
+	diags := checkFixture(t, world, Config{})
+
+	xpc012 := findDiagByCode(diags, "XPC012")
+	if len(xpc012) != 1 {
+		t.Fatalf("expected exactly 1 XPC012 error for cross-wave dangling mount, got %d: %+v",
+			len(xpc012), xpc012)
+	}
+	if xpc012[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc012[0].Severity)
+	}
+}
+
+// TestR12_DanglingMount_CrossWave_Ok — parallel fixture where the Pod
+// is also torn down at wave 2; nothing dangling at any step.
+func TestR12_DanglingMount_CrossWave_Ok(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/dangling-mount-cross-wave-ok")
+	diags := checkFixture(t, world, Config{})
+
+	xpc012 := findDiagByCode(diags, "XPC012")
+	if len(xpc012) != 0 {
+		t.Fatalf("expected no XPC012 errors in the silent cross-wave fixture, got %d: %+v",
+			len(xpc012), xpc012)
+	}
+}
+
+// TestR14_RbacRegression_CrossWave_Positive — Pod at wave 0 pins an SA
+// whose RoleBinding is hook-deleted at wave 3. The cross-step rule
+// must fire on a step where the binding is absent from state while the
+// Pod is still present.
+func TestR14_RbacRegression_CrossWave_Positive(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/rbac-regression-cross-wave")
+	diags := checkFixture(t, world, Config{})
+
+	xpc014 := findDiagByCode(diags, "XPC014")
+	if len(xpc014) == 0 {
+		t.Fatalf("expected at least 1 XPC014 error for cross-wave RBAC regression, got %+v", diags)
+	}
+	if xpc014[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc014[0].Severity)
+	}
+}
+
+// TestR14_RbacRegression_CrossWave_Ok — parallel silent fixture.
+func TestR14_RbacRegression_CrossWave_Ok(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/rbac-regression-cross-wave-ok")
+	diags := checkFixture(t, world, Config{})
+
+	xpc014 := findDiagByCode(diags, "XPC014")
+	if len(xpc014) != 0 {
+		t.Fatalf("expected no XPC014 errors in the silent cross-wave fixture, got %d: %+v",
+			len(xpc014), xpc014)
+	}
+}
+
 func TestR15_AppProjectWhitelist(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-miss")
 	diags := checkFixture(t, world, Config{})
