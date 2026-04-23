@@ -97,6 +97,7 @@ func Run(cfg Config) (*Plan, func(), error) {
 		Delta: Diff(baseResult.World, headResult.World),
 	}
 	plan.Diagnostics = R26DestructiveDelete(plan.Delta)
+	plan.Diagnostics = append(plan.Diagnostics, R27ImmutableChange(plan.Delta)...)
 	return plan, cleanup, nil
 }
 

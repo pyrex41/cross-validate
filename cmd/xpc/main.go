@@ -793,7 +793,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.S.crossplane-state-needs-orphan")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
 		return 1
 	}
 
@@ -1119,6 +1119,40 @@ Fix: one of (a) keep the resource on HEAD (revert the removal from the PR),
 cascade is non-destructive, (c) add annotation xpc.io/allow-delete=true to
 the base manifest (the bypass is recognized on either the primary or the
 policy.facilitygrid.io alias) if destruction is genuinely intended.`,
+
+	"XPC.P.immutable-change": `XPC.P.immutable-change: scalar-leaf immutable field changed across a plan
+
+Emitted only by 'xpc plan --base --head'. A resource present on both sides
+of the plan has a modified field whose (Group, Kind, FieldPath) is registered
+in xpc's immutable-field catalog (pkg/ir/immutable_registry.go). Applying the
+change will require the underlying system to destroy and recreate the object:
+for state-bearing Crossplane MRs this means DeleteCluster + CreateCluster /
+DeleteBucket + CreateBucket / etc., with attendant data loss.
+
+The registry is the source of truth for what counts as "immutable". It
+currently covers:
+
+  - Core K8s: Service clusterIP/type, PVC storageClassName/accessModes,
+    Job selector/template, StatefulSet serviceName/volumeClaimTemplates
+  - rds.aws.upbound.io/Cluster, ClusterInstance (Aurora)
+  - docdb.aws.upbound.io/Cluster, ClusterInstance (DocDB)
+  - s3.aws.upbound.io/Bucket (name, region, objectLockEnabled)
+  - kms.aws.upbound.io/Key (keyUsage, customerMasterKeySpec)
+  - ec2.aws.upbound.io/VPC (cidrBlock, instanceTenancy)
+  - mysql.sql.crossplane.io/Database (name)
+
+Scalar-leaf paths only — array-indexed and object-block paths are a P5 concern.
+
+Bypass: add annotation xpc.io/allow-immutable-change: "true" on the HEAD
+manifest. The bypass lives on the head side because the change author is
+the one consenting to the destructive reshape — base-side consent made
+sense for R26 (the resource is disappearing on head, so there is no head
+side), but here the mutator's intent is what matters.
+
+Fix: one of (a) revert the field change on HEAD, (b) recreate the resource
+under a new name/identity so the external system sees a create rather than
+an update, (c) add xpc.io/allow-immutable-change=true if the recreate is
+genuinely intended (and paired with the necessary data migration).`,
 
 	"XPC.P.cascade-risk": `XPC.P.cascade-risk: ArgoCD Application removal with cascading finalizer
 

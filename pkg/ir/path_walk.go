@@ -149,6 +149,42 @@ func walkSegments(segments []pathSegment, idx int, concretePath string, val inte
 	return walkSegments(segments, idx+1, sub, next)
 }
 
+// ReadPath resolves a dotted path against a raw YAML/JSON map and returns
+// the value at that location. Returns (nil, false) when any path segment is
+// missing or an intermediate segment is not a map.
+//
+// Unlike WalkPath, ReadPath is a single-result lookup: it takes only named
+// keys separated by "." and does NOT support array indexing or wildcards.
+// The final segment's value is returned verbatim (scalar, map, or slice).
+//
+// Used by R27 (XPC.P.immutable-change) for scalar-leaf registry lookups
+// against base/head raw maps.
+func ReadPath(raw map[string]interface{}, dottedPath string) (interface{}, bool) {
+	if raw == nil || dottedPath == "" {
+		return nil, false
+	}
+	segments := strings.Split(dottedPath, ".")
+	var cur interface{} = raw
+	for i, seg := range segments {
+		if seg == "" {
+			return nil, false
+		}
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		next, present := m[seg]
+		if !present {
+			return nil, false
+		}
+		if i == len(segments)-1 {
+			return next, true
+		}
+		cur = next
+	}
+	return nil, false
+}
+
 // errInvalidPath is a sentinel used to signal malformed path expressions;
 // callers treat it as "no hits" rather than propagating.
 var errInvalidPath = &pathError{"invalid path"}

@@ -1,0 +1,14 @@
+apiVersion: rds.aws.upbound.io/v1beta1
+kind: Cluster
+metadata:
+  name: aurora-immutable-bypass
+  namespace: crossplane-system
+  annotations:
+    xpc.io/allow-immutable-change: "true"
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    region: us-east-1
+    engine: mysql
+    databaseName: app
+    backupRetentionPeriod: 7

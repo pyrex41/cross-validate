@@ -154,3 +154,70 @@ func TestWalkPath_NestedArraysAndMaps(t *testing.T) {
 		t.Errorf("unexpected hit[1] path: %q", hits[1].Path)
 	}
 }
+
+func TestReadPath_Scalar(t *testing.T) {
+	raw := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"forProvider": map[string]interface{}{
+				"engine": "aurora-postgresql",
+			},
+		},
+	}
+	v, ok := ReadPath(raw, "spec.forProvider.engine")
+	if !ok {
+		t.Fatalf("expected hit, got none")
+	}
+	if v != "aurora-postgresql" {
+		t.Errorf("expected aurora-postgresql, got %v", v)
+	}
+}
+
+func TestReadPath_Missing(t *testing.T) {
+	raw := map[string]interface{}{
+		"spec": map[string]interface{}{},
+	}
+	if _, ok := ReadPath(raw, "spec.forProvider.engine"); ok {
+		t.Errorf("expected no hit for missing intermediate segment")
+	}
+	if _, ok := ReadPath(raw, "spec.engine"); ok {
+		t.Errorf("expected no hit for missing final segment")
+	}
+}
+
+func TestReadPath_IntermediateNotMap(t *testing.T) {
+	raw := map[string]interface{}{
+		"spec": "scalar-at-intermediate",
+	}
+	if _, ok := ReadPath(raw, "spec.forProvider"); ok {
+		t.Errorf("expected no hit when intermediate is not a map")
+	}
+}
+
+func TestReadPath_ReturnsMap(t *testing.T) {
+	inner := map[string]interface{}{"nested": "val"}
+	raw := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"block": inner,
+		},
+	}
+	v, ok := ReadPath(raw, "spec.block")
+	if !ok {
+		t.Fatalf("expected hit for sub-map lookup")
+	}
+	m, isMap := v.(map[string]interface{})
+	if !isMap {
+		t.Fatalf("expected map value, got %T", v)
+	}
+	if m["nested"] != "val" {
+		t.Errorf("expected nested=val, got %v", m["nested"])
+	}
+}
+
+func TestReadPath_EmptyInputs(t *testing.T) {
+	if _, ok := ReadPath(nil, "spec"); ok {
+		t.Errorf("expected no hit for nil map")
+	}
+	if _, ok := ReadPath(map[string]interface{}{"a": 1}, ""); ok {
+		t.Errorf("expected no hit for empty path")
+	}
+}

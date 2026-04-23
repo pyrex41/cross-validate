@@ -1,0 +1,12 @@
+apiVersion: rds.aws.upbound.io/v1beta1
+kind: Cluster
+metadata:
+  name: aurora-immutable-bypass
+  namespace: crossplane-system
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    region: us-east-1
+    engine: aurora-postgresql
+    databaseName: app
+    backupRetentionPeriod: 7
