@@ -107,25 +107,54 @@ func initShen(kernelPath string) error {
 	return shenErr
 }
 
+// executablePath is overridable in tests; defaults to os.Executable.
+var executablePath = os.Executable
+
 // resolveKernelPath finds the kernel directory. Explicit paths are honoured
 // as-is; empty paths are resolved by walking upwards from cwd looking for a
-// "kernel" directory containing check.shen.
+// "kernel" directory containing check.shen. If that fails, the search is
+// repeated from the directory containing the running xpc executable, which
+// lets `xpc check` and `xpc plan` work when invoked from a worktree or any
+// other directory outside the cross-validate repo.
 func resolveKernelPath(p string) (string, error) {
 	if p != "" {
 		return p, nil
 	}
-	dir, err := os.Getwd()
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
+	if found, ok := searchKernelUpward(cwd); ok {
+		return found, nil
+	}
+	// Fallback: search upward from the xpc executable's own directory.
+	// Covers the "run from arbitrary cwd" case (plan worktree, `go install`
+	// placed binary, invocation from a sibling repo) where the CWD-based
+	// search finds nothing but the binary still sits above a kernel/ tree.
+	if exe, exeErr := executablePath(); exeErr == nil {
+		if resolved, rlErr := filepath.EvalSymlinks(exe); rlErr == nil {
+			exe = resolved
+		}
+		if found, ok := searchKernelUpward(filepath.Dir(exe)); ok {
+			return found, nil
+		}
+	}
+	return "", fmt.Errorf("could not locate kernel directory (searched upwards from %s and from the xpc executable location)", cwd)
+}
+
+// searchKernelUpward walks upward from start looking for a directory
+// containing kernel/check.shen. Returns (kernelDir, true) on success, empty
+// + false if the root is reached without a match.
+func searchKernelUpward(start string) (string, bool) {
+	dir := start
 	for {
 		candidate := filepath.Join(dir, "kernel", "check.shen")
 		if _, err := os.Stat(candidate); err == nil {
-			return filepath.Join(dir, "kernel"), nil
+			return filepath.Join(dir, "kernel"), true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("could not locate kernel directory (searched upwards from %s)", dir)
+			return "", false
 		}
 		dir = parent
 	}
