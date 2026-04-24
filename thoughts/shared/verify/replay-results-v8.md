@@ -2,7 +2,7 @@
 title: fg-manifold replay v8 — after P5 (R12-cross dedup + kernel-path fallback)
 date: 2026-04-24
 author: Reuben / Claude
-binary: /tmp/xpc-replay/xpc built from claude/build-xpc-type-checker-TfgsT @ 27916ac
+binary: /tmp/xpc-replay/xpc built from claude/build-xpc-type-checker-TfgsT @ c7434da
 predecessor: replay-results-v7.md
 ---
 
@@ -13,8 +13,10 @@ on every tip, matching v7's enumerated (owner, target) tuple set exactly.
 P5.c's kernel-path fallback removes the need for `--kernel-path` when the
 xpc binary sits above a `kernel/` tree — verified via a sibling kernel at
 `/tmp/xpc-replay/kernel`. Every other rule count is line-for-line identical
-to v7. R12 is now production-gatable; P5.d (externally-managed secret
-filter) stays optional.
+to v7 — P5.e's Role-namespace fact-extension (landed between the handoff
+and replay) is implicitly validated as a non-regression since R14-cross
+emits zero on this dataset before and after. R12 is now production-gatable;
+P5.d (externally-managed secret filter) stays optional.
 
 ## Run matrix
 
