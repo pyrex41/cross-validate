@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dangling-mount-dedup
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+# Pod applied at wave 0 with a non-optional mount of an absent
+# ConfigMap. The Pod is never deleted and therefore persists across
+# every trajectory step.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: consumer
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      volumeMounts:
+        - name: cfg
+          mountPath: /etc/cfg
+  volumes:
+    - name: cfg
+      configMap:
+        name: missing-config
+---
+# Unrelated resource applied at wave 2 so the trajectory contains
+# multiple steps where the Pod is present and the ConfigMap is absent.
+# Pre-dedup R12-cross would emit one XPC012 per such step. Post-dedup
+# must emit exactly one per (owner, target) tuple regardless of how
+# many waves the Pod spans.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unrelated-config
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+data:
+  key: value
+---
+# Another unrelated resource at wave 4 to extend the trajectory a
+# third step, proving the dedup keeps emissions at 1 regardless of
+# how many waves the Pod survives through.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: other-config
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+data:
+  key: value

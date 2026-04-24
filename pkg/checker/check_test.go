@@ -382,6 +382,28 @@ func TestR12_DanglingMount_CrossWave_Ok(t *testing.T) {
 	}
 }
 
+// TestR12_DanglingMount_Dedup — Pod applied at wave 0 mounts an absent
+// ConfigMap and survives into later-wave trajectory steps. Pre-dedup
+// the cross-step rule fires once per step where the Pod is present and
+// the target is absent; post-dedup it fires exactly once per distinct
+// (owner-kind, owner-name, target-kind, target-name) tuple regardless
+// of how many steps witness the violation. Pins the invariant fixed
+// by P5.a after the v7 replay revealed ~300x amplification on
+// fg-manifold tips.
+func TestR12_DanglingMount_Dedup(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/dangling-mount-dedup")
+	diags := checkFixture(t, world, Config{})
+
+	xpc012 := findDiagByCode(diags, "XPC012")
+	if len(xpc012) != 1 {
+		t.Fatalf("expected exactly 1 XPC012 error after dedup across multiple waves, got %d: %+v",
+			len(xpc012), xpc012)
+	}
+	if xpc012[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc012[0].Severity)
+	}
+}
+
 // TestR14_RbacRegression_CrossWave_Positive — Pod at wave 0 pins an SA
 // whose RoleBinding is hook-deleted at wave 3. The cross-step rule
 // must fire on a step where the binding is absent from state while the
