@@ -211,13 +211,3 @@
   _ _ _ [] -> false
   Kind Name Ns [[resource-key _ Kind Ns Name] | _] -> true
   Kind Name Ns [_ | Rest] -> (key-in? Kind Name Ns Rest))
-
-\* tail-steps — given a reference (AppName, Wave) and the full trajectory
-   step list, return the sublist of later steps (strictly greater Wave)
-   that belong to the same AppName. Used by cross-step rules that need
-   to reason about later trajectory states for the same Argo Application. *\
-(define tail-steps
-  {string --> number --> (list (list A)) --> (list (list A))}
-  _ _ [] -> []
-  App W [[step App W2 D St] | Rest] -> [[step App W2 D St] | (tail-steps App W Rest)] where (> W2 W)
-  App W [_ | Rest] -> (tail-steps App W Rest))
