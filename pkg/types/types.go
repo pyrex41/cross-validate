@@ -669,7 +669,19 @@ type RBACBinding struct {
 	SubjectNamespace string         `json:"subjectNamespace,omitempty"`
 	RoleKind         string         `json:"roleKind"` // Role | ClusterRole
 	RoleName         string         `json:"roleName"`
-	Source           SourceLocation `json:"source"`
+	// RoleNamespace is the namespace of the Role the RoleRef targets. The
+	// correct value depends on the (BindingKind, RoleKind) pair per
+	// Kubernetes semantics:
+	//   - ClusterRoleBinding (RoleRef.kind must be ClusterRole): cluster-
+	//     scoped, RoleNamespace is "".
+	//   - RoleBinding + RoleRef.kind=Role: the Role lives in the binding's
+	//     own namespace, so RoleNamespace == BindingNamespace.
+	//   - RoleBinding + RoleRef.kind=ClusterRole: the ClusterRole is still
+	//     cluster-scoped, so RoleNamespace is "".
+	// Callers that key Role lookups on (RoleKind, RoleName, RoleNamespace)
+	// must honor these cases or namespaced Roles will not be found.
+	RoleNamespace string         `json:"roleNamespace,omitempty"`
+	Source        SourceLocation `json:"source"`
 }
 
 // RBACRule is a single (verbs, resources, apiGroups) entry inside a Role / ClusterRole.

@@ -433,6 +433,27 @@ func TestR14_RbacRegression_CrossWave_Ok(t *testing.T) {
 	}
 }
 
+// TestR14_RbacRegression_RoleDelete — the P5.e invariant: a live
+// RoleBinding whose referenced Role is hook-deleted in a later wave
+// must still fire XPC014. Pre-P5.e the rbac-binding-fact schema didn't
+// carry the Role's namespace so the cross-step rule's binding-live?
+// couldn't accurately look up namespaced Roles and shipped with a
+// conservative binding-only check. With the Role-ns slot, binding-live?
+// is tightened to require both binding AND Role in State.
+func TestR14_RbacRegression_RoleDelete(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/rbac-regression-role-delete")
+	diags := checkFixture(t, world, Config{})
+
+	xpc014 := findDiagByCode(diags, "XPC014")
+	if len(xpc014) != 1 {
+		t.Fatalf("expected exactly 1 XPC014 error for role-delete fixture, got %d: %+v",
+			len(xpc014), xpc014)
+	}
+	if xpc014[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", xpc014[0].Severity)
+	}
+}
+
 func TestR15_AppProjectWhitelist(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-miss")
 	diags := checkFixture(t, world, Config{})

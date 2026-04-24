@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: rbac-regression
+  name: rbac-regression-role-delete
   namespace: argocd
 spec:
   project: default
@@ -13,6 +13,16 @@ spec:
     server: https://kubernetes.default.svc
     namespace: default
 ---
+# Role + RoleBinding + Pod all applied at wave 0. The RoleBinding
+# SURVIVES into later waves — the cross-step rule cannot rely on
+# binding-absent to fire here. What kills RBAC at wave 3 is a
+# hook-deleted Role re-assertion: the Role goes away mid-sync, so the
+# tightened binding-live? (which now requires BOTH binding AND Role in
+# State) returns false, and XPC014 fires. This exercises exactly the
+# P4.c gap documented in feedback_kernel_fact_schema_completeness.md —
+# the conservative binding-live? (binding-only) could not catch a Role
+# hook-deleted under a live binding. The P5.e fact-schema extension
+# carries the Role's namespace so the Role key lookup hits.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,11 +31,6 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 ---
-# Role lives in the binding's namespace. P5.e tightened check-r14-cross
-# to require both the binding AND its referenced Role to be present in
-# the step's State, so the Role must actually be declared for the
-# fixture's "hook-delete of binding fires XPC014" invariant to hold
-# independently of the role-absent coincidence.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -38,7 +43,6 @@ rules:
     resources: ["configmaps"]
     verbs: ["get", "list"]
 ---
-# RoleBinding is annotated as a hook that gets deleted at end of wave 0.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -46,7 +50,6 @@ metadata:
   namespace: default
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    argocd.argoproj.io/hook-delete-policy: HookSucceeded
 subjects:
   - kind: ServiceAccount
     name: worker
@@ -56,8 +59,6 @@ roleRef:
   kind: Role
   name: worker-role
 ---
-# Pod pins the ServiceAccount. Once the binding is pruned, the workload
-# loses its RBAC permissions → XPC014.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -70,3 +71,19 @@ spec:
   containers:
     - name: app
       image: busybox:1.36
+---
+# The SAME Role re-asserted at wave 3 with hook-delete-policy. At
+# step wave=3 the Role is absent from trajectory state but the Pod
+# (and the RoleBinding referencing it) are still present → XPC014.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-role
+  namespace: default
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]

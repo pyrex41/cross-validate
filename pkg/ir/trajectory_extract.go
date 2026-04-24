@@ -422,6 +422,17 @@ func extractRBACBinding(w *types.World, res types.ResourceInfo) {
 	if roleKind == "" || roleName == "" {
 		return
 	}
+	// Resolve the Role's namespace per Kubernetes RBAC semantics:
+	//   - ClusterRoleBinding → RoleRef must target a ClusterRole (cluster-
+	//     scoped) → empty namespace.
+	//   - RoleBinding + RoleRef.kind=Role → Role lives in the binding's
+	//     own namespace.
+	//   - RoleBinding + RoleRef.kind=ClusterRole → ClusterRole is still
+	//     cluster-scoped → empty namespace.
+	roleNs := ""
+	if res.Kind == "RoleBinding" && roleKind == "Role" {
+		roleNs = res.Namespace
+	}
 	for _, s := range getSlice(res.Raw, "subjects") {
 		sm, ok := s.(map[string]interface{})
 		if !ok {
@@ -442,6 +453,7 @@ func extractRBACBinding(w *types.World, res types.ResourceInfo) {
 			SubjectNamespace: subjNs,
 			RoleKind:         roleKind,
 			RoleName:         roleName,
+			RoleNamespace:    roleNs,
 			Source:           res.Source,
 		})
 	}

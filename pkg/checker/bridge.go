@@ -754,11 +754,14 @@ func saRefToObj(s types.SARef) kl.Obj {
 }
 
 func rbacBindingToObj(b types.RBACBinding) kl.Obj {
+	// NOTE: RoleNamespace is emitted as a trailing positional slot, AFTER
+	// RoleName and BEFORE source. Every Shen pattern matching on
+	// `rbac-binding-fact` in kernel/ must be updated in lockstep.
 	return makeList([]kl.Obj{
 		sym("rbac-binding-fact"),
 		str(b.BindingKind), str(b.BindingName), str(b.BindingNamespace),
 		str(b.SubjectKind), str(b.SubjectName), str(b.SubjectNamespace),
-		str(b.RoleKind), str(b.RoleName),
+		str(b.RoleKind), str(b.RoleName), str(b.RoleNamespace),
 		sourceToObj(b.Source),
 	})
 }

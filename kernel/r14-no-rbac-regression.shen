@@ -35,9 +35,9 @@
 
 (define check-r14-binding
   {(list A) --> (list (list A)) --> string --> string --> source-loc --> (list judgment)}
-  [rbac-binding-fact BKind BName BNs _ _ _ RoleKind RoleName BSrc] Deleted OK ON Src ->
+  [rbac-binding-fact BKind BName BNs _ _ _ RoleKind RoleName RoleNs BSrc] Deleted OK ON Src ->
     (if (or (key-in? BKind BName BNs Deleted)
-            (key-in? RoleKind RoleName "" Deleted))
+            (key-in? RoleKind RoleName RoleNs Deleted))
         [(make-error "XPC014"
           Src
           (cn "RBAC regression: " (cn BKind (cn "/" (cn BName
@@ -54,7 +54,7 @@
 
 (define binding-uses-sa?
   {(list A) --> string --> string --> boolean}
-  [rbac-binding-fact _ _ _ "ServiceAccount" SAName SANs _ _ _] SAName SANs -> true
+  [rbac-binding-fact _ _ _ "ServiceAccount" SAName SANs _ _ _ _] SAName SANs -> true
   _ _ _ -> false)
 
 
@@ -103,15 +103,23 @@
                           (any-binding-live? Rest State)))
 
 
-\* binding-live? — the binding key is present in the step's State. We
-   intentionally do NOT check the Role key because the binding fact
-   schema does not carry the Role's namespace, so a namespaced Role
-   cannot be looked up accurately. This keeps the rule conservative:
-   if any binding for the SA is in State, we treat the SA as covered. *\
+\* binding-live? — tightened in P5.e: a binding is live only if BOTH
+   the binding itself AND the Role it references are present in the
+   step's State. The rbac-binding-fact now carries the Role's
+   namespace (RoleNs) per the bridge schema, resolved by the IR
+   extractor per Kubernetes semantics:
+     - ClusterRoleBinding → RoleRef must target a ClusterRole (cluster-
+       scoped), RoleNs = "".
+     - RoleBinding + RoleRef.kind=Role → RoleNs = binding's own ns.
+     - RoleBinding + RoleRef.kind=ClusterRole → RoleNs = "" (cluster-
+       scoped ClusterRole).
+   Lookup by (RoleKind, RoleName, RoleNs) is now accurate for both
+   namespaced Roles and cluster-scoped (Cluster)Roles. *\
 (define binding-live?
   {(list A) --> (list (list A)) --> boolean}
-  [rbac-binding-fact BKind BName BNs _ _ _ _ _ _] State ->
-    (key-in? BKind BName BNs State)
+  [rbac-binding-fact BKind BName BNs _ _ _ RoleKind RoleName RoleNs _] State ->
+    (and (key-in? BKind BName BNs State)
+         (key-in? RoleKind RoleName RoleNs State))
   _ _ -> false)
 
 
@@ -127,7 +135,7 @@
 
 (define check-r14-cross-binding
   {(list A) --> string --> string --> source-loc --> (list judgment)}
-  [rbac-binding-fact BKind BName BNs _ _ _ RoleKind RoleName BSrc] OK ON Src ->
+  [rbac-binding-fact BKind BName BNs _ _ _ RoleKind RoleName _ BSrc] OK ON Src ->
     [(make-error "XPC014"
       Src
       (cn "RBAC regression: " (cn BKind (cn "/" (cn BName
