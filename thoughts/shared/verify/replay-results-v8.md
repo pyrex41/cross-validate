@@ -132,5 +132,13 @@ preserve the kernel-next-to-binary layout.
   v8 runs hit the same code path as v7 (XPC.H.composition-renders = 10).
 - Binary distribution in a CI runner — see *Deployment note*. v8 confirms
   the local fallback logic, not the CI-packaging story.
-- R12 behaviour against a trajectory that includes SealedSecrets /
-  External Secrets CRDs (fg-manifold's state doesn't include them).
+- R12 behaviour against an xpc *trajectory* that knows about SealedSecrets
+  / External Secrets CRDs. Note: fg-manifold's `deploy/` tree DOES contain
+  these CRDs (65 `ExternalSecret`, 2 `ClusterSecretStore`, 3 `PushSecret`,
+  0 `SealedSecret` as of 2026-04-25); the gap is that xpc's IR has no
+  special-case extractor for them, so they are loaded as opaque docs
+  rather than producing facts the kernel can match against. Earlier
+  drafts of this doc and `thoughts/shared/design/p5d-externally-managed-secrets.md`
+  conflated "absent from xpc's trajectory facts" with "absent from
+  fg-manifold's manifests" — they are not absent; they are just unseen
+  by R12 today.

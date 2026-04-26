@@ -289,3 +289,65 @@ sit behind a trigger ("tuple count or second consumer").
    are — or could easily be included — then (b)'s cost estimate is
    tighter than I've written it here, and the recommendation should
    be revisited.
+
+## Addendum 2026-04-25 — Q3 resolved; "manual provision" claims corrected
+
+A grep of `~/fg/fg-manifold/deploy/` confirms the CRDs ARE present in
+fg-manifold's manifest tree:
+
+```
+65  kind: ExternalSecret
+ 3  kind: PushSecret
+ 2  kind: ClusterSecretStore
+ 0  kind: SealedSecret
+```
+
+This invalidates two load-bearing claims in the body above:
+
+1. **§Context (lines 19-22) and §Option (a) False-positive risk (lines
+   118-129) and §Recommendation (lines 213-218)** all assert that
+   gitlab/khoj/fg-claude-bot/usertour are "manually provisioned" with no
+   CRD to key off. **They are not manually provisioned.** Cross-referencing
+   against the v8 tuple list:
+
+   | tuple | actual source |
+   |-------|---------------|
+   | Secret fg-claude-bot-secrets → fg-claude-bot | `deploy/.../fg-claude-bot/.../externalsecret.yaml` (ESO) |
+   | Secret khoj-secrets → khoj | `deploy/.../khoj/.../externalsecret.yaml` (ESO) |
+   | Secret gitlab-secrets → gitlab | `deploy/.../gitlab/.../externalsecret.yaml` (ESO) |
+   | Secret gitlab-ssh-host-keys → gitlab | `deploy/.../gitlab/.../externalsecret-ssh-host-keys.yaml` (ESO) |
+
+   Per-tuple confirmation of the remaining 8 (oneuptime/twilio-shim-ca,
+   migration-dump's three Secrets, pool-seed, myanon-config, usertour) is
+   pending a one-time grep against each app's manifest dir.
+
+2. **§Current code: what xpc ingests today (line 71): "None."** is correct
+   for cross-validate's IR, but the section conflates that with
+   "fg-manifold doesn't have the CRDs," which is wrong. xpc's IR doesn't
+   *extract facts from* the CRDs; the CRDs are loaded as opaque docs.
+
+## Implications for the recommendation
+
+- **Option (b) is genuinely viable, not blocked.** The fact-extraction
+  primitive (P5.d.4 in the body's plan) has a clean target: walk
+  `World.Resources` for `kind: ExternalSecret`, pull `spec.target.name`
+  (or fall back to `metadata.name`), index by `(namespace, target-name)`,
+  expose as a `World.ExternalSecretFacts` field. ~80 LOC.
+- **Option (a) is still rejected** — pattern-based silencing is still the
+  wrong shape per v8's note about hiding legitimate drift.
+- **Option (c) is still the right move now.** Decision (settled
+  2026-04-25): keep the wrapper-filter approach in fg-manifold's GitLab
+  CI. Stability of the 12-tuple list across replays v6→v7→v8 (~2 weeks)
+  was the deciding factor, not viability of (b).
+- **Option (b) moves from "shelved indefinitely" to "shelved as a real
+  follow-up."** Triggers: tuple count grows past ~30, or a second
+  consumer beyond fg-manifold appears, or a sibling rule (ESO
+  SecretStore scoping, namespace-mismatch detection) wants the same
+  facts and amortises the extractor cost.
+
+## What didn't change
+
+- The recommendation (option c).
+- The implementation plan (P5.d.1–.5).
+- The relative cost ordering: (c) ≪ (b) ≪ (a) in false-positive risk; (c)
+  cheapest to implement now.
