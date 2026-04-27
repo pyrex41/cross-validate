@@ -98,6 +98,9 @@ func jsonChangeFromDiagnostic(delta ResourceDelta, d types.Diagnostic) jsonChang
 }
 
 func findChangeBySource(delta ResourceDelta, src types.SourceLocation) (ResourceChange, bool) {
+	if src == (types.SourceLocation{}) {
+		return ResourceChange{}, false
+	}
 	for _, c := range delta.Removed {
 		if c.BaseSource == src || c.HeadSource == src {
 			return c, true

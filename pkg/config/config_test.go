@@ -230,6 +230,9 @@ immutable-fields:
 	if err == nil {
 		t.Fatal("expected error on suppress entry with no paths")
 	}
+	if !strings.Contains(err.Error(), "suppress entries must list the specific field paths") {
+		t.Fatalf("expected suppress migration hint, got %v", err)
+	}
 }
 
 func TestParse_ImmutableFields_RejectsAmbiguousTwoSegmentGVK(t *testing.T) {
@@ -241,6 +244,16 @@ immutable-fields:
 `))
 	if err == nil {
 		t.Fatal("expected error on ambiguous two-segment grouped GVK")
+	}
+
+	_, err = config.Parse([]byte(`
+version: 1
+immutable-fields:
+  - gvk: v2ray/Widget
+    paths: [spec.id]
+`))
+	if err == nil {
+		t.Fatal("expected group names starting with v+digit to remain ambiguous")
 	}
 
 	cfg, err := config.Parse([]byte(`
@@ -255,6 +268,16 @@ immutable-fields:
 	got := config.ResolveImmutableFields(cfg, nil)
 	if len(got) != 1 || got[0].Group != "" || got[0].Kind != "ConfigMap" {
 		t.Fatalf("unexpected core GVK resolution: %+v", got)
+	}
+
+	cfg, err = config.Parse([]byte(`
+version: 1
+immutable-fields:
+  - gvk: v1beta1/ConfigMap
+    paths: [metadata.name]
+`))
+	if err != nil {
+		t.Fatalf("expected core API prerelease version GVK to remain accepted: %v", err)
 	}
 }
 

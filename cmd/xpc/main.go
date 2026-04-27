@@ -660,7 +660,7 @@ func runBisect(args []string) int {
 		"error: xpc bisect is not implemented yet (requested rule %s, good %s, bad %s)\n",
 		ruleCode, goodRef, badRef)
 	fmt.Fprintln(os.Stderr, "use xpc check or xpc plan directly while bisect remains experimental")
-	return 2
+	return 1
 }
 
 func runPlan(args []string) int {

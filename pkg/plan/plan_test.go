@@ -174,3 +174,40 @@ func TestPlan_WriteJSON(t *testing.T) {
 		t.Errorf("expected code/message metadata, got %v", row)
 	}
 }
+
+func TestPlan_WriteJSON_DoesNotJoinZeroSource(t *testing.T) {
+	p := &plan.Plan{
+		Base: plan.VariantResult{Ref: "base"},
+		Head: plan.VariantResult{Ref: "head"},
+		Delta: plan.ResourceDelta{
+			Removed: []plan.ResourceChange{{
+				Identity: plan.ResourceIdentity{
+					APIVersion: "example.com/v1",
+					Kind:       "Widget",
+					Name:       "removed",
+				},
+				BaseSource: types.SourceLocation{File: "base.yaml", Line: 1, Column: 1},
+			}},
+		},
+		Diagnostics: []types.Diagnostic{{
+			Code:     "XPC.P.future-rule",
+			Severity: types.SeverityError,
+			Message:  "future rule forgot to set source",
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := plan.WriteJSON(&buf, p); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("produced invalid JSON: %v\n%s", err, buf.String())
+	}
+	destructive := parsed["destructive"].([]interface{})
+	row := destructive[0].(map[string]interface{})
+	if row["apiVersion"] != "" || row["kind"] != "" || row["name"] != "" {
+		t.Fatalf("zero source should not join to removed resource with empty HeadSource: %v", row)
+	}
+}

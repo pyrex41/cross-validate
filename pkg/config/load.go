@@ -116,7 +116,7 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("immutable-fields[%d]: gvk is required", i)
 		}
 		if len(entry.Paths) == 0 {
-			return fmt.Errorf("immutable-fields[%d] (%s): paths is required",
+			return fmt.Errorf("immutable-fields[%d] (%s): paths is required (suppress entries must list the specific field paths to remove)",
 				i, entry.GVK)
 		}
 		// gvk must split into 1, 2, or 3 parts; nothing weirder.
@@ -151,13 +151,33 @@ func validate(cfg *Config) error {
 }
 
 func looksLikeVersion(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
+	if len(s) < 2 || s[0] != 'v' || !isDigit(s[1]) {
 		return false
 	}
-	for _, r := range s[1:] {
-		if r >= '0' && r <= '9' {
+	i := 2
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+	if i == len(s) {
+		return true
+	}
+	for _, suffix := range []string{"alpha", "beta"} {
+		if strings.HasPrefix(s[i:], suffix) {
+			j := i + len(suffix)
+			if j == len(s) {
+				return false
+			}
+			for ; j < len(s); j++ {
+				if !isDigit(s[j]) {
+					return false
+				}
+			}
 			return true
 		}
 	}
 	return false
+}
+
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
