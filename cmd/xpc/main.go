@@ -212,7 +212,11 @@ func runCheck(args []string) int {
 	// Resolve user config (xpc.yaml). Precedence: --config > XPC_CONFIG_PATH
 	// > discovery from cwd > Default(). An exe-dir fallback emits one stderr
 	// line so the lookup isn't silent — same shape as kernel-path discovery.
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving current directory: %v\n", err)
+		return 1
+	}
 	cfg, cfgPath, viaExe, err := config.Resolve(configPath, "", cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading xpc.yaml: %v\n", err)
@@ -272,6 +276,8 @@ func runCheck(args []string) int {
 		return 1
 	}
 
+	var loadedSnapshot *snapshot.Snapshot
+
 	// If a snapshot is provided, merge its type environment into the world
 	if snapshotPath != "" {
 		snap, err := snapshot.Load(snapshotPath)
@@ -283,6 +289,7 @@ func runCheck(args []string) int {
 			fmt.Fprintln(os.Stderr, "warning: snapshot is stale (older than 15 minutes)")
 		}
 		mergeSnapshotIntoWorld(world, snap)
+		loadedSnapshot = snap
 	}
 
 	// Run checker
@@ -345,11 +352,8 @@ func runCheck(args []string) int {
 	if generateProof {
 		irDigest := ir.DigestWorld(world)
 		snapDigest := ""
-		if snapshotPath != "" {
-			snap, _ := snapshot.Load(snapshotPath)
-			if snap != nil {
-				snapDigest = snap.Digest
-			}
+		if loadedSnapshot != nil {
+			snapDigest = loadedSnapshot.Digest
 		}
 
 		summary := &audit.RunSummary{
@@ -358,7 +362,12 @@ func runCheck(args []string) int {
 			Violated:         result.Violated,
 			ObligationIDs:    result.ObligationIDs,
 		}
-		p := audit.Generate(diags, summary, irDigest, snapDigest)
+		rulesetDigest, digestErr := audit.ComputeRulesetDigest(kernelPath)
+		if digestErr != nil {
+			fmt.Fprintf(os.Stderr, "error computing ruleset digest: %v\n", digestErr)
+			return 1
+		}
+		p := audit.GenerateWithRulesetDigest(diags, summary, irDigest, snapDigest, rulesetDigest)
 		proofPath := "check.xpcproof"
 		if err := p.Save(proofPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving proof: %v\n", err)
@@ -647,17 +656,11 @@ func runBisect(args []string) int {
 		return 1
 	}
 
-	fmt.Printf("xpc bisect --rule %s --good %s --bad %s\n", ruleCode, goodRef, badRef)
-	fmt.Println("  bisecting commits...")
-	fmt.Println()
-	fmt.Printf("  Note: bisect requires a git repository and runs xpc check at each commit.\n")
-	fmt.Printf("  This feature will perform the following:\n")
-	fmt.Printf("    1. List commits between %s and %s\n", goodRef, badRef)
-	fmt.Printf("    2. Binary search for the first commit where rule %s is violated\n", ruleCode)
-	fmt.Printf("    3. Report the introducing commit with full context\n")
-	fmt.Println()
-	fmt.Println("  Run 'xpc bisect' in a git repository to use this feature.")
-	return 0
+	fmt.Fprintf(os.Stderr,
+		"error: xpc bisect is not implemented yet (requested rule %s, good %s, bad %s)\n",
+		ruleCode, goodRef, badRef)
+	fmt.Fprintln(os.Stderr, "use xpc check or xpc plan directly while bisect remains experimental")
+	return 2
 }
 
 func runPlan(args []string) int {

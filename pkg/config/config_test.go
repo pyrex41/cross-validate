@@ -220,6 +220,44 @@ immutable-fields:
 	}
 }
 
+func TestParse_ImmutableFields_RejectsSuppressWithoutPaths(t *testing.T) {
+	_, err := config.Parse([]byte(`
+version: 1
+immutable-fields:
+  - gvk: apps/v1/StatefulSet
+    suppress: true
+`))
+	if err == nil {
+		t.Fatal("expected error on suppress entry with no paths")
+	}
+}
+
+func TestParse_ImmutableFields_RejectsAmbiguousTwoSegmentGVK(t *testing.T) {
+	_, err := config.Parse([]byte(`
+version: 1
+immutable-fields:
+  - gvk: apps/StatefulSet
+    paths: [spec.serviceName]
+`))
+	if err == nil {
+		t.Fatal("expected error on ambiguous two-segment grouped GVK")
+	}
+
+	cfg, err := config.Parse([]byte(`
+version: 1
+immutable-fields:
+  - gvk: v1/ConfigMap
+    paths: [metadata.name]
+`))
+	if err != nil {
+		t.Fatalf("expected core API two-segment GVK to remain accepted: %v", err)
+	}
+	got := config.ResolveImmutableFields(cfg, nil)
+	if len(got) != 1 || got[0].Group != "" || got[0].Kind != "ConfigMap" {
+		t.Fatalf("unexpected core GVK resolution: %+v", got)
+	}
+}
+
 func TestParse_UnknownNestedKey_IsError(t *testing.T) {
 	// Strict-decode rejects unknown keys inside known sections so users
 	// can't silently mistype a knob name.

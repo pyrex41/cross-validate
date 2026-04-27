@@ -92,6 +92,11 @@ func New(clusterName string) *Snapshot {
 // ComputeDigest computes and sets the content-addressed digest of this snapshot.
 // The digest is computed over all content fields (not the digest, signature, or timestamp).
 func (s *Snapshot) ComputeDigest() string {
+	s.Digest = s.computeDigest()
+	return s.Digest
+}
+
+func (s *Snapshot) computeDigest() string {
 	h := sha256.New()
 
 	// Deterministic serialization of content fields
@@ -139,8 +144,7 @@ func (s *Snapshot) ComputeDigest() string {
 
 	h.Write([]byte(s.ArgoTrackingMode))
 
-	s.Digest = fmt.Sprintf("sha256:%x", h.Sum(nil))
-	return s.Digest
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
 // Save writes the snapshot to a file.
@@ -171,15 +175,14 @@ func Load(path string) (*Snapshot, error) {
 // Verify checks that the snapshot's digest matches its content.
 func (s *Snapshot) Verify() bool {
 	saved := s.Digest
-	s.ComputeDigest()
-	return s.Digest == saved
+	return s.computeDigest() == saved
 }
 
 // Diff produces a human-readable diff between two snapshots.
 func Diff(a, b *Snapshot) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Snapshot diff: %s vs %s\n", a.Digest[:20], b.Digest[:20]))
+	sb.WriteString(fmt.Sprintf("Snapshot diff: %s vs %s\n", truncDigest(a.Digest), truncDigest(b.Digest)))
 	sb.WriteString(fmt.Sprintf("  Cluster: %s → %s\n", a.ClusterName, b.ClusterName))
 	sb.WriteString(fmt.Sprintf("  Time: %s → %s\n",
 		a.Timestamp.Format(time.RFC3339), b.Timestamp.Format(time.RFC3339)))
@@ -281,6 +284,13 @@ func Diff(a, b *Snapshot) string {
 	}
 
 	return sb.String()
+}
+
+func truncDigest(s string) string {
+	if len(s) > 20 {
+		return s[:20]
+	}
+	return s
 }
 
 // FromWorld creates a snapshot from a World (for offline/filesystem-based snapshots).

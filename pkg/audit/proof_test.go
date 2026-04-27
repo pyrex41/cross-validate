@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -49,6 +50,23 @@ func TestGenerate(t *testing.T) {
 	if xpc002.Judgments[0].Status != "error" {
 		t.Errorf("expected error status, got %s", xpc002.Judgments[0].Status)
 	}
+	if _, ok := p.RuleSubtrees["XPC.P.destructive-delete"]; !ok {
+		t.Fatal("expected plan-mode rule subtree to be present even when empty")
+	}
+}
+
+func TestGenerate_IncludesObservedUnknownRule(t *testing.T) {
+	p := Generate([]types.Diagnostic{{
+		Code:     "XPC.Future.rule",
+		Severity: types.SeverityError,
+		Message:  "future rule fired",
+		Source:   types.SourceLocation{File: "future.yaml", Line: 1},
+	}}, nil, "sha256:ir", "sha256:snap")
+
+	st := p.RuleSubtrees["XPC.Future.rule"]
+	if st == nil || len(st.Judgments) != 1 {
+		t.Fatalf("expected observed unknown rule to be represented, got %+v", st)
+	}
 }
 
 func TestVerify(t *testing.T) {
@@ -65,6 +83,45 @@ func TestVerify(t *testing.T) {
 
 	if !p.Verify() {
 		t.Error("expected verification to pass")
+	}
+}
+
+func TestVerify_DoesNotMutateRootOnFailure(t *testing.T) {
+	p := Generate([]types.Diagnostic{{
+		Code:     "XPC001",
+		Severity: types.SeverityError,
+		Message:  "test error",
+		Source:   types.SourceLocation{File: "test.yaml", Line: 1},
+	}}, nil, "sha256:ir1", "sha256:snap1")
+
+	originalRoot := p.RootDigest
+	p.Metadata.IRDigest = "sha256:tampered"
+	if p.Verify() {
+		t.Fatal("expected tampered proof verification to fail")
+	}
+	if p.RootDigest != originalRoot {
+		t.Fatalf("Verify mutated RootDigest: got %s want %s", p.RootDigest, originalRoot)
+	}
+}
+
+func TestComputeRulesetDigest_ChangesWithKernelContent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "check.shen"), []byte("(define x 1 -> 1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ComputeRulesetDigest(dir)
+	if err != nil {
+		t.Fatalf("ComputeRulesetDigest(first): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "check.shen"), []byte("(define x 1 -> 2)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := ComputeRulesetDigest(dir)
+	if err != nil {
+		t.Fatalf("ComputeRulesetDigest(second): %v", err)
+	}
+	if first == second {
+		t.Fatalf("expected ruleset digest to change with kernel content, got %s", first)
 	}
 }
 

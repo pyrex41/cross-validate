@@ -38,12 +38,15 @@ type jsonDeltaCounts struct {
 }
 
 type jsonChange struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Namespace  string `json:"namespace,omitempty"`
-	Name       string `json:"name"`
-	App        string `json:"app,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Code       string               `json:"code"`
+	Message    string               `json:"message"`
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Namespace  string               `json:"namespace,omitempty"`
+	Name       string               `json:"name"`
+	App        string               `json:"app,omitempty"`
+	Reason     string               `json:"reason,omitempty"`
+	Source     types.SourceLocation `json:"source"`
 }
 
 type jsonDiagSides struct {
@@ -68,15 +71,49 @@ func WriteJSON(w io.Writer, p *Plan) error {
 		if !strings.HasPrefix(d.Code, "XPC.P.") {
 			continue
 		}
-		out.Destructive = append(out.Destructive, jsonChange{
-			APIVersion: d.Source.File,
-			Name:       d.Message,
-			Reason:     d.Detail,
-		})
+		out.Destructive = append(out.Destructive, jsonChangeFromDiagnostic(p.Delta, d))
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func jsonChangeFromDiagnostic(delta ResourceDelta, d types.Diagnostic) jsonChange {
+	change, ok := findChangeBySource(delta, d.Source)
+	out := jsonChange{
+		Code:    d.Code,
+		Message: d.Message,
+		Reason:  d.Detail,
+		Source:  d.Source,
+	}
+	if !ok {
+		return out
+	}
+	out.APIVersion = change.Identity.APIVersion
+	out.Kind = change.Identity.Kind
+	out.Namespace = change.Identity.Namespace
+	out.Name = change.Identity.Name
+	out.App = change.Identity.AppName
+	return out
+}
+
+func findChangeBySource(delta ResourceDelta, src types.SourceLocation) (ResourceChange, bool) {
+	for _, c := range delta.Removed {
+		if c.BaseSource == src || c.HeadSource == src {
+			return c, true
+		}
+	}
+	for _, c := range delta.Modified {
+		if c.BaseSource == src || c.HeadSource == src {
+			return c, true
+		}
+	}
+	for _, c := range delta.Added {
+		if c.BaseSource == src || c.HeadSource == src {
+			return c, true
+		}
+	}
+	return ResourceChange{}, false
 }
 
 // WriteMarkdown emits a PR-comment-shaped plan summary. When destructive

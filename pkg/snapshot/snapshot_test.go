@@ -104,8 +104,11 @@ func TestVerify(t *testing.T) {
 	// Tamper with data
 	s.CRDs = append(s.CRDs, types.CRDInfo{Group: "example.com", Kind: "Bar"})
 	savedDigest := s.Digest
-	if s.Verify() && s.Digest == savedDigest {
+	if s.Verify() {
 		t.Error("expected verification to detect tampering")
+	}
+	if s.Digest != savedDigest {
+		t.Errorf("Verify mutated Digest: got %s want %s", s.Digest, savedDigest)
 	}
 }
 

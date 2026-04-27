@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -124,10 +125,67 @@ const KernelVersion = "0.1.0"
 // RulesetVersion is the current rule set version.
 const RulesetVersion = "2026.04"
 
+// KnownRuleIDs is the audit/proof contract's active rule inventory. It covers
+// both Shen-kernel rules and Go-side plan/info diagnostics so proof lookups do
+// not silently omit newer rule families. Generate also adds any observed code
+// not listed here, which keeps old/new proof comparison tolerant of future
+// additions.
+func KnownRuleIDs() []string {
+	return []string{
+		"XPC000",
+		"XPC001",
+		"XPC002",
+		"XPC003",
+		"XPC004",
+		"XPC005",
+		"XPC006",
+		"XPC007",
+		"XPC008",
+		"XPC009",
+		"XPC010",
+		"XPC011",
+		"XPC012",
+		"XPC013", // retired, retained so older proofs diff cleanly
+		"XPC014",
+		"XPC.A.resource-field-valid",
+		"XPC.D.kind-whitelisted",
+		"XPC.E.appset-finalizer-without-preserve",
+		"XPC.E.late-init-needs-ignore-diff",
+		"XPC.E.prod-appset-autosync",
+		"XPC.E.selector-needs-ignore-diff",
+		"XPC.E.ssa-managementpolicies-nondefault",
+		"XPC.E.ssa-managementpolicies-observe",
+		"XPC.E.ssa-managementpolicies-partial",
+		"XPC.H.appset-unsupported-generator",
+		"XPC.H.composition-renders",
+		"XPC.H.helm-renders",
+		"XPC.H.kustomize-renders",
+		"XPC.H.render-deterministic",
+		"XPC.H.values-ref-remote",
+		"XPC.H.values-ref-unknown",
+		"XPC.H.values-well-typed",
+		"XPC.P.cascade-risk",
+		"XPC.P.destructive-delete",
+		"XPC.P.immutable-change",
+		"XPC.S.crossplane-state-needs-orphan",
+	}
+}
+
 // Generate creates a proof from diagnostics, optional run summary, and metadata.
 // When summary is non-nil, the obligation counts and IDs are committed to the
 // Merkle root so the proof attests to run completeness, not just violations.
 func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest string) *Proof {
+	rulesetDigest, err := ComputeRulesetDigest("")
+	if err != nil {
+		rulesetDigest = computeRulesetDigestFromParts(nil)
+	}
+	return GenerateWithRulesetDigest(diags, summary, irDigest, snapshotDigest, rulesetDigest)
+}
+
+// GenerateWithRulesetDigest creates a proof using a caller-supplied ruleset
+// digest. The CLI uses this after resolving the kernel path that was actually
+// loaded; tests and library callers can use Generate for the default lookup.
+func GenerateWithRulesetDigest(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest, rulesetDigest string) *Proof {
 	p := &Proof{
 		Version: 4,
 		Metadata: ProofMetadata{
@@ -135,7 +193,7 @@ func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotD
 			SnapshotDigest: snapshotDigest,
 			KernelVersion:  KernelVersion,
 			RulesetVersion: RulesetVersion,
-			RulesetDigest:  computeRulesetDigest(),
+			RulesetDigest:  rulesetDigest,
 			Timestamp:      time.Now().UTC(),
 		},
 		Run:              summary,
@@ -174,10 +232,17 @@ func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotD
 		ruleGroups[j.RuleID] = append(ruleGroups[j.RuleID], j)
 	}
 
-	// All known rules get a subtree (even if empty = all ok)
-	allRules := []string{"XPC001", "XPC002", "XPC003", "XPC004", "XPC005",
-		"XPC006", "XPC007", "XPC008", "XPC009", "XPC010", "XPC011"}
-	for _, ruleID := range allRules {
+	// All known rules get a subtree (even if empty = all ok). Observed rule
+	// IDs are unioned in so future kernels remain representable even before the
+	// static inventory is updated.
+	ruleIDs := KnownRuleIDs()
+	for ruleID := range ruleGroups {
+		if !slices.Contains(ruleIDs, ruleID) {
+			ruleIDs = append(ruleIDs, ruleID)
+		}
+	}
+	slices.Sort(ruleIDs)
+	for _, ruleID := range ruleIDs {
 		js := ruleGroups[ruleID]
 		st := &RuleSubtree{
 			RuleID:    ruleID,
@@ -209,6 +274,12 @@ func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotD
 
 // buildMerkleTree constructs the Merkle tree and sets the root digest.
 func (p *Proof) buildMerkleTree() {
+	leaves, root := p.merkleTree()
+	p.Tree = leaves
+	p.RootDigest = root
+}
+
+func (p *Proof) merkleTree() ([]string, string) {
 	var leaves []string
 
 	// Metadata leaf
@@ -240,8 +311,7 @@ func (p *Proof) buildMerkleTree() {
 		leaves = append(leaves, p.ResourceSubtrees[key].Digest)
 	}
 
-	p.Tree = leaves
-	p.RootDigest = computeMerkleRoot(leaves)
+	return leaves, computeMerkleRoot(leaves)
 }
 
 // computeMerkleRoot computes the Merkle root from a list of leaf hashes.
@@ -300,8 +370,8 @@ func LoadProof(path string) (*Proof, error) {
 // Verify checks that the proof's Merkle root matches its content.
 func (p *Proof) Verify() bool {
 	saved := p.RootDigest
-	p.buildMerkleTree()
-	return p.RootDigest == saved
+	_, computed := p.merkleTree()
+	return computed == saved
 }
 
 // VerifyInclusion checks that a specific judgment is included in the proof.
@@ -510,9 +580,103 @@ func hashBytes(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func computeRulesetDigest() string {
-	// Hash of all rule IDs + versions — in v1, rule content is fixed
-	data := "XPC001:1.0|XPC002:1.0|XPC003:1.0|XPC004:1.0|XPC005:1.0|" +
-		"XPC006:1.0|XPC007:1.0|XPC008:1.0|XPC009:1.0|XPC010:1.0|XPC011:1.0"
-	return hashBytes([]byte(data))
+// ComputeRulesetDigest returns a content hash of the resolved kernel plus the
+// Go-side rule inventory. kernelPath follows xpc's normal convention: explicit
+// directory if provided, otherwise search upward from cwd and then from the
+// running executable.
+func ComputeRulesetDigest(kernelPath string) (string, error) {
+	kernelDir, err := resolveKernelPath(kernelPath)
+	if err != nil {
+		return "", err
+	}
+
+	var files []string
+	if err := filepath.WalkDir(kernelDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".shen" {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	slices.Sort(files)
+	if len(files) == 0 {
+		return "", fmt.Errorf("no .shen files found under %s", kernelDir)
+	}
+
+	parts := make([]rulesetPart, 0, len(files))
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		rel, err := filepath.Rel(kernelDir, path)
+		if err != nil {
+			rel = filepath.Base(path)
+		}
+		parts = append(parts, rulesetPart{Path: filepath.ToSlash(rel), Data: data})
+	}
+	return computeRulesetDigestFromParts(parts), nil
+}
+
+type rulesetPart struct {
+	Path string
+	Data []byte
+}
+
+func computeRulesetDigestFromParts(parts []rulesetPart) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "ruleset-version:%s\n", RulesetVersion)
+	ids := KnownRuleIDs()
+	slices.Sort(ids)
+	for _, id := range ids {
+		fmt.Fprintf(h, "rule-id:%s\n", id)
+	}
+	for _, part := range parts {
+		fmt.Fprintf(h, "kernel-file:%s\n", part.Path)
+		h.Write(part.Data)
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+func resolveKernelPath(p string) (string, error) {
+	if p != "" {
+		return filepath.Abs(p)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	if found, ok := searchKernelUpward(cwd); ok {
+		return found, nil
+	}
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		if resolved, rlErr := filepath.EvalSymlinks(exe); rlErr == nil {
+			exe = resolved
+		}
+		if found, ok := searchKernelUpward(filepath.Dir(exe)); ok {
+			return found, nil
+		}
+	}
+	return "", fmt.Errorf("could not locate kernel directory for ruleset digest")
+}
+
+func searchKernelUpward(start string) (string, bool) {
+	dir := start
+	for {
+		candidate := filepath.Join(dir, "kernel")
+		if info, err := os.Stat(filepath.Join(candidate, "check.shen")); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }

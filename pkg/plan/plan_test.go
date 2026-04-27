@@ -156,4 +156,21 @@ func TestPlan_WriteJSON(t *testing.T) {
 	if _, ok := parsed["destructive"]; !ok {
 		t.Errorf("expected destructive key present when diagnostics exist")
 	}
+	destructive := parsed["destructive"].([]interface{})
+	if len(destructive) != 1 {
+		t.Fatalf("expected one destructive row, got %v", destructive)
+	}
+	row := destructive[0].(map[string]interface{})
+	if row["apiVersion"] != "rds.aws.upbound.io/v1beta1" {
+		t.Errorf("expected real apiVersion, got %v", row["apiVersion"])
+	}
+	if row["kind"] != "Cluster" {
+		t.Errorf("expected real kind, got %v", row["kind"])
+	}
+	if row["name"] != "aurora-prod-cluster" {
+		t.Errorf("expected real resource name, got %v", row["name"])
+	}
+	if row["message"] == "" || row["code"] != "XPC.P.destructive-delete" {
+		t.Errorf("expected code/message metadata, got %v", row)
+	}
 }

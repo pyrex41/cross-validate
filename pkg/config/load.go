@@ -115,14 +115,18 @@ func validate(cfg *Config) error {
 		if entry.GVK == "" {
 			return fmt.Errorf("immutable-fields[%d]: gvk is required", i)
 		}
-		if !entry.Suppress && len(entry.Paths) == 0 {
-			return fmt.Errorf("immutable-fields[%d] (%s): paths is required (or set suppress: true)",
+		if len(entry.Paths) == 0 {
+			return fmt.Errorf("immutable-fields[%d] (%s): paths is required",
 				i, entry.GVK)
 		}
 		// gvk must split into 1, 2, or 3 parts; nothing weirder.
 		parts := strings.Split(entry.GVK, "/")
 		if len(parts) > 3 {
 			return fmt.Errorf("immutable-fields[%d] (%s): gvk has too many segments (want group/version/Kind)",
+				i, entry.GVK)
+		}
+		if len(parts) == 2 && !looksLikeVersion(parts[0]) {
+			return fmt.Errorf("immutable-fields[%d] (%s): two-segment gvk is reserved for core APIs like v1/ConfigMap; use group/version/Kind for grouped resources",
 				i, entry.GVK)
 		}
 		for _, p := range entry.Paths {
@@ -144,4 +148,16 @@ func validate(cfg *Config) error {
 	// documentation.)
 
 	return nil
+}
+
+func looksLikeVersion(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
 }
