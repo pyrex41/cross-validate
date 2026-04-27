@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
 	"github.com/pyrex41/cross-validate-/pkg/types"
@@ -20,6 +21,14 @@ func loadFixture(t *testing.T, path string) *types.World {
 	// per-rule fixtures don't require helm on PATH.
 	builder := ir.NewBuilder()
 	builder.SkipRender = true
+	// Pick up a fixture-local xpc.yaml if present (no upward walk, so
+	// fixtures stay isolated from any parent-dir config). Fixtures that
+	// exercise xpc.yaml extension drop a one-line file in their directory.
+	cfg, err := config.LoadIfPresent(path)
+	if err != nil {
+		t.Fatalf("loading xpc.yaml from %s: %v", path, err)
+	}
+	builder.Config = cfg
 	world, err := builder.Build(docs)
 	if err != nil {
 		t.Fatalf("building IR for %s: %v", path, err)
@@ -723,6 +732,7 @@ func TestR23_CrossplaneStateNeedsOrphan(t *testing.T) {
 		{"bypass-primary", "../../testdata/fixtures/crossplane-state-needs-orphan/bypass-primary"},
 		{"bypass-alias", "../../testdata/fixtures/crossplane-state-needs-orphan/bypass-alias"},
 		{"alb-logs-carveout", "../../testdata/fixtures/crossplane-state-needs-orphan/alb-logs-carveout"},
+		{"xpc-yaml-extends-carveouts", "../../testdata/fixtures/crossplane-state-needs-orphan/xpc-yaml-extends-carveouts"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -788,6 +798,16 @@ func TestR25_ProdAppSetAutosync(t *testing.T) {
 	diags = checkFixture(t, world, Config{})
 	if gotOk := findDiagByCode(diags, "XPC.E.prod-appset-autosync"); len(gotOk) != 0 {
 		t.Fatalf("nonprod-ok: expected 0 diagnostics, got %d: %+v", len(gotOk), gotOk)
+	}
+
+	// xpc.yaml extension: a fixture-local xpc.yaml replaces the default
+	// {-prod, prod-} list with {-staging}, so the same staging-named
+	// AppSet that nonprod-ok keeps silent now trips R25. This is the
+	// end-to-end smoke test for the prod-patterns kernel plumbing.
+	world = loadFixture(t, "../../testdata/fixtures/prod-appset-autosync/xpc-yaml-extends-patterns")
+	diags = checkFixture(t, world, Config{})
+	if got := findDiagByCode(diags, "XPC.E.prod-appset-autosync"); len(got) != 1 {
+		t.Fatalf("xpc-yaml-extends-patterns: expected 1 diagnostic, got %d: %+v", len(got), got)
 	}
 }
 

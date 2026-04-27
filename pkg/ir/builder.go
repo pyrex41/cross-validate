@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
 	"github.com/pyrex41/cross-validate-/pkg/renderer"
 	"github.com/pyrex41/cross-validate-/pkg/types"
@@ -65,6 +66,12 @@ type Builder struct {
 	//   "any"      — all three sub-codes including -nondefault
 	// Empty string is treated as "observe" by the kernel.
 	SSAMPMode string
+
+	// Config is the user-extensible knob set (xpc.yaml). nil falls back to
+	// config.Default(), which produces behaviour bit-identical to the
+	// pre-xpc.yaml hardcoded path. Threaded through to the World so
+	// downstream extractors and rules consult the resolved values.
+	Config *config.Config
 }
 
 // NewBuilder creates a new IR builder.
@@ -79,6 +86,20 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// Propagate R22 mode from CLI through to the World so the bridge can
 	// emit a single-symbol ssa-mp-mode section for the Shen kernel.
 	b.world.SSAMPMode = b.SSAMPMode
+	// Resolve user-extensible knobs onto the World. Nil cfg means "use
+	// built-in defaults". Resolved-on-builder so EnrichTrajectoryData and
+	// downstream extractors can consult w.BypassKeys / w.ProdPatterns
+	// uniformly without re-resolving per call.
+	cfg := b.Config
+	b.world.ProdPatterns = config.ResolveProdPatterns(cfg)
+	b.world.NameCarveouts = map[string][]string{
+		"crossplane-state-needs-orphan": config.ResolveCrossplaneStateNeedsOrphanCarveouts(cfg),
+	}
+	b.world.BypassKeys = types.BypassKeySet{
+		AllowDelete:          config.ResolveAllowDeleteKeys(cfg),
+		AllowImmutableChange: config.ResolveAllowImmutableChangeKeys(cfg),
+	}
+	b.world.ImmutableFields = config.ResolveImmutableFields(cfg, ImmutableFieldRegistry())
 	for _, doc := range docs {
 		category := loader.ClassifyDocument(doc)
 		var err error

@@ -105,7 +105,7 @@ func TestR27_ImmutableChange_Added(t *testing.T) {
 			},
 		},
 	}
-	diags := plan.R27ImmutableChange(delta)
+	diags := plan.R27ImmutableChange(delta, nil, types.BypassKeySet{})
 	if len(diags) != 0 {
 		t.Errorf("expected 0 diags on Added-only delta (out of R27 scope), got %d: %+v", len(diags), diags)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
@@ -24,16 +25,26 @@ import (
 // produces mixed int/float/string types for the same source value, and
 // DeepEqual's strict comparison is the stable choice vs. a custom coercion.
 //
-// Bypass: the HEAD-side annotation `xpc.io/allow-immutable-change: "true"`
-// silences all diagnostics for that identity. The head side is where the
-// change author consents to the destructive reshape (mirroring R26's
-// base-side bypass: the bypass lives where the intent is expressed).
-func R27ImmutableChange(delta ResourceDelta) []types.Diagnostic {
-	registry := ir.ImmutableFieldRegistry()
+// Bypass: any annotation key registered under bypassKeys.AllowImmutableChange
+// (primary or aliases) set to "true" on the HEAD manifest silences all
+// diagnostics for that identity. The head side is where the change author
+// consents to the destructive reshape (mirroring R26's base-side bypass:
+// the bypass lives where the intent is expressed).
+//
+// registry is the resolved (overlay-applied) immutable-field set. Pass nil
+// to use the compile-time built-ins — convenient for tests that don't go
+// through Builder.Build.
+func R27ImmutableChange(delta ResourceDelta, registry []types.ImmutableField, bypassKeys types.BypassKeySet) []types.Diagnostic {
+	if registry == nil {
+		registry = config.ResolveImmutableFields(nil, ir.ImmutableFieldRegistry())
+	}
+	if bypassKeys.AllowImmutableChange == nil {
+		bypassKeys.AllowImmutableChange = config.ResolveAllowImmutableChangeKeys(nil)
+	}
 
 	var diags []types.Diagnostic
 	for _, c := range delta.Modified {
-		if hasImmutableChangeBypass(c.HeadRaw) {
+		if hasImmutableChangeBypass(c.HeadRaw, bypassKeys) {
 			continue
 		}
 		group := groupFromAPIVersion(c.Identity.APIVersion)
@@ -61,8 +72,9 @@ func R27ImmutableChange(delta ResourceDelta) []types.Diagnostic {
 					baseVal, headVal, entry.Reason),
 				Fix: fmt.Sprintf("Either (a) revert the change to %s on HEAD, "+
 					"(b) recreate the resource under a new identity if the reshape is intentional, or "+
-					"(c) add annotation xpc.io/allow-immutable-change: \"true\" on the HEAD manifest to consent to the recreate.",
-					entry.FieldPath),
+					"(c) add annotation %s: \"true\" on the HEAD manifest to consent to the recreate.",
+					entry.FieldPath,
+					primaryOr(bypassKeys.AllowImmutableChange, "xpc.io/allow-immutable-change")),
 				Source: c.BaseSource,
 			})
 		}
@@ -70,10 +82,11 @@ func R27ImmutableChange(delta ResourceDelta) []types.Diagnostic {
 	return diags
 }
 
-// hasImmutableChangeBypass looks for xpc.io/allow-immutable-change: "true"
-// on metadata.annotations of the HEAD manifest. Mirrors hasBypassAnnotation
-// in r26.go (but distinct key — R26's allow-delete is a different intent).
-func hasImmutableChangeBypass(raw map[string]interface{}) bool {
+// hasImmutableChangeBypass looks for any registered allow-immutable-change
+// key set to "true" on metadata.annotations of the HEAD manifest. Mirrors
+// hasBypassAnnotation in r26.go (different bypass slot — R26's allow-delete
+// is a different intent).
+func hasImmutableChangeBypass(raw map[string]interface{}, bypassKeys types.BypassKeySet) bool {
 	if raw == nil {
 		return false
 	}
@@ -85,10 +98,7 @@ func hasImmutableChangeBypass(raw map[string]interface{}) bool {
 	if !ok {
 		return false
 	}
-	if v, ok := ann["xpc.io/allow-immutable-change"].(string); ok && v == "true" {
-		return true
-	}
-	return false
+	return bypassKeys.HasRaw(ann, types.BypassAllowImmutableChange)
 }
 
 // gkForMessage renders a "group/Kind" prefix for diagnostic messages. For

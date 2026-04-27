@@ -3,6 +3,7 @@ package ir
 import (
 	"strings"
 
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -11,12 +12,17 @@ import (
 // resources in the World. All extraction reads ResourceInfo.Raw — the
 // YAML escape hatch — so the loader does not need to change.
 //
-// Also populates the static immutable-field registry for downstream
-// consumers that need to reason about immutability.
+// Knob-shaped fields the World expects (ProdPatterns, NameCarveouts,
+// BypassKeys, ImmutableFields) are resolved against built-in defaults if a
+// caller skipped Builder.Build (e.g. unit tests that construct a World
+// inline). In normal operation Builder.Build pre-populates them from the
+// loaded *config.Config.
 func EnrichTrajectoryData(w *types.World) {
 	if w == nil {
 		return
 	}
+	ensureKnobDefaults(w)
+
 	for _, res := range w.Resources {
 		switch res.Kind {
 		case types.KindPod:
@@ -38,13 +44,37 @@ func EnrichTrajectoryData(w *types.World) {
 		}
 	}
 
-	w.ImmutableFields = ImmutableFieldRegistry()
 	w.SelectorMappings = SelectorRegistry()
 	extractSelectorUsages(w)
 	w.LateInitMappings = LateInitRegistry()
 	extractLateInitUsages(w)
 	extractSSAMPConflicts(w)
 	extractCPDeletionPolicyFacts(w)
+}
+
+// ensureKnobDefaults populates the user-extensible knob fields on w if a
+// caller (typically a test) constructed the World without going through
+// Builder.Build. Idempotent: nil-checks each slice individually.
+func ensureKnobDefaults(w *types.World) {
+	if w.ImmutableFields == nil {
+		w.ImmutableFields = config.ResolveImmutableFields(nil, ImmutableFieldRegistry())
+	}
+	if w.ProdPatterns == nil {
+		w.ProdPatterns = config.ResolveProdPatterns(nil)
+	}
+	if w.BypassKeys.AllowDelete == nil {
+		w.BypassKeys.AllowDelete = config.ResolveAllowDeleteKeys(nil)
+	}
+	if w.BypassKeys.AllowImmutableChange == nil {
+		w.BypassKeys.AllowImmutableChange = config.ResolveAllowImmutableChangeKeys(nil)
+	}
+	if w.NameCarveouts == nil {
+		w.NameCarveouts = map[string][]string{
+			"crossplane-state-needs-orphan": config.ResolveCrossplaneStateNeedsOrphanCarveouts(nil),
+		}
+	} else if _, ok := w.NameCarveouts["crossplane-state-needs-orphan"]; !ok {
+		w.NameCarveouts["crossplane-state-needs-orphan"] = config.ResolveCrossplaneStateNeedsOrphanCarveouts(nil)
+	}
 }
 
 // extractCPDeletionPolicyFacts walks every resource whose (Group, Kind) is in
@@ -71,8 +101,7 @@ func extractCPDeletionPolicyFacts(w *types.World) {
 				policy = dp
 			}
 		}
-		bypass := res.Annotations["xpc.io/allow-delete"] == "true" ||
-			res.Annotations["policy.facilitygrid.io/allow-delete"] == "true"
+		bypass := w.BypassKeys.Has(res.Annotations, types.BypassAllowDelete)
 		w.CPDeletionPolicyFacts = append(w.CPDeletionPolicyFacts, types.CPDeletionPolicyFact{
 			Group:          group,
 			Kind:           res.Kind,

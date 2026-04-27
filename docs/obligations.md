@@ -197,7 +197,7 @@ The invariant: every such resource declares `spec.deletionPolicy: Orphan`,
 unless an explicit bypass annotation opts it out.
 
 **Generators**:
-- `crossplane-state-needs-orphan` -- state-bearing Crossplane MR missing `deletionPolicy: Orphan` (**implemented** — R23 / `XPC.S.crossplane-state-needs-orphan`, kind allowlist mirrors fg-manifold's `crossplane-state-require-orphan` VAP; bypass `xpc.io/allow-delete` primary + `policy.facilitygrid.io/allow-delete` alias; name carve-out for `alb-logs`)
+- `crossplane-state-needs-orphan` -- state-bearing Crossplane MR missing `deletionPolicy: Orphan` (**implemented** — R23 / `XPC.S.crossplane-state-needs-orphan`, kind allowlist mirrors fg-manifold's `crossplane-state-require-orphan` VAP; bypass `xpc.io/allow-delete` primary plus user-registered aliases via xpc.yaml `bypass-annotations.allow-delete.aliases`; default name carve-out `alb-logs`, extensible via xpc.yaml `name-carveouts.crossplane-state-needs-orphan`)
 
 **Absorbs**: (new — static floor for fg-synapse INC-6)
 

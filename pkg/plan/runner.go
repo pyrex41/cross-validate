@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pyrex41/cross-validate-/pkg/checker"
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
 )
@@ -42,6 +43,13 @@ type Config struct {
 	SkipAppSetExpand bool
 	SSAMPMode        string
 	AppSetFixtures   map[string][]map[string]string
+
+	// ConfigOverride, when non-nil, is the user-extensible knob set
+	// resolved from --config / XPC_CONFIG_PATH BEFORE the plan ran. Plan
+	// has a per-variant resolution mode too (per design §3.c, HEAD wins
+	// for the in-repo discovery), but the caller's explicit flag/env
+	// overrides win uniformly across both variants.
+	ConfigOverride *config.Config
 }
 
 // Run materializes two worktrees (if needed), checks each, computes the
@@ -96,8 +104,13 @@ func Run(cfg Config) (*Plan, func(), error) {
 		Head:  headResult,
 		Delta: Diff(baseResult.World, headResult.World),
 	}
-	plan.Diagnostics = R26DestructiveDelete(plan.Delta)
-	plan.Diagnostics = append(plan.Diagnostics, R27ImmutableChange(plan.Delta)...)
+	// R26/R27 read knob-shaped state (bypass keys, immutable-field overlay)
+	// off the base World — both variants resolve from the same xpc.yaml
+	// inside the repo, so base and head agree.
+	bypassKeys := baseResult.World.BypassKeys
+	immutables := baseResult.World.ImmutableFields
+	plan.Diagnostics = R26DestructiveDelete(plan.Delta, bypassKeys)
+	plan.Diagnostics = append(plan.Diagnostics, R27ImmutableChange(plan.Delta, immutables, bypassKeys)...)
 	return plan, cleanup, nil
 }
 
@@ -164,6 +177,29 @@ func resolveVariant(ref, path, tag string) (string, func(), error) {
 	return filepath.Join(wtDir, rel), cleanup, nil
 }
 
+// resolveVariantConfig picks the *config.Config for a single variant. If the
+// caller passed an explicit override (--config flag or XPC_CONFIG_PATH env),
+// that wins for both variants — same shape as kernel-path. Otherwise we
+// discover xpc.yaml inside the variant's worktree (HEAD wins per design
+// §3.c). Discovery failure falls through to Default(), matching the
+// "absent file is silent" rule.
+func resolveVariantConfig(override *config.Config, variantDir string) *config.Config {
+	if override != nil {
+		return override
+	}
+	cfg, _, _, err := config.Resolve("", "", variantDir)
+	if err != nil {
+		// Per-variant config errors are surfaced as a stderr line; the
+		// runner continues with defaults so a malformed xpc.yaml on one
+		// side doesn't take down the whole plan run. The check-mode
+		// caller is the strict path.
+		fmt.Fprintf(os.Stderr, "warning: error loading xpc.yaml under %s: %v (using defaults)\n",
+			variantDir, err)
+		return config.Default()
+	}
+	return cfg
+}
+
 // findRepoRoot walks up from start looking for a `.git` entry. Accepts both
 // regular repos and worktrees (where .git is a file). Returns an error if no
 // repo is found above start.
@@ -199,6 +235,7 @@ func runVariant(cfg Config, ref, dir string) (VariantResult, error) {
 	builder.CrossplaneBin = cfg.CrossplaneBin
 	builder.SkipAppSetExpand = cfg.SkipAppSetExpand
 	builder.SSAMPMode = cfg.SSAMPMode
+	builder.Config = resolveVariantConfig(cfg.ConfigOverride, dir)
 	if cfg.AppSetFixtures != nil {
 		builder.AppSetContext.PRFixtures = cfg.AppSetFixtures
 	}

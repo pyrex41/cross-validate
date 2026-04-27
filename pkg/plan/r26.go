@@ -22,23 +22,20 @@ import (
 //     preserveResourcesOnDeletion: true (the fg-synapse INC-6 shape).
 //     Removing the Application triggers the cascade. Emit XPC.P.cascade-risk.
 //
-// Bypass: the base-side annotation set is inspected first. An explicit
-//
-//	xpc.io/allow-delete: "true"                     (primary)
-//	policy.facilitygrid.io/allow-delete: "true"     (alias)
-//
-// silences both failure shapes for that single identity. The bypass has to
-// live on the base side because the resource no longer exists on head.
+// Bypass: the base-side annotation set is inspected first. Any annotation
+// key listed in bypassKeys.AllowDelete set to "true" silences both failure
+// shapes for that single identity. The bypass has to live on the base side
+// because the resource no longer exists on head.
 //
 // Returned diagnostics are plan-level (severity=error), distinct from the
 // per-variant static diagnostics. They live in Plan.Diagnostics and drive the
 // "## ⚠ Destructive changes" section of the markdown output.
-func R26DestructiveDelete(delta ResourceDelta) []types.Diagnostic {
+func R26DestructiveDelete(delta ResourceDelta, bypassKeys types.BypassKeySet) []types.Diagnostic {
 	stateBearing := buildStateBearingSet()
 
 	var diags []types.Diagnostic
 	for _, c := range delta.Removed {
-		if hasBypassAnnotation(c.BaseRaw) {
+		if hasBypassAnnotation(c.BaseRaw, bypassKeys) {
 			continue
 		}
 
@@ -64,7 +61,8 @@ func R26DestructiveDelete(delta ResourceDelta) []types.Diagnostic {
 					c.Identity.Kind, group, deletionPolicyPhrase(policy)),
 				Fix: fmt.Sprintf("Either (a) keep the resource on HEAD (revert the removal), "+
 					"(b) set spec.deletionPolicy: Orphan on the base side before removing the CR, or "+
-					"(c) add annotation xpc.io/allow-delete: \"true\" to the base manifest if the destruction is genuinely intended."),
+					"(c) add annotation %s: \"true\" to the base manifest if the destruction is genuinely intended.",
+					primaryOr(bypassKeys.AllowDelete, "xpc.io/allow-delete")),
 				Source: c.BaseSource,
 			})
 			continue
@@ -103,10 +101,10 @@ func buildStateBearingSet() map[string]bool {
 	return out
 }
 
-// hasBypassAnnotation returns true when metadata.annotations carries either
-// of the two recognized allow-delete keys set to "true". Mirrors R23's
+// hasBypassAnnotation returns true when metadata.annotations carries any of
+// bypassKeys.AllowDelete (primary or aliases) set to "true". Mirrors R23's
 // extractor so the two rules stay in lockstep.
-func hasBypassAnnotation(raw map[string]interface{}) bool {
+func hasBypassAnnotation(raw map[string]interface{}, bypassKeys types.BypassKeySet) bool {
 	if raw == nil {
 		return false
 	}
@@ -118,13 +116,7 @@ func hasBypassAnnotation(raw map[string]interface{}) bool {
 	if !ok {
 		return false
 	}
-	if v, ok := ann["xpc.io/allow-delete"].(string); ok && v == "true" {
-		return true
-	}
-	if v, ok := ann["policy.facilitygrid.io/allow-delete"].(string); ok && v == "true" {
-		return true
-	}
-	return false
+	return bypassKeys.HasRaw(ann, types.BypassAllowDelete)
 }
 
 func readDeletionPolicy(raw map[string]interface{}) string {
@@ -190,6 +182,16 @@ func preserveResourcesOnDeletion(raw map[string]interface{}) bool {
 		return v
 	}
 	return false
+}
+
+// primaryOr returns keys[0] if non-empty, otherwise the supplied fallback.
+// Used to render the user-facing fix hint with the actual primary annotation
+// key the binary recognizes (which xpc.yaml may have remapped).
+func primaryOr(keys []string, fallback string) string {
+	if len(keys) > 0 && keys[0] != "" {
+		return keys[0]
+	}
+	return fallback
 }
 
 func qualifiedName(id ResourceIdentity) string {

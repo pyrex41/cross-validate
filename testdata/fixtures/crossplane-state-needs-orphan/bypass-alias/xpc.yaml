@@ -1,0 +1,9 @@
+version: 1
+# Demonstrates registering an org-specific allow-delete alias via xpc.yaml.
+# The binary ships only `xpc.io/allow-delete` as the default primary; orgs
+# whose existing manifests carry a vendor-branded annotation register it
+# here instead of patching the binary.
+bypass-annotations:
+  allow-delete:
+    aliases:
+      - "mycorp.example.com/allow-delete"

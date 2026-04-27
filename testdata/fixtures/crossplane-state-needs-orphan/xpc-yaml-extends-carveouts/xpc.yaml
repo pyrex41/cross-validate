@@ -1,0 +1,7 @@
+version: 1
+# Add a "scratch" name carve-out so resources whose name contains it are
+# exempt from R23. Demonstrates name-carveouts plumbing through to the
+# kernel; absent this xpc.yaml the same fixture would trip R23.
+name-carveouts:
+  crossplane-state-needs-orphan:
+    - "scratch"

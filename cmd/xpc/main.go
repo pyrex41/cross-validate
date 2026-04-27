@@ -14,6 +14,7 @@ import (
 
 	"github.com/pyrex41/cross-validate-/pkg/audit"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
+	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
 	"github.com/pyrex41/cross-validate-/pkg/plan"
@@ -91,6 +92,8 @@ Check flags:
                              (shape: {appset-name: [{key: value, ...}]})
   --kernel-path=<dir>  Explicit path to the Shen kernel directory (overrides
                        upward cwd search; also XPC_KERNEL_PATH env var)
+  --config=<path>      Explicit path to xpc.yaml (overrides upward cwd
+                       search; also XPC_CONFIG_PATH env var)
   --ssa-mp-mode=<mode> R22 (ServerSideApply × managementPolicies) strictness:
                        observe (default, narrow), partial, any (broadest)
 
@@ -114,6 +117,8 @@ Plan flags:
   --head=<ref>         Head git ref (or directory; default: HEAD)
   --format=<fmt>       Output format: json, markdown (default: markdown)
   --kernel-path=<dir>  Explicit kernel directory (as in 'check')
+  --config=<path>      Explicit xpc.yaml path (as in 'check'; overrides
+                       per-variant in-repo discovery)
   (most 'check' flags pass through: --helm-bin, --helm-cache-dir, --skip-render,
    --skip-appset-expand, --appset-fixture, --ssa-mp-mode)
 
@@ -147,6 +152,7 @@ func runCheck(args []string) int {
 	helmCacheDir := ""
 	skipAppSetExpand := false
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
+	configPath := os.Getenv("XPC_CONFIG_PATH")
 	ssaMPMode := "observe"
 	var paths []string
 
@@ -176,6 +182,8 @@ func runCheck(args []string) int {
 			helmCacheDir = strings.TrimPrefix(arg, "--helm-cache-dir=")
 		case strings.HasPrefix(arg, "--kernel-path="):
 			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
 		case strings.HasPrefix(arg, "--ssa-mp-mode="):
 			val := strings.TrimPrefix(arg, "--ssa-mp-mode=")
 			switch val {
@@ -199,6 +207,19 @@ func runCheck(args []string) int {
 	if len(paths) == 0 {
 		// Default to current directory
 		paths = append(paths, ".")
+	}
+
+	// Resolve user config (xpc.yaml). Precedence: --config > XPC_CONFIG_PATH
+	// > discovery from cwd > Default(). An exe-dir fallback emits one stderr
+	// line so the lookup isn't silent — same shape as kernel-path discovery.
+	cwd, _ := os.Getwd()
+	cfg, cfgPath, viaExe, err := config.Resolve(configPath, "", cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading xpc.yaml: %v\n", err)
+		return 1
+	}
+	if viaExe && cfgPath != "" {
+		fmt.Fprintf(os.Stderr, "info: xpc.yaml discovered via exe-dir fallback at %s\n", cfgPath)
 	}
 
 	// Load documents
@@ -236,6 +257,7 @@ func runCheck(args []string) int {
 	builder.CrossplaneBin = crossplaneBin
 	builder.SkipAppSetExpand = skipAppSetExpand
 	builder.SSAMPMode = ssaMPMode
+	builder.Config = cfg
 	if appsetFixturePath != "" {
 		fixtures, fxErr := loadAppSetFixtures(appsetFixturePath)
 		if fxErr != nil {
@@ -264,12 +286,12 @@ func runCheck(args []string) int {
 	}
 
 	// Run checker
-	cfg := checker.Config{
+	checkerCfg := checker.Config{
 		StrictConversions: strictConversions,
 		KernelPath:        kernelPath,
 	}
 
-	result := checker.CheckWithObligations(world, cfg)
+	result := checker.CheckWithObligations(world, checkerCfg)
 	diags := result.Diagnostics
 
 	// Merge in any info-level diagnostics the AppSet expander emitted
@@ -652,6 +674,7 @@ func runPlan(args []string) int {
 	skipAppSetExpand := false
 	ssaMPMode := "observe"
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
+	configPath := os.Getenv("XPC_CONFIG_PATH")
 	strictConversions := false
 	var paths []string
 
@@ -699,6 +722,8 @@ func runPlan(args []string) int {
 			}
 		case strings.HasPrefix(arg, "--kernel-path="):
 			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
 		case arg == "--strict-conversions":
 			strictConversions = true
 		case arg == "--help" || arg == "-h":
@@ -728,6 +753,18 @@ func runPlan(args []string) int {
 		skipRender = false
 	}
 
+	// Resolve --config / XPC_CONFIG_PATH once. If neither is set, plan.Run
+	// discovers xpc.yaml inside each variant worktree (per design §3.c).
+	var explicitCfg *config.Config
+	if configPath != "" {
+		c, lerr := config.Load(configPath)
+		if lerr != nil {
+			fmt.Fprintf(os.Stderr, "error loading xpc.yaml: %v\n", lerr)
+			return 1
+		}
+		explicitCfg = c
+	}
+
 	cfg := plan.Config{
 		BaseRef:          baseRef,
 		HeadRef:          headRef,
@@ -739,6 +776,7 @@ func runPlan(args []string) int {
 		CrossplaneBin:    crossplaneBin,
 		SkipAppSetExpand: skipAppSetExpand,
 		SSAMPMode:        ssaMPMode,
+		ConfigOverride:   explicitCfg,
 		CheckerConfig: checker.Config{
 			StrictConversions: strictConversions,
 			KernelPath:        kernelPath,

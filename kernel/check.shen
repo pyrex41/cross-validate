@@ -95,6 +95,8 @@
          CPDeletionPolicyFacts (extract-section crossplane-deletion-policy-facts Sections)
          AppSetFinalizerFacts (extract-section appset-finalizer-facts Sections)
          AppSetAutosyncFacts (extract-section appset-autosync-facts Sections)
+         ProdPatterns (extract-section prod-patterns Sections)
+         R23Carveouts (extract-section crossplane-state-needs-orphan-carveouts Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -124,9 +126,9 @@
          R21 (mark-rule "XPC.E.late-init-needs-ignore-diff" (check-r21 LateInitUsages IgnoreDiffEntries))
          R22All (check-r22 SSAMPConflicts SSAMPMode)
          R22 (mark-r22-rules R22All)
-         R23 (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts))
+         R23 (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts R23Carveouts))
          R24 (mark-rule "XPC.E.appset-finalizer-without-preserve" (check-r24 AppSetFinalizerFacts))
-         R25 (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts))
+         R25 (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts ProdPatterns))
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10

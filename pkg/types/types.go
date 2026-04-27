@@ -968,7 +968,80 @@ type World struct {
 	// resource; the kernel decides whether to fire based on DeletionPolicy,
 	// bypass annotations, and name carve-outs.
 	CPDeletionPolicyFacts []CPDeletionPolicyFact `json:"-"`
+
+	// ProdPatterns is the resolved substring list R25 should match
+	// ApplicationSet names against. Populated by the IR builder from the
+	// loaded *config.Config (or its Default()). Crosses to the kernel as
+	// the `prod-patterns` section.
+	ProdPatterns []string `json:"-"`
+
+	// NameCarveouts is the resolved per-rule name-substring carve-out map.
+	// Keys are short rule identifiers ("crossplane-state-needs-orphan").
+	// Populated by the IR builder from the loaded *config.Config. Crosses
+	// to the kernel as the `name-carveouts` section.
+	NameCarveouts map[string][]string `json:"-"`
+
+	// BypassKeys is the resolved bypass-annotation key set, per logical
+	// bypass. Populated by the IR builder. Consumed Go-side only — the
+	// kernel sees pre-collapsed `bypass-yes`/`bypass-no` symbols, never
+	// the annotation strings.
+	BypassKeys BypassKeySet `json:"-"`
 }
+
+// BypassKeySet captures the resolved annotation keys per logical bypass.
+// Each slice is primary-first, aliases-after, deduped. An empty primary
+// is allowed (means "no built-in primary, only aliases").
+type BypassKeySet struct {
+	AllowDelete          []string
+	AllowImmutableChange []string
+}
+
+// Has returns true when annotations carries any registered key set to "true".
+// Used by R26/R27 (and R23's bypass extractor) to consult the resolved set
+// at the consumption site instead of inlining the literal annotation strings.
+func (s BypassKeySet) Has(annotations map[string]string, slot BypassSlot) bool {
+	keys := s.keysFor(slot)
+	for _, k := range keys {
+		if annotations[k] == "true" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasRaw mirrors Has but accepts the map[string]interface{} shape produced
+// by yaml.v3 + the loader's RawMap path. Coerces values via type assertion
+// to string; non-string values count as a miss.
+func (s BypassKeySet) HasRaw(annotations map[string]interface{}, slot BypassSlot) bool {
+	keys := s.keysFor(slot)
+	for _, k := range keys {
+		if v, ok := annotations[k].(string); ok && v == "true" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s BypassKeySet) keysFor(slot BypassSlot) []string {
+	switch slot {
+	case BypassAllowDelete:
+		return s.AllowDelete
+	case BypassAllowImmutableChange:
+		return s.AllowImmutableChange
+	default:
+		return nil
+	}
+}
+
+// BypassSlot identifies one of the logical bypasses recognized by the
+// kernel. Lowercase enum so it can't collide with the kernel's symbol
+// convention if it ever surfaces in serialized output.
+type BypassSlot int
+
+const (
+	BypassAllowDelete BypassSlot = iota
+	BypassAllowImmutableChange
+)
 
 // CPDeletionPolicyFact captures the deletionPolicy declaration of a single
 // Crossplane managed resource whose kind is in the state-bearing allowlist.

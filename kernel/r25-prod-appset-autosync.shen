@@ -25,15 +25,18 @@
    NOTE on `cn`: strictly 2-argument; longer chains are nested `(cn s1 (cn s2 s3))`. *\
 
 
-\* r25-is-prod-name? — true when Name contains "-prod" or "prod-".
-   Prod-name classification is substring-based to avoid over-matching
-   Applications like "prodrome-staging". string-contains? from the prelude
-   is the same primitive R21 uses for leaf-path matching. *\
-(define r25-is-prod-name?
-  Name ->
-    (if (string-contains? Name "-prod")
+\* r25-name-matches-any? — true when Name contains any pattern in Patterns.
+   Patterns is a list of substring strings supplied by the Go bridge from
+   the resolved xpc.yaml prod-patterns section (default ["-prod", "prod-"]).
+   Substring matching avoids over-matching Applications like
+   "prodrome-staging" if the operator extends the list. Empty Patterns
+   matches nothing — the safe failure mode for "config absent". *\
+(define r25-name-matches-any?
+  _ [] -> false
+  Name [P | Rest] ->
+    (if (string-contains? Name P)
         true
-        (string-contains? Name "prod-")))
+        (r25-name-matches-any? Name Rest)))
 
 
 \* r25-emit — build the judgment for one prod AppSet with automated sync. *\
@@ -56,16 +59,17 @@
    gates pass (prod name AND auto-yes). Uniform named bindings in both
    branches — avoids shen-go pattern-compile panic. *\
 (define r25-check-row
-  [appset-autosync-fact Name auto-yes Src] ->
-    (if (r25-is-prod-name? Name)
+  [appset-autosync-fact Name auto-yes Src] Patterns ->
+    (if (r25-name-matches-any? Name Patterns)
         [(r25-emit Name Src)]
         [])
-  [appset-autosync-fact Name auto-no Src] -> []
-  _ -> [])
+  [appset-autosync-fact Name auto-no Src] _ -> []
+  _ _ -> [])
 
 
 \* check-r25 — top-level R25 check.
-   Facts: list of appset-autosync-fact tuples, one per ApplicationSet. *\
+   Facts: list of appset-autosync-fact tuples, one per ApplicationSet.
+   Patterns: list of prod-name substring matchers (xpc.yaml prod-patterns). *\
 (define check-r25
-  Facts ->
-    (flatten (map (/. Row (r25-check-row Row)) Facts)))
+  Facts Patterns ->
+    (flatten (map (/. Row (r25-check-row Row Patterns)) Facts)))

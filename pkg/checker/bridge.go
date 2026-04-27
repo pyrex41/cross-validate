@@ -436,6 +436,9 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		sortedSection("ssa-mp-conflicts", w.SSAMPConflicts, ssaMPConflictCmp, ssaMPConflictToObj),
 		ssaMPModeSection(w.SSAMPMode),
 		sortedSection("crossplane-deletion-policy-facts", w.CPDeletionPolicyFacts, cpDeletionPolicyCmp, cpDeletionPolicyToObj),
+		prodPatternsSection(w.ProdPatterns),
+		stringListSection("crossplane-state-needs-orphan-carveouts",
+			w.NameCarveouts["crossplane-state-needs-orphan"]),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)
@@ -1082,6 +1085,26 @@ func ssaMPModeSection(mode string) kl.Obj {
 		sym("ssa-mp-mode"),
 		sym(normalized),
 	})
+}
+
+// prodPatternsSection emits R25's resolved substring list as a single section.
+// Shape: (prod-patterns "-prod" "prod-" ...). Each element is a Shen string
+// because Shen's string-contains? primitive operates on strings, not symbols.
+// Empty list emits (prod-patterns) — the kernel treats that as "match
+// nothing", which is the safe failure mode (no false fires).
+func prodPatternsSection(patterns []string) kl.Obj {
+	return stringListSection("prod-patterns", patterns)
+}
+
+// stringListSection emits a generic (tag "s1" "s2" ...) section. Used for
+// R23's name-carveout list and any other flat string-list sections that
+// don't need their own dedicated converter.
+func stringListSection(tag string, items []string) kl.Obj {
+	objs := make([]kl.Obj, 0, len(items))
+	for _, s := range items {
+		objs = append(objs, str(s))
+	}
+	return makeList(append([]kl.Obj{sym(tag)}, objs...))
 }
 
 // buildIgnoreDiffEntries flattens the ignoreDifferences of all ArgoApplications

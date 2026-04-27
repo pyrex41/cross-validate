@@ -1,0 +1,7 @@
+version: 1
+# Treat -staging as a prod pattern so this fixture's "crossplane-platform-aws-staging"
+# AppSet trips R25. Demonstrates that prod-patterns is wired through to the
+# Shen kernel and replaces the built-in defaults when present.
+prod-patterns:
+  appset-name-substrings:
+    - "-staging"

@@ -38,8 +38,16 @@
    panic in shen-go at load time — defensive uniformity avoids it. *\
 
 
-(define r23-alb-logs?
-  Name -> (string-contains? Name "alb-logs"))
+\* r23-name-carved-out? — true when Name matches any substring in Carveouts.
+   Carveouts is supplied from the Go bridge via the resolved xpc.yaml
+   name-carveouts section (default ["alb-logs"] for this rule). Empty
+   carve-out list never silences a fire — the safe failure mode. *\
+(define r23-name-carved-out?
+  _ [] -> false
+  Name [C | Rest] ->
+    (if (string-contains? Name C)
+        true
+        (r23-name-carved-out? Name Rest)))
 
 
 (define r23-orphan?
@@ -80,19 +88,22 @@
 
 \* r23-check-row — dispatch one cp-deletion-policy-fact. Returns [] or a
    singleton judgment list. Gating order: bypass annotation first (cheapest
-   silent path), then Orphan, then alb-logs carve-out, then emit. *\
+   silent path), then Orphan, then name carve-out, then emit. Carveouts is
+   the resolved name-substring list for this rule. *\
 (define r23-check-row
-  [cp-deletion-policy-fact Group Kind Name Ns Policy bypass-yes Src] -> []
-  [cp-deletion-policy-fact Group Kind Name Ns Policy bypass-no Src] ->
+  [cp-deletion-policy-fact Group Kind Name Ns Policy bypass-yes Src] _ -> []
+  [cp-deletion-policy-fact Group Kind Name Ns Policy bypass-no Src] Carveouts ->
     (if (r23-orphan? Policy)
         []
-        (if (r23-alb-logs? Name)
+        (if (r23-name-carved-out? Name Carveouts)
             []
             [(r23-emit Group Kind Name Policy Src)]))
-  _ -> [])
+  _ _ -> [])
 
 
 \* check-r23 — top-level R23 check.
-   Facts: list of cp-deletion-policy-fact tuples, one per in-scope resource. *\
+   Facts: list of cp-deletion-policy-fact tuples, one per in-scope resource.
+   Carveouts: list of name-substring carve-outs (xpc.yaml name-carveouts). *\
 (define check-r23
-  Facts -> (flatten (map (/. Row (r23-check-row Row)) Facts)))
+  Facts Carveouts ->
+    (flatten (map (/. Row (r23-check-row Row Carveouts)) Facts)))
