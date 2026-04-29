@@ -139,8 +139,8 @@ Bisect flags:
   forwarded (bisect cares only about rule firing state).
 
 Plan flags:
-  --base=<ref>         Base git ref (or directory for hermetic tests)
-  --head=<ref>         Head git ref (or directory; default: HEAD)
+  --base=<ref>         Base git ref, directory, or .xpcsnap file
+  --head=<ref>         Head git ref, directory, or .xpcsnap file (default: HEAD)
   --format=<fmt>       Output format: json, markdown (default: markdown)
   --kernel-path=<dir>  Explicit kernel directory (as in 'check')
   --config=<path>      Explicit xpc.yaml path (as in 'check'; overrides

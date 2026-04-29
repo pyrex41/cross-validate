@@ -3,10 +3,14 @@ package plan_test
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pyrex41/cross-validate-/pkg/ir"
+	"github.com/pyrex41/cross-validate-/pkg/loader"
 	"github.com/pyrex41/cross-validate-/pkg/plan"
+	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -209,5 +213,89 @@ func TestPlan_WriteJSON_DoesNotJoinZeroSource(t *testing.T) {
 	row := destructive[0].(map[string]interface{})
 	if row["apiVersion"] != "" || row["kind"] != "" || row["name"] != "" {
 		t.Fatalf("zero source should not join to removed resource with empty HeadSource: %v", row)
+	}
+}
+
+// buildSnapshotForTest captures the base fixture as an .xpcsnap file in
+// t.TempDir() and returns its absolute path. The includeResources flag
+// mirrors the on-disk shape produced by `xpc snapshot --include-resources`
+// versus the legacy 2-arg shim.
+func buildSnapshotForTest(t *testing.T, fixtureDir string, includeResources bool) string {
+	t.Helper()
+	docs, err := loader.LoadDirectory(fixtureDir)
+	if err != nil {
+		t.Fatalf("loader.LoadDirectory(%s): %v", fixtureDir, err)
+	}
+	world, err := ir.NewBuilder().Build(docs)
+	if err != nil {
+		t.Fatalf("ir.Build: %v", err)
+	}
+	var snap *snapshot.Snapshot
+	if includeResources {
+		snap = snapshot.FromWorldWithOptions(world, "test",
+			snapshot.FromWorldOptions{IncludeResources: true})
+	} else {
+		snap = snapshot.FromWorld(world, "test")
+	}
+	snapPath := filepath.Join(t.TempDir(), "base.xpcsnap")
+	if err := snap.Save(snapPath); err != nil {
+		t.Fatalf("snap.Save(%s): %v", snapPath, err)
+	}
+	return snapPath
+}
+
+func TestPlan_FromSnapshot(t *testing.T) {
+	snapPath := buildSnapshotForTest(t,
+		"../../testdata/fixtures/plan-destructive/base", true)
+
+	p, cleanup, err := plan.Run(plan.Config{
+		BaseRef:    snapPath,
+		HeadRef:    "../../testdata/fixtures/plan-destructive/head",
+		Path:       ".",
+		SkipRender: true,
+	})
+	t.Cleanup(cleanup)
+	if err != nil {
+		t.Fatalf("plan.Run with .xpcsnap base: %v", err)
+	}
+
+	if got := len(p.Delta.Removed); got != 1 {
+		t.Fatalf("expected 1 removed resource, got %d: %+v", got, p.Delta.Removed)
+	}
+
+	for _, d := range p.Base.Diagnostics {
+		if d.Code == "XPC.P.snapshot-incomplete" {
+			t.Errorf("did not expect XPC.P.snapshot-incomplete on with-resources snapshot; got %+v", d)
+		}
+	}
+}
+
+func TestPlan_FromSnapshot_Incomplete(t *testing.T) {
+	snapPath := buildSnapshotForTest(t,
+		"../../testdata/fixtures/plan-destructive/base", false)
+
+	p, cleanup, err := plan.Run(plan.Config{
+		BaseRef:    snapPath,
+		HeadRef:    "../../testdata/fixtures/plan-destructive/head",
+		Path:       ".",
+		SkipRender: true,
+	})
+	t.Cleanup(cleanup)
+	if err != nil {
+		t.Fatalf("plan.Run with legacy .xpcsnap base: %v", err)
+	}
+
+	var incomplete []types.Diagnostic
+	for _, d := range p.Base.Diagnostics {
+		if d.Code == "XPC.P.snapshot-incomplete" {
+			incomplete = append(incomplete, d)
+		}
+	}
+	if len(incomplete) != 1 {
+		t.Fatalf("expected exactly 1 XPC.P.snapshot-incomplete on Base, got %d: %+v",
+			len(incomplete), p.Base.Diagnostics)
+	}
+	if incomplete[0].Severity != types.SeverityInfo {
+		t.Errorf("expected Info severity, got %s", incomplete[0].Severity)
 	}
 }
