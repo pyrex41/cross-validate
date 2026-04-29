@@ -52,6 +52,18 @@ type ResourceDelta struct {
 	Modified []ResourceChange
 }
 
+// VariantSource describes how a base/head ref was resolved. Plan.Run
+// dispatches on Kind to decide whether to load from a directory (the
+// existing loader/IR/checker pipeline) or from a snapshot file (Phase 2:
+// snapshot.Load → ToWorld → checker.Check).
+type VariantSource struct {
+	// Kind is either "directory" or "snapshot".
+	Kind string
+	// Path is the resolved directory (for "directory") or the .xpcsnap file
+	// path (for "snapshot").
+	Path string
+}
+
 // VariantResult captures everything xpc knows about one side of a plan.
 type VariantResult struct {
 	// Ref is the user-supplied base/head argument — a git ref, a worktree

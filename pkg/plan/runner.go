@@ -13,6 +13,8 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
+	"github.com/pyrex41/cross-validate-/pkg/snapshot"
+	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
 // Config is the runtime configuration for a plan run. Mirrors checker.Config
@@ -70,7 +72,7 @@ func Run(cfg Config) (*Plan, func(), error) {
 		}
 	}
 
-	baseDir, baseCleanup, err := resolveVariant(cfg.BaseRef, cfg.Path, "base")
+	baseSrc, baseCleanup, err := resolveVariant(cfg.BaseRef, cfg.Path, "base")
 	if err != nil {
 		cleanup()
 		return nil, func() {}, fmt.Errorf("resolve base: %w", err)
@@ -79,7 +81,7 @@ func Run(cfg Config) (*Plan, func(), error) {
 		cleanups = append(cleanups, baseCleanup)
 	}
 
-	headDir, headCleanup, err := resolveVariant(cfg.HeadRef, cfg.Path, "head")
+	headSrc, headCleanup, err := resolveVariant(cfg.HeadRef, cfg.Path, "head")
 	if err != nil {
 		cleanup()
 		return nil, func() {}, fmt.Errorf("resolve head: %w", err)
@@ -88,12 +90,12 @@ func Run(cfg Config) (*Plan, func(), error) {
 		cleanups = append(cleanups, headCleanup)
 	}
 
-	baseResult, err := runVariant(cfg, cfg.BaseRef, baseDir)
+	baseResult, err := runVariantFromSource(cfg, cfg.BaseRef, baseSrc)
 	if err != nil {
 		cleanup()
 		return nil, func() {}, fmt.Errorf("check base: %w", err)
 	}
-	headResult, err := runVariant(cfg, cfg.HeadRef, headDir)
+	headResult, err := runVariantFromSource(cfg, cfg.HeadRef, headSrc)
 	if err != nil {
 		cleanup()
 		return nil, func() {}, fmt.Errorf("check head: %w", err)
@@ -115,32 +117,49 @@ func Run(cfg Config) (*Plan, func(), error) {
 	return plan, cleanup, nil
 }
 
-// resolveVariant returns the filesystem directory that should be checked for
-// a given --base / --head argument, plus an optional cleanup function. If
-// ref is an existing directory on disk, it is used as-is with no cleanup.
-// Otherwise ref is treated as a git ref resolved against the repo enclosing
-// path; a temporary worktree is created and its cleanup returned.
-func resolveVariant(ref, path, tag string) (string, func(), error) {
+// resolveVariant returns the source that should be checked for a given
+// --base / --head argument, plus an optional cleanup function.
+//
+// Resolution order:
+//  1. An existing regular file with a `.xpcsnap` suffix → snapshot variant
+//     (no cleanup needed; snapshot is loaded in place).
+//  2. An existing directory → directory variant used as-is (hermetic-test
+//     path, no cleanup).
+//  3. Otherwise, ref is treated as a git ref against the repo enclosing
+//     `path`; a temporary worktree is created and a cleanup closure returned.
+func resolveVariant(ref, path, tag string) (VariantSource, func(), error) {
 	if ref == "" {
-		return "", nil, fmt.Errorf("empty --%s", tag)
+		return VariantSource{}, nil, fmt.Errorf("empty --%s", tag)
 	}
 
-	// Hermetic-test path: if ref is a directory that exists, use it.
-	if info, err := os.Stat(ref); err == nil && info.IsDir() {
-		abs, err := filepath.Abs(ref)
-		if err != nil {
-			return "", nil, fmt.Errorf("abs(%s): %w", ref, err)
+	if info, err := os.Stat(ref); err == nil {
+		// Snapshot file path: regular file with .xpcsnap suffix. Resolved
+		// before the IsDir branch so a directory ending in `.xpcsnap` (rare
+		// but possible) still goes through the directory branch.
+		if info.Mode().IsRegular() && strings.HasSuffix(ref, ".xpcsnap") {
+			abs, err := filepath.Abs(ref)
+			if err != nil {
+				return VariantSource{}, nil, fmt.Errorf("abs(%s): %w", ref, err)
+			}
+			return VariantSource{Kind: "snapshot", Path: abs}, nil, nil
 		}
-		return abs, nil, nil
+		// Hermetic-test path: directory used as-is.
+		if info.IsDir() {
+			abs, err := filepath.Abs(ref)
+			if err != nil {
+				return VariantSource{}, nil, fmt.Errorf("abs(%s): %w", ref, err)
+			}
+			return VariantSource{Kind: "directory", Path: abs}, nil, nil
+		}
 	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return "", nil, fmt.Errorf("abs(%s): %w", path, err)
+		return VariantSource{}, nil, fmt.Errorf("abs(%s): %w", path, err)
 	}
 	repoRoot, err := findRepoRoot(absPath)
 	if err != nil {
-		return "", nil, fmt.Errorf("find repo root from %s: %w", absPath, err)
+		return VariantSource{}, nil, fmt.Errorf("find repo root from %s: %w", absPath, err)
 	}
 
 	// Worktree path contains a hash of (repoRoot, ref, tag) so concurrent
@@ -149,7 +168,7 @@ func resolveVariant(ref, path, tag string) (string, func(), error) {
 	wtParent := filepath.Join(os.TempDir(), "xpc-plan-"+hex.EncodeToString(h[:8]))
 	wtDir := filepath.Join(wtParent, tag)
 	if err := os.MkdirAll(wtParent, 0o755); err != nil {
-		return "", nil, fmt.Errorf("mkdir worktree parent: %w", err)
+		return VariantSource{}, nil, fmt.Errorf("mkdir worktree parent: %w", err)
 	}
 
 	// Pre-existing worktree from an aborted earlier run — remove it.
@@ -161,7 +180,7 @@ func resolveVariant(ref, path, tag string) (string, func(), error) {
 	cmd := exec.Command("git", "-C", repoRoot, "worktree", "add", "--detach", wtDir, ref)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", nil, fmt.Errorf("git worktree add %s %s: %w\n%s", wtDir, ref, err, string(out))
+		return VariantSource{}, nil, fmt.Errorf("git worktree add %s %s: %w\n%s", wtDir, ref, err, string(out))
 	}
 
 	cleanup := func() {
@@ -173,9 +192,9 @@ func resolveVariant(ref, path, tag string) (string, func(), error) {
 	rel, err := filepath.Rel(repoRoot, absPath)
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("rel(%s, %s): %w", repoRoot, absPath, err)
+		return VariantSource{}, nil, fmt.Errorf("rel(%s, %s): %w", repoRoot, absPath, err)
 	}
-	return filepath.Join(wtDir, rel), cleanup, nil
+	return VariantSource{Kind: "directory", Path: filepath.Join(wtDir, rel)}, cleanup, nil
 }
 
 // resolveVariantConfig picks the *config.Config for a single variant. If the
@@ -255,6 +274,57 @@ func runVariant(cfg Config, ref, dir string) (VariantResult, error) {
 	return VariantResult{
 		Ref:         ref,
 		ResolvedDir: dir,
+		World:       world,
+		Diagnostics: diags,
+	}, nil
+}
+
+// runVariantFromSource dispatches a resolved VariantSource to the correct
+// loader pipeline. Directory sources go through the existing
+// loader/IR/checker flow; snapshot sources skip loader/IR and load straight
+// from the on-disk artifact.
+func runVariantFromSource(cfg Config, ref string, src VariantSource) (VariantResult, error) {
+	switch src.Kind {
+	case "snapshot":
+		return runVariantFromSnapshot(cfg, ref, src.Path)
+	case "directory", "":
+		return runVariant(cfg, ref, src.Path)
+	default:
+		return VariantResult{}, fmt.Errorf("unknown variant source kind %q for %s", src.Kind, ref)
+	}
+}
+
+// runVariantFromSnapshot loads a `.xpcsnap` file, materialises the World it
+// describes, and runs the checker against it. When the snapshot was captured
+// without `--include-resources` (i.e. it carries only a type environment and
+// no live cluster state), an info-level XPC.P.snapshot-incomplete diagnostic
+// is appended so users understand why a plan delta sourced from this side
+// will be type-env-only.
+func runVariantFromSnapshot(cfg Config, ref, snapPath string) (VariantResult, error) {
+	snap, err := snapshot.Load(snapPath)
+	if err != nil {
+		return VariantResult{}, fmt.Errorf("loading snapshot %s: %w", snapPath, err)
+	}
+	world := snap.ToWorld()
+	diags, err := checker.Check(world, cfg.CheckerConfig)
+	if err != nil {
+		return VariantResult{}, fmt.Errorf("checking snapshot %s: %w", snapPath, err)
+	}
+	if len(snap.Resources) == 0 && len(snap.ArgoApps) == 0 &&
+		len(snap.ArgoAppSets) == 0 && len(snap.ArgoProjects) == 0 {
+		diags = append(diags, types.Diagnostic{
+			Code:     "XPC.P.snapshot-incomplete",
+			Severity: types.SeverityInfo,
+			Message:  fmt.Sprintf("snapshot %s has no resource instances", snapPath),
+			Detail: "The snapshot was captured without --include-resources, so the plan delta " +
+				"cannot reflect cluster-side state. Type-environment diagnostics still flow through.",
+			Fix: "Re-capture with `xpc snapshot --include-resources` to populate " +
+				"Resources/ArgoApps/AppSets/Projects.",
+		})
+	}
+	return VariantResult{
+		Ref:         ref,
+		ResolvedDir: snapPath,
 		World:       world,
 		Diagnostics: diags,
 	}, nil
