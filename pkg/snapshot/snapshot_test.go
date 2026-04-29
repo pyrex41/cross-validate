@@ -226,6 +226,196 @@ func TestDiffSameSnapshot(t *testing.T) {
 	}
 }
 
+func TestFromWorldWithResources(t *testing.T) {
+	w := types.NewWorld()
+	w.Resources = []types.ResourceInfo{
+		{
+			APIVersion: "example.com/v1",
+			Kind:       "Foo",
+			Namespace:  "ns-a",
+			Name:       "foo-1",
+		},
+		{
+			APIVersion: "other.example.com/v1",
+			Kind:       "Bar",
+			Namespace:  "",
+			Name:       "bar-cluster",
+		},
+	}
+	w.ArgoApps = []types.ArgoApplication{{
+		Name:         "app-a",
+		Namespace:    "argocd",
+		TrackingMode: "annotation",
+	}}
+	w.ArgoAppSets = []types.ArgoApplicationSet{{
+		Name: "appset-a",
+		Template: types.ArgoAppSetTemplate{
+			Name:      "child-{{name}}",
+			Namespace: "argocd",
+		},
+	}}
+	w.ArgoProjects = []types.ArgoAppProject{{
+		Name: "proj-a",
+	}}
+
+	s := FromWorldWithOptions(w, "test", FromWorldOptions{IncludeResources: true})
+
+	if len(s.Resources) != 2 {
+		t.Fatalf("expected 2 resources on snapshot, got %d", len(s.Resources))
+	}
+	if len(s.ArgoApps) != 1 || s.ArgoApps[0].Name != "app-a" {
+		t.Fatalf("argo apps not carried: %+v", s.ArgoApps)
+	}
+	if len(s.ArgoAppSets) != 1 || s.ArgoAppSets[0].Name != "appset-a" {
+		t.Fatalf("argo appsets not carried: %+v", s.ArgoAppSets)
+	}
+	if len(s.ArgoProjects) != 1 || s.ArgoProjects[0].Name != "proj-a" {
+		t.Fatalf("argo projects not carried: %+v", s.ArgoProjects)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "round-trip.xpcsnap")
+	if err := s.Save(path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	w2 := loaded.ToWorld()
+	if len(w2.Resources) != len(w.Resources) {
+		t.Errorf("resources count mismatch after round-trip: got %d want %d",
+			len(w2.Resources), len(w.Resources))
+	}
+	for i := range w.Resources {
+		got, want := w2.Resources[i], w.Resources[i]
+		if got.APIVersion != want.APIVersion ||
+			got.Kind != want.Kind ||
+			got.Namespace != want.Namespace ||
+			got.Name != want.Name {
+			t.Errorf("resource[%d] identity mismatch: got %+v want %+v", i, got, want)
+		}
+	}
+	if len(w2.ArgoApps) != 1 || w2.ArgoApps[0].Name != "app-a" {
+		t.Errorf("argo apps not round-tripped: %+v", w2.ArgoApps)
+	}
+	if len(w2.ArgoAppSets) != 1 || w2.ArgoAppSets[0].Name != "appset-a" {
+		t.Errorf("argo appsets not round-tripped: %+v", w2.ArgoAppSets)
+	}
+	if w2.ArgoAppSets[0].Template.Namespace != "argocd" {
+		t.Errorf("appset template namespace not round-tripped: %q",
+			w2.ArgoAppSets[0].Template.Namespace)
+	}
+	if len(w2.ArgoProjects) != 1 || w2.ArgoProjects[0].Name != "proj-a" {
+		t.Errorf("argo projects not round-tripped: %+v", w2.ArgoProjects)
+	}
+}
+
+func TestComputeDigestStable_NoResources(t *testing.T) {
+	build := func() *types.World {
+		w := types.NewWorld()
+		w.CRDs = []types.CRDInfo{{
+			Group: "example.com",
+			Kind:  "Foo",
+			Versions: []types.CRDVersion{{
+				Name:    "v1",
+				Served:  true,
+				Storage: true,
+			}},
+		}}
+		w.Providers = []types.ProviderInfo{{Name: "provider-aws", Package: "xpkg:v1"}}
+		return w
+	}
+
+	w1 := build()
+	s1 := FromWorld(w1, "test")
+	d1 := s1.Digest
+	if d1 == "" {
+		t.Fatal("expected non-empty digest from FromWorld")
+	}
+
+	w2 := build()
+	s2 := FromWorldWithOptions(w2, "test", FromWorldOptions{IncludeResources: true})
+	d2 := s2.Digest
+
+	if d1 != d2 {
+		t.Errorf("digest changed when IncludeResources=true on a World with no live state:\n  legacy:  %s\n  with-opt: %s", d1, d2)
+	}
+
+	if s2.Resources != nil {
+		t.Errorf("expected Resources to remain nil when copied from empty World, got %v", s2.Resources)
+	}
+	if s2.ArgoApps != nil {
+		t.Errorf("expected ArgoApps to remain nil, got %v", s2.ArgoApps)
+	}
+	if s2.ArgoAppSets != nil {
+		t.Errorf("expected ArgoAppSets to remain nil, got %v", s2.ArgoAppSets)
+	}
+	if s2.ArgoProjects != nil {
+		t.Errorf("expected ArgoProjects to remain nil, got %v", s2.ArgoProjects)
+	}
+}
+
+func TestLoadOldFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.xpcsnap")
+
+	// Hand-crafted JSON simulating a snapshot written before this change:
+	// no resources / argo_apps / argo_app_sets / argo_projects keys at all.
+	body := `{
+  "version": 1,
+  "digest": "sha256:deadbeef",
+  "timestamp": "2026-01-01T00:00:00Z",
+  "clusterName": "legacy",
+  "crds": [
+    {
+      "group": "example.com",
+      "kind": "Foo",
+      "scope": "Namespaced",
+      "versions": [{"name": "v1", "served": true, "storage": true}],
+      "conversion": {"strategy": "None", "costClass": "None"},
+      "source": {"file": "", "line": 0, "column": 0},
+      "isXRD": false
+    }
+  ],
+  "xrds": [],
+  "providers": [],
+  "functions": [],
+  "configurations": [],
+  "compositions": []
+}`
+
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write old-format snapshot: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load on legacy snapshot failed: %v", err)
+	}
+
+	if loaded.ClusterName != "legacy" {
+		t.Errorf("clusterName: got %q want %q", loaded.ClusterName, "legacy")
+	}
+	if len(loaded.CRDs) != 1 {
+		t.Errorf("CRDs: got %d want 1", len(loaded.CRDs))
+	}
+	if loaded.Resources != nil {
+		t.Errorf("expected Resources nil on legacy snapshot, got %v", loaded.Resources)
+	}
+	if loaded.ArgoApps != nil {
+		t.Errorf("expected ArgoApps nil on legacy snapshot, got %v", loaded.ArgoApps)
+	}
+	if loaded.ArgoAppSets != nil {
+		t.Errorf("expected ArgoAppSets nil on legacy snapshot, got %v", loaded.ArgoAppSets)
+	}
+	if loaded.ArgoProjects != nil {
+		t.Errorf("expected ArgoProjects nil on legacy snapshot, got %v", loaded.ArgoProjects)
+	}
+}
+
 func TestSaveCreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snap.xpcsnap")

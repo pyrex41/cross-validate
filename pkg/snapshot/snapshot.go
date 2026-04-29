@@ -58,6 +58,24 @@ type Snapshot struct {
 	// Schemas are content-addressed schemas from CRDs.
 	Schemas map[string]types.SchemaInfo `json:"schemas,omitempty"`
 
+	// Resources are the live cluster resources (XRs, MRs, and any others).
+	// Only populated when FromWorldWithOptions is invoked with
+	// IncludeResources: true. Omitted from on-disk JSON when nil so existing
+	// audit-proof snapshots remain byte-identical.
+	Resources []types.ResourceInfo `json:"resources,omitempty"`
+
+	// ArgoApps are the parsed Argo CD Applications. Same nil-omit guarantee
+	// as Resources.
+	ArgoApps []types.ArgoApplication `json:"argo_apps,omitempty"`
+
+	// ArgoAppSets are the parsed Argo CD ApplicationSets. Same nil-omit
+	// guarantee as Resources.
+	ArgoAppSets []types.ArgoApplicationSet `json:"argo_app_sets,omitempty"`
+
+	// ArgoProjects are the parsed Argo CD AppProjects. Same nil-omit
+	// guarantee as Resources.
+	ArgoProjects []types.ArgoAppProject `json:"argo_projects,omitempty"`
+
 	// SigningIdentity that signed this snapshot.
 	SigningIdentity string `json:"signingIdentity,omitempty"`
 
@@ -143,6 +161,57 @@ func (s *Snapshot) computeDigest() string {
 	}
 
 	h.Write([]byte(s.ArgoTrackingMode))
+
+	// New sections: Resources, ArgoApps, ArgoAppSets, ArgoProjects.
+	// All four are nil for legacy snapshots (the FromWorld 2-arg shim never
+	// populates them), so the sort+iterate loops below contribute nothing
+	// to the hash and the legacy digest is preserved byte-for-byte.
+	sortedResources := slices.Clone(s.Resources)
+	slices.SortFunc(sortedResources, func(a, b types.ResourceInfo) int {
+		return cmp.Or(
+			cmp.Compare(a.APIVersion, b.APIVersion),
+			cmp.Compare(a.Kind, b.Kind),
+			cmp.Compare(a.Namespace, b.Namespace),
+			cmp.Compare(a.Name, b.Name),
+		)
+	})
+	for _, r := range sortedResources {
+		data, _ := json.Marshal(r)
+		h.Write(data)
+	}
+
+	sortedArgoApps := slices.Clone(s.ArgoApps)
+	slices.SortFunc(sortedArgoApps, func(a, b types.ArgoApplication) int {
+		return cmp.Or(
+			cmp.Compare(a.Namespace, b.Namespace),
+			cmp.Compare(a.Name, b.Name),
+		)
+	})
+	for _, a := range sortedArgoApps {
+		data, _ := json.Marshal(a)
+		h.Write(data)
+	}
+
+	sortedAppSets := slices.Clone(s.ArgoAppSets)
+	slices.SortFunc(sortedAppSets, func(a, b types.ArgoApplicationSet) int {
+		return cmp.Or(
+			cmp.Compare(a.Template.Namespace, b.Template.Namespace),
+			cmp.Compare(a.Name, b.Name),
+		)
+	})
+	for _, a := range sortedAppSets {
+		data, _ := json.Marshal(a)
+		h.Write(data)
+	}
+
+	sortedProjects := slices.Clone(s.ArgoProjects)
+	slices.SortFunc(sortedProjects, func(a, b types.ArgoAppProject) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	for _, p := range sortedProjects {
+		data, _ := json.Marshal(p)
+		h.Write(data)
+	}
 
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
@@ -293,8 +362,18 @@ func truncDigest(s string) string {
 	return s
 }
 
-// FromWorld creates a snapshot from a World (for offline/filesystem-based snapshots).
-func FromWorld(w *types.World, clusterName string) *Snapshot {
+// FromWorldOptions configures FromWorldWithOptions.
+type FromWorldOptions struct {
+	// IncludeResources, when true, copies the World's live cluster state
+	// (Resources + ArgoApps + ArgoAppSets + ArgoProjects) into the snapshot.
+	// When false (the default, used by the 2-arg FromWorld shim), the
+	// snapshot remains byte-identical to legacy audit-proof artifacts.
+	IncludeResources bool
+}
+
+// FromWorldWithOptions creates a snapshot from a World, optionally including
+// live cluster state (Resources + Argo objects) per opts.
+func FromWorldWithOptions(w *types.World, clusterName string, opts FromWorldOptions) *Snapshot {
 	s := New(clusterName)
 	s.CRDs = w.CRDs
 	s.XRDs = w.XRDs
@@ -321,8 +400,22 @@ func FromWorld(w *types.World, clusterName string) *Snapshot {
 		s.ArgoTrackingMode = w.ArgoApps[0].TrackingMode
 	}
 
+	if opts.IncludeResources {
+		s.Resources = append([]types.ResourceInfo(nil), w.Resources...)
+		s.ArgoApps = append([]types.ArgoApplication(nil), w.ArgoApps...)
+		s.ArgoAppSets = append([]types.ArgoApplicationSet(nil), w.ArgoAppSets...)
+		s.ArgoProjects = append([]types.ArgoAppProject(nil), w.ArgoProjects...)
+	}
+
 	s.ComputeDigest()
 	return s
+}
+
+// FromWorld creates a snapshot from a World (for offline/filesystem-based
+// snapshots). This is a 2-arg shim over FromWorldWithOptions that preserves
+// the legacy on-disk JSON byte-for-byte: no Resources, no Argo objects.
+func FromWorld(w *types.World, clusterName string) *Snapshot {
+	return FromWorldWithOptions(w, clusterName, FromWorldOptions{})
 }
 
 // ToWorld converts a snapshot back to a World for type checking.
@@ -342,6 +435,12 @@ func (s *Snapshot) ToWorld() *types.World {
 	}
 
 	w.Configurations = s.Configurations
+
+	w.Resources = append([]types.ResourceInfo(nil), s.Resources...)
+	w.ArgoApps = append([]types.ArgoApplication(nil), s.ArgoApps...)
+	w.ArgoAppSets = append([]types.ArgoApplicationSet(nil), s.ArgoAppSets...)
+	w.ArgoProjects = append([]types.ArgoAppProject(nil), s.ArgoProjects...)
+
 	return w
 }
 
