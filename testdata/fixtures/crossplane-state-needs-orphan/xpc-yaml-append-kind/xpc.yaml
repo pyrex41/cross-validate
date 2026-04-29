@@ -1,0 +1,8 @@
+version: 1
+# Add an in-house CRD to the state-bearing-kinds allowlist. Without this
+# xpc.yaml the manifest would not produce any R23 fact at all (its kind
+# isn't on the built-in list); with append, R23 will fire for it because
+# the manifest lacks spec.deletionPolicy: Orphan.
+state-bearing-kinds:
+  append:
+    - {group: "myorg.example.com", kind: "ManagedThing"}

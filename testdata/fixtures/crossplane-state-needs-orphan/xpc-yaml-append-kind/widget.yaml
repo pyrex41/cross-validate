@@ -1,0 +1,8 @@
+apiVersion: myorg.example.com/v1alpha1
+kind: ManagedThing
+metadata:
+  name: in-house-state-thing
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1

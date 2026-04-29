@@ -5,14 +5,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/pyrex41/cross-validate-/pkg/audit"
+	"github.com/pyrex41/cross-validate-/pkg/bisect"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
@@ -31,9 +34,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Honour XPC_CPUPROFILE for ad-hoc profiling. Set the env var to a path,
+	// run any subcommand, and pprof output is written there. Off by default.
+	// We stop+close before os.Exit because os.Exit skips deferred funcs.
+	var profStop func()
+	if path := os.Getenv("XPC_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			_ = pprof.StartCPUProfile(f)
+			profStop = func() { pprof.StopCPUProfile(); _ = f.Close() }
+		}
+	}
+	exit := func(code int) {
+		if profStop != nil {
+			profStop()
+		}
+		os.Exit(code)
+	}
+
 	switch os.Args[1] {
 	case "check":
-		os.Exit(runCheck(os.Args[2:]))
+		exit(runCheck(os.Args[2:]))
 	case "dump-ir":
 		os.Exit(runDumpIR(os.Args[2:]))
 	case "snapshot":
@@ -70,7 +90,7 @@ Usage:
   xpc snapshot [flags] [<path>]    Capture cluster type environment snapshot
   xpc verify <proof-file>          Verify a proof file
   xpc proof <subcommand>           Proof operations (show, diff)
-  xpc bisect [flags]               Find the commit that broke a rule
+  xpc bisect [flags] [<path>]      Find the commit that flipped a rule
   xpc plan [flags] <path>          Diff two refs; report destructive changes
   xpc explain <code>               Show docs for an error code (e.g., XPC002)
   xpc version                      Print version
@@ -108,9 +128,14 @@ Proof subcommands:
   xpc proof show --rule=<id> <proof-file>  Show a specific rule's judgments
 
 Bisect flags:
-  --rule=<code>        Rule to bisect (e.g., XPC002)
+  --rule=<code>        Rule code to bisect (e.g., XPC002, XPC.A.resource-field-valid)
   --good=<ref>         Known-good git ref
   --bad=<ref>          Known-bad git ref (default: HEAD)
+  --xpc-bin=<path>     xpc binary used inside the loop (default: this binary)
+  --kernel-path=<dir>  Pass-through to inner xpc check
+  --config=<path>      Pass-through to inner xpc check
+  Inner check runs with --skip-render; --proof / --snapshot are NOT
+  forwarded (bisect cares only about rule firing state).
 
 Plan flags:
   --base=<ref>         Base git ref (or directory for hermetic tests)
@@ -227,6 +252,13 @@ func runCheck(args []string) int {
 	}
 
 	// Load documents
+	timing := os.Getenv("XPC_TIMING") != ""
+	timed := func(name string, t0 time.Time) {
+		if timing {
+			fmt.Fprintf(os.Stderr, "  [timing] %-12s %v\n", name, time.Since(t0))
+		}
+	}
+	tLoad := time.Now()
 	var allDocs []loader.LoadedDocument
 	for _, path := range paths {
 		info, err := os.Stat(path)
@@ -246,6 +278,7 @@ func runCheck(args []string) int {
 		}
 		allDocs = append(allDocs, docs...)
 	}
+	timed("load", tLoad)
 
 	if len(allDocs) == 0 {
 		fmt.Fprintln(os.Stderr, "no YAML documents found")
@@ -270,11 +303,13 @@ func runCheck(args []string) int {
 		}
 		builder.AppSetContext.PRFixtures = fixtures
 	}
+	tBuild := time.Now()
 	world, err := builder.Build(allDocs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
 		return 1
 	}
+	timed("build-ir", tBuild)
 
 	var loadedSnapshot *snapshot.Snapshot
 
@@ -298,7 +333,9 @@ func runCheck(args []string) int {
 		KernelPath:        kernelPath,
 	}
 
+	tCheck := time.Now()
 	result := checker.CheckWithObligations(world, checkerCfg)
+	timed("check", tCheck)
 	diags := result.Diagnostics
 
 	// Merge in any info-level diagnostics the AppSet expander emitted
@@ -362,7 +399,15 @@ func runCheck(args []string) int {
 			Violated:         result.Violated,
 			ObligationIDs:    result.ObligationIDs,
 		}
-		rulesetDigest, digestErr := audit.ComputeRulesetDigest(kernelPath)
+		var (
+			rulesetDigest string
+			digestErr     error
+		)
+		if kernelPath != "" {
+			rulesetDigest, digestErr = audit.ComputeRulesetDigest(kernelPath)
+		} else {
+			rulesetDigest, digestErr = audit.ComputeEmbeddedRulesetDigest()
+		}
 		if digestErr != nil {
 			fmt.Fprintf(os.Stderr, "error computing ruleset digest: %v\n", digestErr)
 			return 1
@@ -629,21 +674,39 @@ func runBisect(args []string) int {
 	ruleCode := ""
 	goodRef := ""
 	badRef := "HEAD"
+	manifestPath := ""
+	xpcBin := ""
+	kernelPath := os.Getenv("XPC_KERNEL_PATH")
+	configPath := os.Getenv("XPC_CONFIG_PATH")
 
 	for _, arg := range args {
 		switch {
-		case len(arg) > 7 && arg[:7] == "--rule=":
-			ruleCode = arg[7:]
-		case len(arg) > 7 && arg[:7] == "--good=":
-			goodRef = arg[7:]
-		case len(arg) > 6 && arg[:6] == "--bad=":
-			badRef = arg[6:]
+		case strings.HasPrefix(arg, "--rule="):
+			ruleCode = strings.TrimPrefix(arg, "--rule=")
+		case strings.HasPrefix(arg, "--good="):
+			goodRef = strings.TrimPrefix(arg, "--good=")
+		case strings.HasPrefix(arg, "--bad="):
+			badRef = strings.TrimPrefix(arg, "--bad=")
+		case strings.HasPrefix(arg, "--xpc-bin="):
+			xpcBin = strings.TrimPrefix(arg, "--xpc-bin=")
+		case strings.HasPrefix(arg, "--kernel-path="):
+			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
-		default:
+		case len(arg) > 0 && arg[0] == '-':
 			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
 			return 1
+		default:
+			// Positional path: where to run `xpc check` inside each
+			// materialized worktree. Defaults to cwd if omitted.
+			if manifestPath != "" {
+				fmt.Fprintln(os.Stderr, "error: xpc bisect accepts at most one path")
+				return 1
+			}
+			manifestPath = arg
 		}
 	}
 
@@ -655,12 +718,80 @@ func runBisect(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --good is required")
 		return 1
 	}
+	if err := bisect.ValidateRuleCode(ruleCode); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 
-	fmt.Fprintf(os.Stderr,
-		"error: xpc bisect is not implemented yet (requested rule %s, good %s, bad %s)\n",
-		ruleCode, goodRef, badRef)
-	fmt.Fprintln(os.Stderr, "use xpc check or xpc plan directly while bisect remains experimental")
-	return 1
+	// Resolve the xpc binary used inside the bisect loop. We default to the
+	// running executable so the inner check uses the same build the user
+	// invoked. --xpc-bin lets ops override (e.g., to bisect against a known-
+	// stable xpc while the current build is unstable).
+	if xpcBin == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: resolve xpc binary: %v\n", err)
+			return 1
+		}
+		xpcBin = exe
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: getwd: %v\n", err)
+		return 1
+	}
+
+	// Pass through kernel/config flags to the inner `xpc check` so the
+	// rule we're bisecting on actually evaluates the same way it did
+	// originally. We deliberately do not pass --proof or --snapshot —
+	// bisect cares only about whether the rule code appears.
+	var extraArgs []string
+	if kernelPath != "" {
+		extraArgs = append(extraArgs, "--kernel-path="+kernelPath)
+	}
+	if configPath != "" {
+		extraArgs = append(extraArgs, "--config="+configPath)
+	}
+
+	detector := bisect.XPCCheckDetector(xpcBin, ruleCode, extraArgs)
+
+	res, err := bisect.Run(bisect.Options{
+		RuleCode:     ruleCode,
+		GoodRef:      goodRef,
+		BadRef:       badRef,
+		RepoRoot:     cwd,
+		ManifestPath: manifestPath,
+		CheckRule:    detector,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, bisect.ErrSameCommit):
+			fmt.Fprintln(os.Stderr, "error: --good and --bad resolve to the same commit; nothing to bisect")
+			return 1
+		case errors.Is(err, bisect.ErrRuleNeverChanged):
+			fmt.Fprintf(os.Stderr,
+				"rule %s never changed firing state between %s and %s\n",
+				ruleCode, goodRef, badRef)
+			fmt.Fprintln(os.Stderr, "either both refs fire it, or neither does — bisect has nothing to find")
+			return 1
+		default:
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+	}
+
+	verb := "started firing"
+	if res.Direction == bisect.StoppedFiring {
+		verb = "stopped firing"
+	}
+	fmt.Printf("rule %s %s at:\n", ruleCode, verb)
+	fmt.Printf("  commit:  %s\n", res.Commit)
+	fmt.Printf("  subject: %s\n", res.Subject)
+	fmt.Printf("  good:    %s (%s)\n", goodRef, res.GoodSHA[:12])
+	fmt.Printf("  bad:     %s (%s)\n", badRef, res.BadSHA[:12])
+	fmt.Printf("  steps:   %d\n", res.Steps)
+	return 0
 }
 
 func runPlan(args []string) int {

@@ -104,12 +104,13 @@ func Run(cfg Config) (*Plan, func(), error) {
 		Head:  headResult,
 		Delta: Diff(baseResult.World, headResult.World),
 	}
-	// R26/R27 read knob-shaped state (bypass keys, immutable-field overlay)
-	// off the base World — both variants resolve from the same xpc.yaml
-	// inside the repo, so base and head agree.
+	// R26/R27 read knob-shaped state (bypass keys, immutable-field overlay,
+	// state-bearing kind allowlist) off the base World — both variants
+	// resolve from the same xpc.yaml inside the repo, so base and head agree.
 	bypassKeys := baseResult.World.BypassKeys
 	immutables := baseResult.World.ImmutableFields
-	plan.Diagnostics = R26DestructiveDelete(plan.Delta, bypassKeys)
+	stateBearing := baseResult.World.StateBearingKinds
+	plan.Diagnostics = R26DestructiveDelete(plan.Delta, bypassKeys, stateBearing)
 	plan.Diagnostics = append(plan.Diagnostics, R27ImmutableChange(plan.Delta, immutables, bypassKeys)...)
 	return plan, cleanup, nil
 }

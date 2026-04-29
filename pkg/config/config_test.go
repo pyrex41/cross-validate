@@ -281,6 +281,237 @@ immutable-fields:
 	}
 }
 
+func TestParse_StateBearingKinds_Append(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+version: 1
+state-bearing-kinds:
+  append:
+    - {group: "myorg.example.com", kind: "ManagedThing"}
+    - {group: "myorg.example.com", kind: "Vault"}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := len(cfg.StateBearingKinds.Append); got != 2 {
+		t.Fatalf("expected 2 append entries, got %d", got)
+	}
+	if cfg.StateBearingKinds.Append[0].Group != "myorg.example.com" ||
+		cfg.StateBearingKinds.Append[0].Kind != "ManagedThing" {
+		t.Errorf("first append entry mis-parsed: %+v", cfg.StateBearingKinds.Append[0])
+	}
+	defaults := []types.ArgoGroupKind{
+		{Group: "rds.aws.upbound.io", Kind: "Cluster"},
+	}
+	got := config.ResolveStateBearingKinds(cfg, defaults)
+	wantContains := func(group, kind string) {
+		t.Helper()
+		for _, gk := range got {
+			if gk.Group == group && gk.Kind == kind {
+				return
+			}
+		}
+		t.Errorf("expected resolved list to contain (%s, %s); got %+v", group, kind, got)
+	}
+	wantContains("rds.aws.upbound.io", "Cluster")
+	wantContains("myorg.example.com", "ManagedThing")
+	wantContains("myorg.example.com", "Vault")
+}
+
+func TestParse_StateBearingKinds_Suppress(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+version: 1
+state-bearing-kinds:
+  suppress:
+    - {group: "kms.aws.upbound.io", kind: "Key"}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := len(cfg.StateBearingKinds.Suppress); got != 1 {
+		t.Fatalf("expected 1 suppress entry, got %d", got)
+	}
+	defaults := []types.ArgoGroupKind{
+		{Group: "kms.aws.upbound.io", Kind: "Key"},
+		{Group: "s3.aws.upbound.io", Kind: "Bucket"},
+	}
+	got := config.ResolveStateBearingKinds(cfg, defaults)
+	for _, gk := range got {
+		if gk.Group == "kms.aws.upbound.io" && gk.Kind == "Key" {
+			t.Errorf("expected suppress to remove (kms.aws.upbound.io, Key), got %+v", got)
+		}
+	}
+	// Other defaults survive.
+	saw := false
+	for _, gk := range got {
+		if gk.Group == "s3.aws.upbound.io" && gk.Kind == "Bucket" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Errorf("expected non-suppressed default to survive, got %+v", got)
+	}
+}
+
+func TestParse_StateBearingKinds_RejectsEmptyKind(t *testing.T) {
+	_, err := config.Parse([]byte(`
+version: 1
+state-bearing-kinds:
+  append:
+    - {group: "myorg.example.com", kind: ""}
+`))
+	if err == nil {
+		t.Fatal("expected error on empty kind in append")
+	}
+	if !strings.Contains(err.Error(), "kind is required") {
+		t.Errorf("expected 'kind is required' error, got %v", err)
+	}
+
+	_, err = config.Parse([]byte(`
+version: 1
+state-bearing-kinds:
+  suppress:
+    - {group: "kms.aws.upbound.io", kind: "   "}
+`))
+	if err == nil {
+		t.Fatal("expected error on whitespace-only kind in suppress")
+	}
+	if !strings.Contains(err.Error(), "kind must be non-blank") {
+		t.Errorf("expected 'kind must be non-blank' error, got %v", err)
+	}
+
+	// Whitespace-only group is rejected even if kind is fine — empty
+	// group is allowed (core APIs), but blank-with-spaces is a typo.
+	_, err = config.Parse([]byte(`
+version: 1
+state-bearing-kinds:
+  append:
+    - {group: "  ", kind: "Widget"}
+`))
+	if err == nil {
+		t.Fatal("expected error on whitespace-only group")
+	}
+}
+
+func TestResolve_StateBearingKinds(t *testing.T) {
+	defaults := []types.ArgoGroupKind{
+		{Group: "rds.aws.upbound.io", Kind: "Cluster"},
+		{Group: "kms.aws.upbound.io", Kind: "Key"},
+		{Group: "s3.aws.upbound.io", Kind: "Bucket"},
+	}
+
+	t.Run("nil_cfg_returns_defaults", func(t *testing.T) {
+		got := config.ResolveStateBearingKinds(nil, defaults)
+		if !reflect.DeepEqual(sortedGK(got), sortedGK(defaults)) {
+			t.Errorf("nil cfg should return defaults verbatim, got %+v", got)
+		}
+	})
+
+	t.Run("suppress_of_nonexistent_is_noop", func(t *testing.T) {
+		cfg := &config.Config{
+			StateBearingKinds: config.StateBearingKindsConfig{
+				Suppress: []config.StateBearingKindEntry{
+					{Group: "nonexistent.example.com", Kind: "Whatever"},
+				},
+			},
+		}
+		got := config.ResolveStateBearingKinds(cfg, defaults)
+		if !reflect.DeepEqual(sortedGK(got), sortedGK(defaults)) {
+			t.Errorf("suppress of nonexistent should be a no-op, got %+v", got)
+		}
+	})
+
+	t.Run("append_of_existing_is_no_dupe", func(t *testing.T) {
+		cfg := &config.Config{
+			StateBearingKinds: config.StateBearingKindsConfig{
+				Append: []config.StateBearingKindEntry{
+					{Group: "rds.aws.upbound.io", Kind: "Cluster"}, // dup
+				},
+			},
+		}
+		got := config.ResolveStateBearingKinds(cfg, defaults)
+		if len(got) != len(defaults) {
+			t.Errorf("append of existing should not duplicate, got %+v", got)
+		}
+	})
+
+	t.Run("suppress_then_append_back", func(t *testing.T) {
+		cfg := &config.Config{
+			StateBearingKinds: config.StateBearingKindsConfig{
+				Suppress: []config.StateBearingKindEntry{
+					{Group: "kms.aws.upbound.io", Kind: "Key"},
+				},
+				Append: []config.StateBearingKindEntry{
+					{Group: "kms.aws.upbound.io", Kind: "Key"},
+				},
+			},
+		}
+		// Suppress applies first; append adds it back. Net: still present.
+		got := config.ResolveStateBearingKinds(cfg, defaults)
+		saw := false
+		for _, gk := range got {
+			if gk.Group == "kms.aws.upbound.io" && gk.Kind == "Key" {
+				saw = true
+			}
+		}
+		if !saw {
+			t.Errorf("suppress-then-append-back should leave entry present, got %+v", got)
+		}
+	})
+
+	t.Run("suppress_default_plus_append_new", func(t *testing.T) {
+		cfg := &config.Config{
+			StateBearingKinds: config.StateBearingKindsConfig{
+				Suppress: []config.StateBearingKindEntry{
+					{Group: "kms.aws.upbound.io", Kind: "Key"},
+				},
+				Append: []config.StateBearingKindEntry{
+					{Group: "myorg.example.com", Kind: "ManagedThing"},
+				},
+			},
+		}
+		got := config.ResolveStateBearingKinds(cfg, defaults)
+		for _, gk := range got {
+			if gk.Group == "kms.aws.upbound.io" && gk.Kind == "Key" {
+				t.Errorf("expected KMS Key suppressed, got %+v", got)
+			}
+		}
+		saw := false
+		for _, gk := range got {
+			if gk.Group == "myorg.example.com" && gk.Kind == "ManagedThing" {
+				saw = true
+			}
+		}
+		if !saw {
+			t.Errorf("expected appended ManagedThing, got %+v", got)
+		}
+		// Other defaults survive.
+		if len(got) != len(defaults)-1+1 {
+			t.Errorf("expected len defaults-1+1, got %d (%+v)", len(got), got)
+		}
+	})
+
+	t.Run("dedup_within_append", func(t *testing.T) {
+		cfg := &config.Config{
+			StateBearingKinds: config.StateBearingKindsConfig{
+				Append: []config.StateBearingKindEntry{
+					{Group: "myorg.example.com", Kind: "Widget"},
+					{Group: "myorg.example.com", Kind: "Widget"},
+				},
+			},
+		}
+		got := config.ResolveStateBearingKinds(cfg, defaults)
+		count := 0
+		for _, gk := range got {
+			if gk.Group == "myorg.example.com" && gk.Kind == "Widget" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("expected dedup within append, got %d copies in %+v", count, got)
+		}
+	})
+}
+
 func TestParse_UnknownNestedKey_IsError(t *testing.T) {
 	// Strict-decode rejects unknown keys inside known sections so users
 	// can't silently mistype a knob name.
@@ -351,6 +582,17 @@ func countOf(haystack []string, needle string) int {
 		}
 	}
 	return n
+}
+
+func sortedGK(in []types.ArgoGroupKind) []types.ArgoGroupKind {
+	out := append([]types.ArgoGroupKind(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Group != out[j].Group {
+			return out[i].Group < out[j].Group
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out
 }
 
 func sortedFields(in []types.ImmutableField) []types.ImmutableField {

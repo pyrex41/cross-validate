@@ -59,6 +59,9 @@ func ensureKnobDefaults(w *types.World) {
 	if w.ImmutableFields == nil {
 		w.ImmutableFields = config.ResolveImmutableFields(nil, ImmutableFieldRegistry())
 	}
+	if w.StateBearingKinds == nil {
+		w.StateBearingKinds = config.ResolveStateBearingKinds(nil, StateBearingKindsRegistry())
+	}
 	if w.ProdPatterns == nil {
 		w.ProdPatterns = config.ResolveProdPatterns(nil)
 	}
@@ -87,7 +90,15 @@ func extractCPDeletionPolicyFacts(w *types.World) {
 		return
 	}
 	allow := make(map[string]bool, 16)
-	for _, gk := range StateBearingKindsRegistry() {
+	// Prefer the resolved overlay on the World (populated by Builder.Build
+	// from xpc.yaml). Fall back to the raw registry only when the World
+	// was constructed inline without going through the builder — in normal
+	// runs ensureKnobDefaults will already have set this slice above.
+	source := w.StateBearingKinds
+	if source == nil {
+		source = StateBearingKindsRegistry()
+	}
+	for _, gk := range source {
 		allow[gk.Group+"/"+gk.Kind] = true
 	}
 	for _, res := range w.Resources {

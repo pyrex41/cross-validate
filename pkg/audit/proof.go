@@ -8,12 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/pyrex41/cross-validate-/kernel"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -174,9 +176,18 @@ func KnownRuleIDs() []string {
 // Generate creates a proof from diagnostics, optional run summary, and metadata.
 // When summary is non-nil, the obligation counts and IDs are committed to the
 // Merkle root so the proof attests to run completeness, not just violations.
+//
+// The default ruleset digest is computed from the embedded kernel (kernel.FS)
+// so the proof attests to the kernel content shipped with the binary, not just
+// the ruleset version + KnownRuleIDs. Callers that loaded a kernel from an
+// explicit on-disk path should use GenerateWithRulesetDigest with a digest
+// computed via ComputeRulesetDigest(path).
 func Generate(diags []types.Diagnostic, summary *RunSummary, irDigest, snapshotDigest string) *Proof {
-	rulesetDigest, err := ComputeRulesetDigest("")
+	rulesetDigest, err := ComputeEmbeddedRulesetDigest()
 	if err != nil {
+		// Fall back to the version+ruleID-only digest. The embedded FS is
+		// populated at build time, so reaching this branch indicates a
+		// genuinely broken binary; we still return a proof rather than fail.
 		rulesetDigest = computeRulesetDigestFromParts(nil)
 	}
 	return GenerateWithRulesetDigest(diags, summary, irDigest, snapshotDigest, rulesetDigest)
@@ -578,6 +589,42 @@ func hashResourceSubtree(st *ResourceSubtree) string {
 func hashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// ComputeEmbeddedRulesetDigest returns a content hash of the embedded kernel
+// (kernel.FS) plus the Go-side rule inventory. The embedded files and the
+// files materialised to disk by the CLI are byte-identical, so this digest
+// matches ComputeRulesetDigest(<path-to-extracted-tempdir>).
+func ComputeEmbeddedRulesetDigest() (string, error) {
+	entries, err := fs.ReadDir(kernel.FS, ".")
+	if err != nil {
+		return "", fmt.Errorf("read embedded kernel: %w", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".shen" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	if len(names) == 0 {
+		return "", fmt.Errorf("no .shen files found in embedded kernel")
+	}
+
+	parts := make([]rulesetPart, 0, len(names))
+	for _, name := range names {
+		data, ok := kernel.Read(name)
+		if !ok {
+			return "", fmt.Errorf("read embedded kernel file %s", name)
+		}
+		// Match the on-disk variant's path scheme: relative to the kernel
+		// root, forward slashes. The embedded FS is flat, so the name itself
+		// is already the relative path.
+		parts = append(parts, rulesetPart{Path: filepath.ToSlash(name), Data: data})
+	}
+	return computeRulesetDigestFromParts(parts), nil
 }
 
 // ComputeRulesetDigest returns a content hash of the resolved kernel plus the

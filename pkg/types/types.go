@@ -969,6 +969,15 @@ type World struct {
 	// bypass annotations, and name carve-outs.
 	CPDeletionPolicyFacts []CPDeletionPolicyFact `json:"-"`
 
+	// StateBearingKinds is the resolved (Group, Kind) allowlist consumed by
+	// R23 (in-tree extractor) and R26 (plan-time destructive-delete check).
+	// Populated by the IR builder from the loaded *config.Config —
+	// state-bearing-kinds.append + suppress overlayed onto the built-in
+	// registry from pkg/ir/state_bearing_registry.go. Callers that bypass
+	// Builder.Build (unit tests) get a default-resolved list via
+	// ensureKnobDefaults in trajectory_extract.go.
+	StateBearingKinds []ArgoGroupKind `json:"-"`
+
 	// ProdPatterns is the resolved substring list R25 should match
 	// ApplicationSet names against. Populated by the IR builder from the
 	// loaded *config.Config (or its Default()). Crosses to the kernel as

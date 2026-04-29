@@ -104,6 +104,61 @@ func TestVerify_DoesNotMutateRootOnFailure(t *testing.T) {
 	}
 }
 
+func TestComputeEmbeddedRulesetDigest_StableAndNonEmpty(t *testing.T) {
+	first, err := ComputeEmbeddedRulesetDigest()
+	if err != nil {
+		t.Fatalf("ComputeEmbeddedRulesetDigest: %v", err)
+	}
+	if first == "" {
+		t.Fatal("expected non-empty embedded ruleset digest")
+	}
+	second, err := ComputeEmbeddedRulesetDigest()
+	if err != nil {
+		t.Fatalf("ComputeEmbeddedRulesetDigest (second call): %v", err)
+	}
+	if first != second {
+		t.Fatalf("expected stable embedded digest across calls, got %s vs %s", first, second)
+	}
+
+	// The version-only fallback (no kernel content) must not collide with the
+	// real embedded digest — that was the bug being fixed.
+	versionOnly := computeRulesetDigestFromParts(nil)
+	if first == versionOnly {
+		t.Fatal("embedded digest unexpectedly equals version-only fallback; kernel content not hashed")
+	}
+}
+
+func TestGenerate_UsesEmbeddedRulesetDigest(t *testing.T) {
+	// Generate (no path) should produce the embedded-kernel digest, proving
+	// it actually hashes kernel content rather than falling through to the
+	// version-only digest.
+	want, err := ComputeEmbeddedRulesetDigest()
+	if err != nil {
+		t.Fatalf("ComputeEmbeddedRulesetDigest: %v", err)
+	}
+	p := Generate(nil, nil, "sha256:ir", "sha256:snap")
+	if p.Metadata.RulesetDigest != want {
+		t.Fatalf("Generate ruleset digest = %s, want embedded digest %s", p.Metadata.RulesetDigest, want)
+	}
+}
+
+func TestComputeRulesetDigestFromParts_ChangesWithContent(t *testing.T) {
+	// Synthesize two part slices with the same path but different bytes and
+	// confirm the digests differ — guards the "kernel content is committed"
+	// invariant without needing a real on-disk kernel.
+	a := []rulesetPart{{Path: "check.shen", Data: []byte("(define x 1 -> 1)\n")}}
+	b := []rulesetPart{{Path: "check.shen", Data: []byte("(define x 1 -> 2)\n")}}
+	if computeRulesetDigestFromParts(a) == computeRulesetDigestFromParts(b) {
+		t.Fatal("expected ruleset digest to change when a kernel file's bytes change")
+	}
+
+	// Path matters too: same bytes under a different filename should differ.
+	c := []rulesetPart{{Path: "other.shen", Data: []byte("(define x 1 -> 1)\n")}}
+	if computeRulesetDigestFromParts(a) == computeRulesetDigestFromParts(c) {
+		t.Fatal("expected ruleset digest to change when a kernel file's path changes")
+	}
+}
+
 func TestComputeRulesetDigest_ChangesWithKernelContent(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "check.shen"), []byte("(define x 1 -> 1)\n"), 0o644); err != nil {

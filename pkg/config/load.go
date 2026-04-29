@@ -62,11 +62,12 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	knownTopLevel := map[string]bool{
-		"version":            true,
-		"prod-patterns":      true,
-		"immutable-fields":   true,
-		"bypass-annotations": true,
-		"name-carveouts":     true,
+		"version":             true,
+		"prod-patterns":       true,
+		"immutable-fields":    true,
+		"state-bearing-kinds": true,
+		"bypass-annotations":  true,
+		"name-carveouts":      true,
 	}
 	for k := range raw {
 		if !knownTopLevel[k] {
@@ -134,6 +135,33 @@ func validate(cfg *Config) error {
 				return fmt.Errorf("immutable-fields[%d] (%s): paths contains empty entry",
 					i, entry.GVK)
 			}
+		}
+	}
+
+	for i, entry := range cfg.StateBearingKinds.Append {
+		if entry.Kind == "" {
+			return fmt.Errorf("state-bearing-kinds.append[%d]: kind is required", i)
+		}
+		if strings.TrimSpace(entry.Kind) == "" {
+			return fmt.Errorf("state-bearing-kinds.append[%d]: kind must be non-blank", i)
+		}
+		// Group may be empty for core-API kinds, but a whitespace-only
+		// group is almost certainly a typo — flag it.
+		if entry.Group != "" && strings.TrimSpace(entry.Group) == "" {
+			return fmt.Errorf("state-bearing-kinds.append[%d] (kind=%s): group must be non-blank when set",
+				i, entry.Kind)
+		}
+	}
+	for i, entry := range cfg.StateBearingKinds.Suppress {
+		if entry.Kind == "" {
+			return fmt.Errorf("state-bearing-kinds.suppress[%d]: kind is required", i)
+		}
+		if strings.TrimSpace(entry.Kind) == "" {
+			return fmt.Errorf("state-bearing-kinds.suppress[%d]: kind must be non-blank", i)
+		}
+		if entry.Group != "" && strings.TrimSpace(entry.Group) == "" {
+			return fmt.Errorf("state-bearing-kinds.suppress[%d] (kind=%s): group must be non-blank when set",
+				i, entry.Kind)
 		}
 	}
 

@@ -27,11 +27,16 @@ import (
 // shapes for that single identity. The bypass has to live on the base side
 // because the resource no longer exists on head.
 //
+// stateBearingKinds is the resolved (Group, Kind) allowlist (from
+// World.StateBearingKinds, i.e. xpc.yaml state-bearing-kinds overlay over
+// the built-in registry). A nil slice falls back to the raw registry so
+// older callers and unit tests that hand-build a delta keep working.
+//
 // Returned diagnostics are plan-level (severity=error), distinct from the
 // per-variant static diagnostics. They live in Plan.Diagnostics and drive the
 // "## ⚠ Destructive changes" section of the markdown output.
-func R26DestructiveDelete(delta ResourceDelta, bypassKeys types.BypassKeySet) []types.Diagnostic {
-	stateBearing := buildStateBearingSet()
+func R26DestructiveDelete(delta ResourceDelta, bypassKeys types.BypassKeySet, stateBearingKinds []types.ArgoGroupKind) []types.Diagnostic {
+	stateBearing := buildStateBearingSet(stateBearingKinds)
 
 	var diags []types.Diagnostic
 	for _, c := range delta.Removed {
@@ -92,10 +97,15 @@ func R26DestructiveDelete(delta ResourceDelta, bypassKeys types.BypassKeySet) []
 }
 
 // buildStateBearingSet returns the R23 allowlist as a set keyed by
-// "group/Kind". Reuses the registry directly — same source-of-truth as R23.
-func buildStateBearingSet() map[string]bool {
-	out := make(map[string]bool, 16)
-	for _, gk := range ir.StateBearingKindsRegistry() {
+// "group/Kind". Prefers the caller-supplied resolved list (xpc.yaml overlay
+// applied) and falls back to the raw registry when nil — same source-of-truth
+// as R23 in either path.
+func buildStateBearingSet(resolved []types.ArgoGroupKind) map[string]bool {
+	if resolved == nil {
+		resolved = ir.StateBearingKindsRegistry()
+	}
+	out := make(map[string]bool, len(resolved))
+	for _, gk := range resolved {
 		out[gk.Group+"/"+gk.Kind] = true
 	}
 	return out

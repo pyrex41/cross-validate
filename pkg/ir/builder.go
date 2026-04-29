@@ -100,6 +100,7 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 		AllowImmutableChange: config.ResolveAllowImmutableChangeKeys(cfg),
 	}
 	b.world.ImmutableFields = config.ResolveImmutableFields(cfg, ImmutableFieldRegistry())
+	b.world.StateBearingKinds = config.ResolveStateBearingKinds(cfg, StateBearingKindsRegistry())
 	for _, doc := range docs {
 		category := loader.ClassifyDocument(doc)
 		var err error

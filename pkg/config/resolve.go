@@ -107,6 +107,55 @@ func ResolveImmutableFields(cfg *Config, builtins []types.ImmutableField) []type
 	return out
 }
 
+// ResolveStateBearingKinds applies the user overlay to the built-in
+// state-bearing kind allowlist and returns the merged result. Behaviour:
+//
+//   - Built-in entries are the starting set.
+//   - Suppress entries are applied FIRST: any (Group, Kind) match is removed.
+//   - Append entries are applied SECOND: any (Group, Kind) not already in
+//     the result is appended. Duplicates inside Append are deduped.
+//
+// Order-of-operations matters when an operator both appends and suppresses
+// the same kind — suppression wins, mirroring the immutable-fields contract.
+func ResolveStateBearingKinds(cfg *Config, defaults []types.ArgoGroupKind) []types.ArgoGroupKind {
+	out := append([]types.ArgoGroupKind(nil), defaults...)
+	if cfg == nil {
+		return out
+	}
+	// First pass: suppressions.
+	for _, e := range cfg.StateBearingKinds.Suppress {
+		out = removeStateBearing(out, e.Group, e.Kind)
+	}
+	// Second pass: appends.
+	for _, e := range cfg.StateBearingKinds.Append {
+		if containsStateBearing(out, e.Group, e.Kind) {
+			continue
+		}
+		out = append(out, types.ArgoGroupKind{Group: e.Group, Kind: e.Kind})
+	}
+	return out
+}
+
+func removeStateBearing(in []types.ArgoGroupKind, group, kind string) []types.ArgoGroupKind {
+	out := in[:0]
+	for _, gk := range in {
+		if gk.Group == group && gk.Kind == kind {
+			continue
+		}
+		out = append(out, gk)
+	}
+	return out
+}
+
+func containsStateBearing(in []types.ArgoGroupKind, group, kind string) bool {
+	for _, gk := range in {
+		if gk.Group == group && gk.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // mergeBypass returns primary+aliases for a single bypass slot. Primary
 // override semantics; aliases are additive over the built-in alias list.
 func mergeBypass(builtinPrimary string, builtinAliases []string, user BypassKeyConfig) []string {

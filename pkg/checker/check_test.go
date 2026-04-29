@@ -733,6 +733,10 @@ func TestR23_CrossplaneStateNeedsOrphan(t *testing.T) {
 		{"bypass-alias", "../../testdata/fixtures/crossplane-state-needs-orphan/bypass-alias"},
 		{"alb-logs-carveout", "../../testdata/fixtures/crossplane-state-needs-orphan/alb-logs-carveout"},
 		{"xpc-yaml-extends-carveouts", "../../testdata/fixtures/crossplane-state-needs-orphan/xpc-yaml-extends-carveouts"},
+		// Suppressing the kind from the state-bearing-kinds allowlist
+		// removes the entire fact for that kind — R23 has nothing to
+		// reason about, so silence is the expected behaviour.
+		{"xpc-yaml-suppress-kind", "../../testdata/fixtures/crossplane-state-needs-orphan/xpc-yaml-suppress-kind"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -743,6 +747,56 @@ func TestR23_CrossplaneStateNeedsOrphan(t *testing.T) {
 			}
 		})
 	}
+
+	// Sanity check the resolved overlay actually reaches the World — not
+	// just the rule outcome — so a future refactor can't accidentally
+	// drop the wiring while the kernel happens to remain silent for an
+	// unrelated reason.
+	t.Run("xpc-yaml-suppress-kind/world-state", func(t *testing.T) {
+		world := loadFixture(t, "../../testdata/fixtures/crossplane-state-needs-orphan/xpc-yaml-suppress-kind")
+		for _, gk := range world.StateBearingKinds {
+			if gk.Group == "rds.aws.upbound.io" && gk.Kind == "Cluster" {
+				t.Fatalf("expected (rds.aws.upbound.io, Cluster) suppressed from World.StateBearingKinds, got %+v",
+					world.StateBearingKinds)
+			}
+		}
+		// And the rest of the registry survives the suppress.
+		saw := false
+		for _, gk := range world.StateBearingKinds {
+			if gk.Group == "s3.aws.upbound.io" && gk.Kind == "Bucket" {
+				saw = true
+			}
+		}
+		if !saw {
+			t.Errorf("expected (s3.aws.upbound.io, Bucket) to survive suppress, got %+v", world.StateBearingKinds)
+		}
+	})
+
+	// Append: registering an in-house CRD as state-bearing should make
+	// R23 start firing on it (manifest lacks deletionPolicy: Orphan).
+	t.Run("xpc-yaml-append-kind", func(t *testing.T) {
+		world := loadFixture(t, "../../testdata/fixtures/crossplane-state-needs-orphan/xpc-yaml-append-kind")
+		// World plumbing: appended kind should appear on the resolved list.
+		saw := false
+		for _, gk := range world.StateBearingKinds {
+			if gk.Group == "myorg.example.com" && gk.Kind == "ManagedThing" {
+				saw = true
+			}
+		}
+		if !saw {
+			t.Fatalf("expected (myorg.example.com, ManagedThing) appended to World.StateBearingKinds, got %+v",
+				world.StateBearingKinds)
+		}
+		// And R23 fires for it.
+		diags := checkFixture(t, world, Config{})
+		got := findDiagByCode(diags, "XPC.S.crossplane-state-needs-orphan")
+		if len(got) != 1 {
+			t.Fatalf("expected 1 XPC.S.crossplane-state-needs-orphan from appended kind, got %d: %+v", len(got), got)
+		}
+		if !strings.Contains(got[0].Message, "in-house-state-thing") {
+			t.Errorf("expected resource name in message, got %q", got[0].Message)
+		}
+	})
 }
 
 // TestR18_CompositionRenders_AbsentBinary exercises the P3 composition-render

@@ -1,0 +1,8 @@
+version: 1
+# Suppress rds.aws.upbound.io/Cluster from the state-bearing-kinds allowlist.
+# Without this xpc.yaml the same Cluster manifest (no deletionPolicy: Orphan)
+# would trip R23. With suppress, R23's extractor never even produces a fact
+# for this kind, so the rule stays silent.
+state-bearing-kinds:
+  suppress:
+    - {group: "rds.aws.upbound.io", kind: "Cluster"}

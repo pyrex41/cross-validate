@@ -37,6 +37,14 @@ type Config struct {
 	// tuple or — when Suppress is true — removes the matching built-in.
 	ImmutableFields []ImmutableFieldEntry `yaml:"immutable-fields"`
 
+	// StateBearingKinds is the user overlay over the built-in state-bearing
+	// kind allowlist consumed by R23 / R26. The block carries two parallel
+	// lists: append (extra kinds the operator wants R23 to police) and
+	// suppress (built-in kinds that the operator wants R23 to ignore).
+	// Mirrors the immutable-fields shape but uses (group, kind) tuples
+	// instead of (gvk, path) since R23 doesn't reason about field paths.
+	StateBearingKinds StateBearingKindsConfig `yaml:"state-bearing-kinds"`
+
 	// BypassAnnotations configures the annotation keys that silence each
 	// rule's bypass-aware path. Per-rule primary + aliases.
 	BypassAnnotations BypassAnnotationsConfig `yaml:"bypass-annotations"`
@@ -71,6 +79,35 @@ type ImmutableFieldEntry struct {
 	// Suppress, when true, removes the matching built-in (Group, Kind,
 	// FieldPath) tuples instead of appending them.
 	Suppress bool `yaml:"suppress"`
+}
+
+// StateBearingKindsConfig holds the user overlay over the built-in
+// state-bearing kind allowlist (see pkg/ir/state_bearing_registry.go). Both
+// lists are optional and resolved against the built-in defaults via
+// ResolveStateBearingKinds. Empty / nil block means "use defaults verbatim".
+//
+// Suppress is applied first (so an entry that's both appended and suppressed
+// ends up suppressed); Append second. De-dupe is by (group, kind) — case
+// sensitive.
+type StateBearingKindsConfig struct {
+	// Append lists extra (group, kind) tuples that should join the
+	// state-bearing allowlist. Useful for operators with their own
+	// in-house CRDs whose deletion drops external state.
+	Append []StateBearingKindEntry `yaml:"append"`
+
+	// Suppress lists (group, kind) tuples that should be removed from the
+	// built-in allowlist. Useful when an operator handles a particular
+	// kind through a different mechanism (e.g. an org-specific
+	// admission policy) and doesn't want xpc to police it.
+	Suppress []StateBearingKindEntry `yaml:"suppress"`
+}
+
+// StateBearingKindEntry is one (group, kind) pair on the state-bearing
+// overlay. Mirrors the shape of types.ArgoGroupKind so the resolver can
+// emit the same value type the registry uses.
+type StateBearingKindEntry struct {
+	Group string `yaml:"group"`
+	Kind  string `yaml:"kind"`
 }
 
 // BypassAnnotationsConfig is a per-rule (primary, aliases) table.
