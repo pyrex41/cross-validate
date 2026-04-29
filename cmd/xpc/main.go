@@ -121,6 +121,7 @@ Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
   --cluster=<name>     Name of the cluster context (default: current)
   --diff=<a>,<b>       Diff two snapshot files
+  --include-resources  Include resource instances and Argo objects in the snapshot
 
 Proof subcommands:
   xpc proof show <proof-file>              Show proof summary
@@ -469,6 +470,7 @@ func runSnapshot(args []string) int {
 	outputPath := ""
 	clusterName := "local"
 	diffPaths := ""
+	var includeResources bool
 	var paths []string
 
 	for _, arg := range args {
@@ -479,6 +481,8 @@ func runSnapshot(args []string) int {
 			clusterName = arg[10:]
 		case len(arg) > 7 && arg[:7] == "--diff=":
 			diffPaths = arg[7:]
+		case arg == "--include-resources":
+			includeResources = true
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -543,7 +547,8 @@ func runSnapshot(args []string) int {
 		return 1
 	}
 
-	snap := snapshot.FromWorld(world, clusterName)
+	snap := snapshot.FromWorldWithOptions(world, clusterName,
+		snapshot.FromWorldOptions{IncludeResources: includeResources})
 
 	if outputPath != "" {
 		if err := snap.Save(outputPath); err != nil {
@@ -1064,6 +1069,57 @@ func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
 	for digest, schema := range snap.Schemas {
 		if _, ok := w.Schemas[digest]; !ok {
 			w.Schemas[digest] = schema
+		}
+	}
+
+	// Add Resources from snapshot. Identity tuple is
+	// (apiVersion, kind, namespace, name); manifest-side wins on conflict.
+	existingResources := make(map[string]bool)
+	for _, r := range w.Resources {
+		existingResources[r.APIVersion+"|"+r.Kind+"|"+r.Namespace+"|"+r.Name] = true
+	}
+	for _, r := range snap.Resources {
+		key := r.APIVersion + "|" + r.Kind + "|" + r.Namespace + "|" + r.Name
+		if !existingResources[key] {
+			w.Resources = append(w.Resources, r)
+		}
+	}
+
+	// Add Argo Applications from snapshot. Identity is (namespace, name).
+	existingArgoApps := make(map[string]bool)
+	for _, a := range w.ArgoApps {
+		existingArgoApps[a.Namespace+"|"+a.Name] = true
+	}
+	for _, a := range snap.ArgoApps {
+		key := a.Namespace + "|" + a.Name
+		if !existingArgoApps[key] {
+			w.ArgoApps = append(w.ArgoApps, a)
+		}
+	}
+
+	// Add Argo ApplicationSets from snapshot. Identity is
+	// (template.namespace, name) — AppSet itself is namespace-implicit, so
+	// the template's target namespace is the discriminator.
+	existingArgoAppSets := make(map[string]bool)
+	for _, s := range w.ArgoAppSets {
+		existingArgoAppSets[s.Template.Namespace+"|"+s.Name] = true
+	}
+	for _, s := range snap.ArgoAppSets {
+		key := s.Template.Namespace + "|" + s.Name
+		if !existingArgoAppSets[key] {
+			w.ArgoAppSets = append(w.ArgoAppSets, s)
+		}
+	}
+
+	// Add Argo AppProjects from snapshot. AppProjects are cluster-scoped in
+	// practice (always argocd namespace), so name alone is the identity.
+	existingArgoProjects := make(map[string]bool)
+	for _, p := range w.ArgoProjects {
+		existingArgoProjects[p.Name] = true
+	}
+	for _, p := range snap.ArgoProjects {
+		if !existingArgoProjects[p.Name] {
+			w.ArgoProjects = append(w.ArgoProjects, p)
 		}
 	}
 }
