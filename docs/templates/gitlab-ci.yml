@@ -62,3 +62,62 @@ xpc:
     # Run on merge requests and on the default branch.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# xpc:plan — preview-diff workflow.
+#
+# Captures live cluster state into a .xpcsnap, runs `xpc plan` against
+# the PR's manifests, and (optionally) posts the resulting Markdown
+# delta to the merge request as a comment. See docs/preview-diffs.md
+# for the full walkthrough.
+#
+# Required CI variables:
+#   KUBECONFIG_DATA  Base64-encoded kubeconfig with read access to the
+#                    target cluster. Add under Settings > CI/CD >
+#                    Variables (type=Variable, Masked recommended).
+#
+# Auth for posting comments:
+#   - Default: relies on $CI_JOB_TOKEN (set automatically by GitLab),
+#     which glab honours for the comment API on most projects.
+#   - For private projects or restrictive token policies, set a
+#     project/group access token in GITLAB_TOKEN.
+#
+# The template runs `xpc plan ... --dry-run` by default so it is safe
+# to copy verbatim — it resolves the post target and prints the byte
+# count without actually posting. To go live, drop --dry-run; add
+# --post-comment-required to fail the pipeline if posting itself fails.
+#
+xpc:plan:
+  stage: test
+  image: golang:1.22
+  allow_failure: true
+  variables:
+    XPC_CACHE_DIR: "$CI_PROJECT_DIR/.xpc-cache"
+  cache:
+    key: xpc-cache
+    paths:
+      - .xpc-cache/
+  before_script:
+    - apt-get update && apt-get install -y curl jq
+    # Install kubectl (latest stable).
+    - curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+    - chmod +x /usr/local/bin/kubectl
+    # Install glab (GitLab CLI). xpc shells out to glab for posting.
+    - curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/permalink/latest/downloads/glab_linux_amd64.tar.gz | tar -xz -C /tmp
+    - mv /tmp/bin/glab /usr/local/bin/glab
+    - chmod +x /usr/local/bin/glab
+    # Install xpc itself.
+    - go install github.com/pyrex41/cross-validate-/cmd/xpc@latest
+    # Decode the base64 kubeconfig CI variable into a file the runner
+    # can read; do not echo it.
+    - echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kubeconfig
+    - export KUBECONFIG=/tmp/kubeconfig
+  script:
+    # Capture live cluster state into a content-addressed .xpcsnap.
+    - tools/xpc-capture-cluster-snap.sh --cluster-name="$CI_ENVIRONMENT_NAME" /tmp/cluster.xpcsnap
+    # Run plan; --post-comment=auto reads CI_PROJECT_PATH +
+    # CI_MERGE_REQUEST_IID. --dry-run reports what would post without
+    # actually posting; remove --dry-run to go live.
+    - xpc plan --base=/tmp/cluster.xpcsnap --head=. --post-comment=auto --dry-run
+  rules:
+    # Preview diffs only make sense on MRs.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

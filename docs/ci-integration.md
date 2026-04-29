@@ -148,3 +148,57 @@ jobs:
 `continue-on-error: true` is the GitHub Actions analogue of GitLab's
 `allow_failure: true`. Flip it to `false` once you are ready to gate on
 xpc findings.
+
+## Preview-diff integration (capture + plan + post-comment)
+
+`xpc plan` extends the lint workflow with a delta view: it diffs live
+cluster state (captured into a `.xpcsnap` artifact) against the PR's
+manifests, and optionally posts the resulting Markdown to the merge
+request or pull request as a comment. Where `xpc check` finds bugs in
+a single manifest tree, `xpc plan` shows what the cluster will look
+like *after* the PR merges.
+
+For the full workflow, see [`docs/preview-diffs.md`](preview-diffs.md).
+
+### Prerequisites
+
+- `kubectl` >= 1.24, `jq` >= 1.6 on the runner.
+- A read-only KUBECONFIG that can `get crd` and list resources in the
+  configured `--providers=` groups.
+- `glab` (GitLab) or `gh` (GitHub) on the runner if using
+  `--post-comment`.
+
+### Recommended pipeline shape
+
+- One job per environment (staging, prod) so each posts a separate
+  comment scoped to that environment.
+- Run after `xpc check` succeeds — a syntactically broken PR
+  shouldn't waste a cluster fetch.
+
+### Auth env vars by VCS
+
+- **GitLab**: `glab` honours `GITLAB_TOKEN`, `CI_JOB_TOKEN`, and
+  `GLAB_TOKEN`. `CI_JOB_TOKEN` is set automatically by GitLab and is
+  the simplest option for most projects.
+- **GitHub**: `gh` honours `GH_TOKEN` and `GITHUB_TOKEN`. In GitHub
+  Actions, set `permissions: pull-requests: write` on the workflow.
+
+xpc itself never reads or stores tokens — it shells out to the user's
+own CLI, which sees its native auth env by inheritance.
+
+### Caveats
+
+- See [Snapshot caveats](preview-diffs.md#snapshot-caveats) in the
+  preview-diff guide for TTL, digest stability, and the
+  `XPC.P.snapshot-incomplete` info diagnostic.
+- `--post-comment-required` flips posting from best-effort to a hard
+  gate. Default is best-effort: a posting failure logs to stderr but
+  does not change the plan's own exit code (which is driven only by
+  `XPC.P.*` error diagnostics).
+
+### Recipe
+
+- See [`docs/templates/gitlab-ci.yml`](templates/gitlab-ci.yml) for a
+  GitLab CI template; the `xpc:plan` job is the runnable shape.
+- For end-to-end background, see
+  [`docs/preview-diffs.md`](preview-diffs.md).
