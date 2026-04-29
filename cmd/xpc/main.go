@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -145,6 +146,15 @@ Plan flags:
   --kernel-path=<dir>  Explicit kernel directory (as in 'check')
   --config=<path>      Explicit xpc.yaml path (as in 'check'; overrides
                        per-variant in-repo discovery)
+  --post-comment=<spec>
+                       Post Markdown to GitLab MR or GitHub PR. Spec
+                       forms: gitlab://group/proj/-/merge_requests/N,
+                       github://owner/repo/pull/N, or 'auto' (CI env).
+  --dry-run            Resolve --post-comment target and report bytes
+                       without posting. Plan still runs and prints.
+  --post-comment-required
+                       Promote a posting failure to exit 1. Default
+                       false: posting failure logs but doesn't gate.
   (most 'check' flags pass through: --helm-bin, --helm-cache-dir, --skip-render,
    --skip-appset-expand, --appset-fixture, --ssa-mp-mode)
 
@@ -815,6 +825,9 @@ func runPlan(args []string) int {
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
 	configPath := os.Getenv("XPC_CONFIG_PATH")
 	strictConversions := false
+	var postCommentSpec string
+	var dryRun bool
+	var postCommentRequired bool
 	var paths []string
 
 	for _, arg := range args {
@@ -865,6 +878,12 @@ func runPlan(args []string) int {
 			configPath = strings.TrimPrefix(arg, "--config=")
 		case arg == "--strict-conversions":
 			strictConversions = true
+		case strings.HasPrefix(arg, "--post-comment="):
+			postCommentSpec = arg[len("--post-comment="):]
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--post-comment-required":
+			postCommentRequired = true
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -874,6 +893,16 @@ func runPlan(args []string) int {
 		default:
 			paths = append(paths, arg)
 		}
+	}
+
+	var commentTarget plan.CommentTarget
+	if postCommentSpec != "" {
+		t, err := plan.ParseCommentSpec(postCommentSpec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --post-comment: %v\n", err)
+			return 1
+		}
+		commentTarget = t
 	}
 
 	if baseRef == "" {
@@ -938,16 +967,38 @@ func runPlan(args []string) int {
 		return 1
 	}
 
+	var body bytes.Buffer
 	switch format {
 	case plan.FormatJSON:
-		if err := plan.WriteJSON(os.Stdout, p); err != nil {
+		if err := plan.WriteJSON(&body, p); err != nil {
 			fmt.Fprintf(os.Stderr, "write json: %v\n", err)
 			return 1
 		}
 	case plan.FormatMarkdown:
-		if err := plan.WriteMarkdown(os.Stdout, p); err != nil {
+		if err := plan.WriteMarkdown(&body, p); err != nil {
 			fmt.Fprintf(os.Stderr, "write markdown: %v\n", err)
 			return 1
+		}
+	}
+	if _, err := os.Stdout.Write(body.Bytes()); err != nil {
+		fmt.Fprintf(os.Stderr, "write stdout: %v\n", err)
+		return 1
+	}
+
+	if postCommentSpec != "" {
+		if dryRun {
+			fmt.Fprintf(os.Stderr, "would post %d bytes to %s\n",
+				body.Len(), plan.DescribeTarget(commentTarget))
+		} else {
+			if err := plan.PostComment(commentTarget, body.String()); err != nil {
+				fmt.Fprintf(os.Stderr, "post-comment failed: %v\n", err)
+				if postCommentRequired {
+					return 1
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "posted comment to %s\n",
+					plan.DescribeTarget(commentTarget))
+			}
 		}
 	}
 
