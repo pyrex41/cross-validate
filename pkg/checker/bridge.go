@@ -5,15 +5,20 @@ package checker
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pyrex41/cross-validate-/internal/shenfull"
+	"github.com/pyrex41/cross-validate-/kernel"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/schemas"
 	"github.com/pyrex41/cross-validate-/pkg/trajectory"
@@ -45,6 +50,12 @@ var (
 
 // initShen bootstraps the Shen runtime and loads kernel/check.shen.
 // Idempotent; only the first call performs initialization.
+//
+// When kernelPath is empty the embedded kernel (kernel/*.shen baked into the
+// binary via go:embed) is materialised into a content-addressed temp
+// directory and loaded from there — so the xpc binary is self-contained and
+// works without a kernel/ tree on disk. When kernelPath is non-empty it is
+// honoured directly; this preserves the `--kernel-path` escape hatch.
 func initShen(kernelPath string) error {
 	shenOnce.Do(func() {
 		if err := shenfull.Init(&shenCF); err != nil {
@@ -52,7 +63,7 @@ func initShen(kernelPath string) error {
 			return
 		}
 
-		resolved, err := resolveKernelPath(kernelPath)
+		resolved, err := resolveOrMaterialiseKernel(kernelPath)
 		if err != nil {
 			shenErr = err
 			return
@@ -64,10 +75,10 @@ func initShen(kernelPath string) error {
 			return
 		}
 
-		// Shen's `read-file` primitive opens files using the literal path
-		// argument, so `(load "prelude.shen")` only works when cwd is the
-		// kernel directory. Chdir into the kernel, do the load, then chdir
-		// back so we don't perturb the caller's environment.
+		// Shen's read-file-as-bytelist primitive opens files using the
+		// literal path argument, so `(load "prelude.shen")` only works when
+		// cwd is the kernel directory. Chdir into the kernel, do the load,
+		// then chdir back so we don't perturb the caller's environment.
 		origDir, cwdErr := os.Getwd()
 		if cwdErr != nil {
 			shenErr = fmt.Errorf("getwd: %w", cwdErr)
@@ -79,11 +90,7 @@ func initShen(kernelPath string) error {
 		}
 		defer func() { _ = os.Chdir(origDir) }()
 
-		// Rebind Shen's `*stoutput*` symbol to /dev/null while loading so
-		// the transpiled runtime's banner ("(fn …) / run time: … / loaded"
-		// lines emitted by `(load ...)`) doesn't leak into `xpc check`
-		// output. shen-go captures `os.Stdout` once at init into a stream
-		// object, so redirecting os.Stdout at the Go level has no effect.
+		// Mute the runtime banner emitted while rules register defines.
 		stoutSym := kl.MakeSymbol("*stoutput*")
 		origStout := kl.PrimValue(stoutSym)
 		devnull, dnErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -105,6 +112,78 @@ func initShen(kernelPath string) error {
 		}
 	})
 	return shenErr
+}
+
+// resolveOrMaterialiseKernel returns the on-disk kernel directory.
+// - explicitPath != "": honoured as-is (no embed extraction)
+// - explicitPath == "": embedded kernel/*.shen are extracted to a stable
+//   temp directory whose name is a hash of the embedded content. Re-runs of
+//   xpc with the same kernel content reuse the same directory; a kernel
+//   change produces a new directory and leaves the old one for /tmp turnover.
+//
+// We touch disk only because the AOT-compiled Shen prelude
+// (internal/shenfull/reader.go) calls PrimReadFileAsByteList directly,
+// bypassing symbol-level overrides. A future build-time AOT pass over
+// kernel/*.shen would let us drop disk entirely.
+func resolveOrMaterialiseKernel(explicitPath string) (string, error) {
+	if explicitPath != "" {
+		return explicitPath, nil
+	}
+
+	entries, err := fs.ReadDir(kernel.FS, ".")
+	if err != nil {
+		return "", fmt.Errorf("read embedded kernel: %w", err)
+	}
+
+	h := sha256.New()
+	type fileBytes struct {
+		name string
+		data []byte
+	}
+	files := make([]fileBytes, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, ok := kernel.Read(e.Name())
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", e.Name(), len(data))
+		h.Write(data)
+		files = append(files, fileBytes{e.Name(), data})
+	}
+	digest := hex.EncodeToString(h.Sum(nil))[:16]
+	dir := filepath.Join(os.TempDir(), "xpc-kernel-"+digest)
+
+	marker := filepath.Join(dir, ".xpc-kernel-digest")
+	if data, err := os.ReadFile(marker); err == nil && string(data) == digest {
+		return dir, nil
+	}
+
+	staging, err := os.MkdirTemp(os.TempDir(), "xpc-kernel-stage-")
+	if err != nil {
+		return "", fmt.Errorf("create kernel staging dir: %w", err)
+	}
+	for _, f := range files {
+		dst := filepath.Join(staging, f.name)
+		if err := os.WriteFile(dst, f.data, 0o600); err != nil {
+			os.RemoveAll(staging)
+			return "", fmt.Errorf("write %s: %w", f.name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(staging, ".xpc-kernel-digest"), []byte(digest), 0o600); err != nil {
+		os.RemoveAll(staging)
+		return "", fmt.Errorf("write digest marker: %w", err)
+	}
+	if err := os.Rename(staging, dir); err != nil {
+		os.RemoveAll(staging)
+		if _, statErr := os.Stat(filepath.Join(dir, "check.shen")); statErr == nil {
+			return dir, nil
+		}
+		return "", fmt.Errorf("publish kernel dir: %w", err)
+	}
+	return dir, nil
 }
 
 // executablePath is overridable in tests; defaults to os.Executable.
@@ -172,6 +251,8 @@ func Check(w *types.World, cfg Config) ([]types.Diagnostic, error) {
 
 // CheckWithObligations runs the Shen kernel and returns a RunResult.
 func CheckWithObligations(w *types.World, cfg Config) RunResult {
+	timing := os.Getenv("XPC_TIMING") != ""
+	tInit := time.Now()
 	if err := initShen(cfg.KernelPath); err != nil {
 		return RunResult{Diagnostics: []types.Diagnostic{{
 			Code:     "XPC000",
@@ -179,14 +260,30 @@ func CheckWithObligations(w *types.World, cfg Config) RunResult {
 			Message:  err.Error(),
 		}}}
 	}
+	if timing {
+		fmt.Fprintf(os.Stderr, "  [timing] init-shen   %v\n", time.Since(tInit))
+	}
 
+	tEnrich := time.Now()
 	enrichSyncWaves(w)
 	resolvePatchTypes(w)
 	trajectories := trajectory.Simulate(w)
+	if timing {
+		fmt.Fprintf(os.Stderr, "  [timing] enrich      %v\n", time.Since(tEnrich))
+	}
 
+	tSerialize := time.Now()
 	worldObj := worldToShenObj(w, trajectories)
+	if timing {
+		fmt.Fprintf(os.Stderr, "  [timing] serialize   %v\n", time.Since(tSerialize))
+	}
+
+	tCall := time.Now()
 	checkWorld := kl.PrimFunc(kl.MakeSymbol("check-world"))
 	result := kl.Call(&shenCF, checkWorld, worldObj)
+	if timing {
+		fmt.Fprintf(os.Stderr, "  [timing] kernel-call %v\n", time.Since(tCall))
+	}
 	if kl.IsError(result) {
 		return RunResult{Diagnostics: []types.Diagnostic{{
 			Code:     "XPC000",

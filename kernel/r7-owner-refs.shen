@@ -27,8 +27,11 @@
       [CompSrc])]
   _ _ _ -> [])
 
-\* Top-level R7 check *\
+\* Top-level R7 check. Skip per-app dispatch when there are no
+   Compositions — the per-app body's only emit comes from inspecting the
+   composition list. *\
 (define check-r7
   {(list (list A)) --> (list (list A)) --> (list judgment)}
+  _ [] -> []
   ArgoApps Compositions ->
     (flatten (map (/. App (check-r7-app App Compositions)) ArgoApps)))

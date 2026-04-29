@@ -109,8 +109,13 @@
   _ _ _ _ _ -> [])
 
 
-\* check-r15 — top-level R15 check. *\
+\* check-r15 — top-level R15 check.
+   Per-app loop is skipped when Resources is empty: every per-app emit
+   requires walking the owned resources, so an empty resource list means
+   the entire iteration produces []. Cuts a 1000×1000-style cost on big
+   ArgoApp-only repos (ApplicationSets that haven't expanded yet, etc.). *\
 (define check-r15
+  _ _ _ [] _ -> []
   ArgoApps AppProjLinks AppProjects Resources CRDs ->
     (flatten (map (/. App
                     (check-r15-app App AppProjLinks AppProjects Resources CRDs))

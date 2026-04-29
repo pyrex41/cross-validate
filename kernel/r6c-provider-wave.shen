@@ -65,8 +65,9 @@
   Kind [_ | Rest] -> (kind-has-crd? Kind Rest))
 
 
-\* Top-level R6c check *\
+\* Top-level R6c check. Skip when no CRDs to inspect. *\
 (define check-r6c
   {(list (list A)) --> (list (list A)) --> (list judgment)}
+  _ [] -> []
   ArgoApps CRDs ->
     (flatten (map (/. App (check-r6c-app App CRDs)) ArgoApps)))

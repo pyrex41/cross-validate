@@ -8,7 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/pyrex41/cross-validate-/pkg/types"
 	"gopkg.in/yaml.v3"
@@ -28,18 +31,20 @@ type LoadedDocument struct {
 // presence of a Chart.yaml) have their templates/ subdirectory skipped —
 // those files contain Go-template syntax that doesn't parse as YAML until
 // helm has rendered it.
+//
+// Files are decoded in parallel across GOMAXPROCS workers; the returned
+// slice is sorted by source path so diagnostics remain deterministic
+// regardless of OS scheduling.
 func LoadDirectory(dir string) ([]LoadedDocument, error) {
-	var docs []LoadedDocument
-
+	// Phase 1: walk to collect file paths. Walk is single-threaded and
+	// fast (it's mostly stat syscalls); parallelising the walk itself buys
+	// little and complicates the templates/ skip rule.
+	var paths []string
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
-			// Skip Helm chart templates/ directories so raw {{ }} YAML
-			// never reaches the decoder. Rendered resources enter the
-			// World via the renderer hook in pkg/ir/builder.go, not
-			// through direct filesystem traversal.
 			if info.Name() == "templates" {
 				parent := filepath.Dir(path)
 				if fi, err := os.Stat(filepath.Join(parent, "Chart.yaml")); err == nil && !fi.IsDir() {
@@ -52,15 +57,80 @@ func LoadDirectory(dir string) ([]LoadedDocument, error) {
 		if ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
-		fileDocs, err := LoadFile(path)
-		if err != nil {
-			return fmt.Errorf("loading %s: %w", path, err)
-		}
-		docs = append(docs, fileDocs...)
+		paths = append(paths, path)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Phase 2: decode in parallel. Cap concurrency at GOMAXPROCS so a huge
+	// directory doesn't oversubscribe the CPU; each worker pulls from a
+	// shared index. The first error short-circuits via errOnce.
+	workers := runtime.GOMAXPROCS(0)
+	if workers > len(paths) {
+		workers = len(paths)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	results := make([][]LoadedDocument, len(paths))
+	var (
+		idx     int64
+		idxMu   sync.Mutex
+		errOnce sync.Once
+		firstErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for {
+				idxMu.Lock()
+				i := int(idx)
+				idx++
+				idxMu.Unlock()
+				if i >= len(paths) {
+					return
+				}
+				fileDocs, err := LoadFile(paths[i])
+				if err != nil {
+					errOnce.Do(func() { firstErr = fmt.Errorf("loading %s: %w", paths[i], err) })
+					return
+				}
+				results[i] = fileDocs
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	// Phase 3: flatten in path order. paths is already in walk order
+	// (filepath.Walk returns lexical), so concatenating preserves it. Belt
+	// + braces: explicitly sort by source path before flatten, which also
+	// guards against future walk-order changes.
+	type indexed struct {
+		path string
+		docs []LoadedDocument
+	}
+	all := make([]indexed, 0, len(paths))
+	for i, p := range paths {
+		if results[i] != nil {
+			all = append(all, indexed{p, results[i]})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].path < all[j].path })
+
+	total := 0
+	for _, e := range all {
+		total += len(e.docs)
+	}
+	docs := make([]LoadedDocument, 0, total)
+	for _, e := range all {
+		docs = append(docs, e.docs...)
 	}
 	return docs, nil
 }

@@ -166,8 +166,12 @@
   [[_ FnRef | _] | Rest] -> [FnRef | (extract-fn-refs Rest)]
   [_ | Rest] -> (extract-fn-refs Rest))
 
-\* Top-level R6 check *\
+\* Top-level R6 check.
+   The per-app sub-checks (check-r6a/b/d) all consume Compositions, XRDs,
+   or Functions; if all three are empty, every per-app result is [], so
+   skip the 1000×N dispatch entirely. *\
 (define check-r6
   {(list (list A)) --> (list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
+  _ [] [] [] -> []
   ArgoApps Compositions XRDs Functions ->
     (flatten (map (/. App (check-r6-app App Compositions XRDs Functions)) ArgoApps)))
