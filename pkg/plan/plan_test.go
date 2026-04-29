@@ -263,11 +263,85 @@ func TestPlan_FromSnapshot(t *testing.T) {
 		t.Fatalf("expected 1 removed resource, got %d: %+v", got, p.Delta.Removed)
 	}
 
+	var sawOrphan bool
 	for _, d := range p.Base.Diagnostics {
 		if d.Code == "XPC.P.snapshot-incomplete" {
 			t.Errorf("did not expect XPC.P.snapshot-incomplete on with-resources snapshot; got %+v", d)
 		}
+		if d.Code == "XPC.S.crossplane-state-needs-orphan" {
+			sawOrphan = true
+		}
 	}
+	if !sawOrphan {
+		t.Errorf("expected XPC.S.crossplane-state-needs-orphan on Base — proves derived facts (CPDeletionPolicyFacts) were re-extracted after ToWorld; got codes: %v",
+			diagCodes(p.Base.Diagnostics))
+	}
+}
+
+// TestPlan_FromSnapshot_DiagnosticEquivalence runs the same fixture through
+// both the directory and snapshot variant paths and asserts that the per-tip
+// diagnostic code multisets match. This guards against fidelity regressions
+// in the snapshot round-trip + EnrichTrajectoryData rehydration path.
+func TestPlan_FromSnapshot_DiagnosticEquivalence(t *testing.T) {
+	dirP, dirCleanup, err := plan.Run(plan.Config{
+		BaseRef:    "../../testdata/fixtures/plan-destructive/base",
+		HeadRef:    "../../testdata/fixtures/plan-destructive/head",
+		Path:       ".",
+		SkipRender: true,
+	})
+	t.Cleanup(dirCleanup)
+	if err != nil {
+		t.Fatalf("plan.Run dir-base: %v", err)
+	}
+
+	snapPath := buildSnapshotForTest(t,
+		"../../testdata/fixtures/plan-destructive/base", true)
+	snapP, snapCleanup, err := plan.Run(plan.Config{
+		BaseRef:    snapPath,
+		HeadRef:    "../../testdata/fixtures/plan-destructive/head",
+		Path:       ".",
+		SkipRender: true,
+	})
+	t.Cleanup(snapCleanup)
+	if err != nil {
+		t.Fatalf("plan.Run snap-base: %v", err)
+	}
+
+	dirCodes := diagCodes(dirP.Base.Diagnostics)
+	snapCodes := diagCodes(snapP.Base.Diagnostics)
+	if !equalStringMultiset(dirCodes, snapCodes) {
+		t.Errorf("base-tip diagnostic codes differ between dir and snap variants:\n  dir:  %v\n  snap: %v",
+			dirCodes, snapCodes)
+	}
+	if len(dirP.Delta.Removed) != len(snapP.Delta.Removed) {
+		t.Errorf("Delta.Removed count differs: dir=%d snap=%d",
+			len(dirP.Delta.Removed), len(snapP.Delta.Removed))
+	}
+}
+
+func diagCodes(ds []types.Diagnostic) []string {
+	out := make([]string, len(ds))
+	for i, d := range ds {
+		out[i] = d.Code
+	}
+	return out
+}
+
+func equalStringMultiset(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := make(map[string]int, len(a))
+	for _, s := range a {
+		count[s]++
+	}
+	for _, s := range b {
+		count[s]--
+		if count[s] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func TestPlan_FromSnapshot_Incomplete(t *testing.T) {

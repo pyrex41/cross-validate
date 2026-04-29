@@ -306,6 +306,12 @@ func runVariantFromSnapshot(cfg Config, ref, snapPath string) (VariantResult, er
 		return VariantResult{}, fmt.Errorf("loading snapshot %s: %w", snapPath, err)
 	}
 	world := snap.ToWorld()
+	// Snapshot JSON carries Resources but not the derived fact slices the
+	// kernel and Go rules consume (CPDeletionPolicyFacts, SelectorUsages,
+	// etc., all `json:"-"` on World). Re-extract them from each resource's
+	// Raw map so a snapshot-sourced variant produces the same diagnostics
+	// a directory-sourced variant would.
+	ir.EnrichTrajectoryData(world)
 	diags, err := checker.Check(world, cfg.CheckerConfig)
 	if err != nil {
 		return VariantResult{}, fmt.Errorf("checking snapshot %s: %w", snapPath, err)

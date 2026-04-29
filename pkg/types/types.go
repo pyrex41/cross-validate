@@ -197,7 +197,7 @@ type ResourceInfo struct {
 	Annotations map[string]string      `json:"annotations,omitempty"`
 	Labels      map[string]string      `json:"labels,omitempty"`
 	Source      SourceLocation         `json:"source"`
-	Raw         map[string]interface{} `json:"-"`
+	Raw         map[string]interface{} `json:"raw,omitempty"`
 	// Provenance identifies how this resource entered the World.
 	// "direct" (or empty) means it was read from a manifest file on disk.
 	// "rendered:helm:<app-name>" means it was produced by rendering a Helm
