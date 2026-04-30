@@ -164,3 +164,38 @@ func TestRunVariantFromSnapshot_EmitsIncomplete(t *testing.T) {
 		t.Errorf("severity = %q, want info", hits[0].Severity)
 	}
 }
+
+// TestRunVariant_PathMissingEmitsInfo locks the cross-release UX gate: when
+// the manifest path doesn't exist on the resolved variant (most commonly
+// because the directory was added or restructured after the base ref),
+// runVariant returns an empty World plus an info-level XPC.P.path-missing
+// diagnostic, NOT a hard error. Head resources then appear as Added.
+func TestRunVariant_PathMissingEmitsInfo(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+
+	res, err := runVariant(Config{}, "missing-ref", missing)
+	if err != nil {
+		t.Fatalf("expected nil error for missing path, got %v", err)
+	}
+	if res.World == nil {
+		t.Fatal("expected non-nil empty World, got nil")
+	}
+	if got := len(res.World.Resources); got != 0 {
+		t.Errorf("expected empty World.Resources, got %d", got)
+	}
+
+	var hit *types.Diagnostic
+	for i := range res.Diagnostics {
+		if res.Diagnostics[i].Code == "XPC.P.path-missing" {
+			hit = &res.Diagnostics[i]
+			break
+		}
+	}
+	if hit == nil {
+		t.Fatalf("expected XPC.P.path-missing diagnostic, got %d diags: %+v",
+			len(res.Diagnostics), res.Diagnostics)
+	}
+	if hit.Severity != types.SeverityInfo {
+		t.Errorf("severity = %q, want info", hit.Severity)
+	}
+}

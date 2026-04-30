@@ -242,6 +242,25 @@ func findRepoRoot(start string) (string, error) {
 // Returns a VariantResult. The builder flags and checker config are copied
 // from the Plan Config so each variant gets identical treatment.
 func runVariant(cfg Config, ref, dir string) (VariantResult, error) {
+	// Common cross-release case: the manifest tree was added (or
+	// restructured) after the base ref, so `dir` doesn't exist on this
+	// variant. Return an empty World + info diagnostic instead of
+	// failing the whole plan; head resources will appear as Added.
+	if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) {
+		return VariantResult{
+			Ref:         ref,
+			ResolvedDir: dir,
+			World:       types.NewWorld(),
+			Diagnostics: []types.Diagnostic{{
+				Code:     "XPC.P.path-missing",
+				Severity: types.SeverityInfo,
+				Message:  fmt.Sprintf("manifest path %s does not exist on this variant", dir),
+				Detail: "The directory was not present at the resolved ref. Likely cause: the manifest tree was added, renamed, or restructured after that point in history. Treating this side as an empty World; resources on the other variant will appear as Added or Removed accordingly.",
+				Fix:    "If this is unexpected, double-check the --base / --head refs and the path argument.",
+			}},
+		}, nil
+	}
+
 	docs, err := loader.LoadDirectory(dir)
 	if err != nil {
 		return VariantResult{}, fmt.Errorf("load %s: %w", dir, err)
