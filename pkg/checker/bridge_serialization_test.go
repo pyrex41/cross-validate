@@ -48,7 +48,7 @@ func TestBridge_TrajectorySerialization(t *testing.T) {
 		}},
 	}}
 
-	obj := worldToShenObj(w, steps)
+	obj := worldToShenObj(w, steps, nil)
 	ser := kl.ObjString(obj)
 
 	for _, expected := range []string{

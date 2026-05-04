@@ -117,6 +117,8 @@ Check flags:
                        search; also XPC_CONFIG_PATH env var)
   --ssa-mp-mode=<mode> R22 (ServerSideApply × managementPolicies) strictness:
                        observe (default, narrow), partial, any (broadest)
+  --focus=<preset>     Restrict to a curated rule subset. Presets:
+                       all (default), inc6-floor (R23+R24+R25 only)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -190,6 +192,7 @@ func runCheck(args []string) int {
 	kernelPath := os.Getenv("XPC_KERNEL_PATH")
 	configPath := os.Getenv("XPC_CONFIG_PATH")
 	ssaMPMode := "observe"
+	focusPreset := "all"
 	var paths []string
 
 	for _, arg := range args {
@@ -227,6 +230,15 @@ func runCheck(args []string) int {
 				ssaMPMode = val
 			default:
 				fmt.Fprintf(os.Stderr, "invalid --ssa-mp-mode=%s (must be one of: observe, partial, any)\n", val)
+				return 1
+			}
+		case strings.HasPrefix(arg, "--focus="):
+			val := strings.TrimPrefix(arg, "--focus=")
+			switch val {
+			case "all", "inc6-floor":
+				focusPreset = val
+			default:
+				fmt.Fprintf(os.Stderr, "invalid --focus=%s (must be one of: all, inc6-floor)\n", val)
 				return 1
 			}
 		case arg == "--help" || arg == "-h":
@@ -342,6 +354,7 @@ func runCheck(args []string) int {
 	checkerCfg := checker.Config{
 		StrictConversions: strictConversions,
 		KernelPath:        kernelPath,
+		RuleAllowlist:     focusPresetAllowlist(focusPreset),
 	}
 
 	tCheck := time.Now()
@@ -1047,6 +1060,21 @@ func runExplain(args []string) int {
 // like `number: 42` survive the type-mismatch — ApplicationSet templates
 // consume these as plain {{ .number }} substitutions, which our minimal
 // engine does as strings anyway.
+// focusPresetAllowlist maps a --focus preset to the kernel rule codes the
+// run is restricted to. "all" returns nil so the kernel runs everything.
+func focusPresetAllowlist(preset string) []string {
+	switch preset {
+	case "inc6-floor":
+		return []string{
+			"XPC.S.crossplane-state-needs-orphan",
+			"XPC.E.appset-finalizer-without-preserve",
+			"XPC.E.prod-appset-autosync",
+		}
+	default:
+		return nil
+	}
+}
+
 func loadAppSetFixtures(path string) (map[string][]map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
