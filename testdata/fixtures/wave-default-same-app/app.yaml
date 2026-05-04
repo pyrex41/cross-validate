@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: same-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: same-app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-go-templating
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.5.0
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: app-composition
+spec:
+  compositeTypeRef:
+    apiVersion: platform.example.com/v1
+    kind: XApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating

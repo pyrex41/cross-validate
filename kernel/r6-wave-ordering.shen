@@ -30,19 +30,23 @@
   _ _ -> false)
 
 
-\* Check wave ordering for an Argo Application *\
+\* Check wave ordering for an Argo Application.
+
+   R6a and R6d compare against XRs that live in this App's own SyncWaves, so
+   they remain per-App. R6b is evaluated globally (see check-r6b-global) to
+   honour Option B scoping: same-App Function/Composition pairs are deployed
+   atomically by Argo, so flagging them produces ~30 false positives on
+   fg-manifold. R6b only fires on cross-App pairs where AppSet ordering
+   matters. *\
 (define check-r6-app
-  {(list A) --> (list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
-  [argo-app-fact AppName TrackingMode SyncWaves AppSrc] Compositions XRDs Functions ->
+  {(list A) --> (list (list A)) --> (list (list A)) --> (list judgment)}
+  [argo-app-fact AppName TrackingMode SyncWaves AppSrc] Compositions XRDs ->
     (let OwnedComps (filter (/. C (composition-owned-by? AppName C)) Compositions)
          OwnedXRDs  (filter (/. X (xrd-owned-by? AppName X)) XRDs)
-         OwnedFns   (filter (/. F (function-owned-by? AppName F)) Functions)
       (append
         (check-r6a-xrd-before-xr SyncWaves OwnedXRDs AppSrc)
-        (append
-          (check-r6b-fn-before-composition SyncWaves OwnedComps OwnedFns AppSrc)
-          (check-r6d-composition-before-xr SyncWaves OwnedComps OwnedXRDs AppSrc))))
-  _ _ _ _ -> [])
+        (check-r6d-composition-before-xr SyncWaves OwnedComps OwnedXRDs AppSrc)))
+  _ _ _ -> [])
 
 \* R6a: XRD wave < XR wave *\
 (define check-r6a-xrd-before-xr
@@ -74,34 +78,93 @@
                     XrEntries)))
   _ _ _ -> [])
 
-\* R6b: Function wave < Composition wave *\
-(define check-r6b-fn-before-composition
-  {(list (list A)) --> (list (list A)) --> (list (list A)) --> source-loc --> (list judgment)}
-  SyncWaves Compositions Functions AppSrc ->
-    (flatten (map (/. Comp (check-r6b-for-composition Comp SyncWaves Functions AppSrc))
+\* R6b: Function wave < Composition wave (cross-App only).
+
+   Option B scoping: skip Function/Composition pairs that share the same
+   OwningApp. Within one Argo Application, Argo applies same-wave resources
+   atomically and Crossplane reconciles eventually, so default-0 vs default-0
+   pairs are not real ordering hazards. Cross-App pairs still need ordering
+   because each AppSet syncs as its own transaction.
+
+   For the surviving cross-App pairs, the Composition's wave is looked up in
+   its own App's SyncWaves and the Function's wave in its own App's
+   SyncWaves. *\
+(define check-r6b-global
+  {(list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
+  ArgoApps Compositions Functions ->
+    (flatten (map (/. Comp (check-r6b-for-composition Comp ArgoApps Functions))
                   Compositions)))
 
 (define check-r6b-for-composition
-  {(list A) --> (list (list A)) --> (list (list A)) --> source-loc --> (list judgment)}
-  [composition-fact CompName _ _ Pipeline CompSrc _] SyncWaves Functions AppSrc ->
-    (let CompWave (find-wave "Composition" CompName SyncWaves)
+  {(list A) --> (list (list A)) --> (list (list A)) --> (list judgment)}
+  [composition-fact CompName _ _ Pipeline CompSrc CompApp] ArgoApps Functions ->
+    (let CompWaves (app-sync-waves CompApp ArgoApps)
+         CompSrcLoc (app-source CompApp ArgoApps)
+         CompWave (find-wave "Composition" CompName CompWaves)
          FnRefs (extract-fn-refs Pipeline)
       (flatten (map (/. FnRef
-                      (let FnWave (find-wave "Function" FnRef SyncWaves)
-                        (if (< FnWave CompWave)
-                            []
-                            [(make-error "XPC006"
-                              AppSrc
-                              (cn "Function " (cn FnRef (cn " (wave " (cn (str FnWave)
-                                (cn ") must have a lower sync-wave than Composition " (cn CompName
-                                  (cn " (wave " (cn (str CompWave) ")"))))))))
-                              (cn "Function " (cn FnRef
-                                (cn " must be Healthy before Composition " (cn CompName
-                                  " can use it. The Function sync-wave must be strictly less than the Composition sync-wave."))))
-                              (cn "Set sync-wave on Function " (cn FnRef (cn " to a value less than " (cn (str CompWave) "."))))
-                              [CompSrc])])))
+                      (check-r6b-pair CompName CompApp CompWave CompSrc CompSrcLoc
+                                      FnRef ArgoApps Functions))
                     FnRefs)))
-  _ _ _ _ -> [])
+  _ _ _ -> [])
+
+(define check-r6b-pair
+  {string --> string --> number --> source-loc --> source-loc --> string --> (list (list A)) --> (list (list A)) --> (list judgment)}
+  CompName CompApp CompWave CompSrc CompSrcLoc FnRef ArgoApps Functions ->
+    (let FnApp (function-app FnRef Functions)
+         FnWaves (app-sync-waves FnApp ArgoApps)
+         FnWave (find-wave "Function" FnRef FnWaves)
+      (if (= FnApp CompApp)
+          []
+          (if (= FnApp "")
+              []
+              (if (< FnWave CompWave)
+                  []
+                  [(check-r6b-emit CompName CompApp CompWave CompSrc CompSrcLoc
+                                   FnRef FnApp FnWave)])))))
+
+(define check-r6b-emit
+  {string --> string --> number --> source-loc --> source-loc --> string --> string --> number --> judgment}
+  CompName CompApp CompWave CompSrc CompSrcLoc FnRef FnApp FnWave ->
+    (make-error "XPC006"
+      CompSrcLoc
+      (r6b-msg FnRef FnApp FnWave CompName CompApp CompWave)
+      (r6b-detail FnRef CompName)
+      (r6b-fix FnRef CompWave)
+      [CompSrc]))
+
+(define r6b-msg
+  {string --> string --> number --> string --> string --> number --> string}
+  FnRef FnApp FnWave CompName CompApp CompWave ->
+    (cn "Function "
+      (cn FnRef
+        (cn " in App "
+          (cn FnApp
+            (cn " (wave "
+              (cn (str FnWave)
+                (cn ") must have a lower sync-wave than Composition "
+                  (cn CompName
+                    (cn " in App "
+                      (cn CompApp
+                        (cn " (wave "
+                          (cn (str CompWave) ")")))))))))))))
+
+(define r6b-detail
+  {string --> string --> string}
+  FnRef CompName ->
+    (cn "Function "
+      (cn FnRef
+        (cn " must be Healthy before Composition "
+          (cn CompName
+            " can use it. The Function sync-wave must be strictly less than the Composition sync-wave.")))))
+
+(define r6b-fix
+  {string --> number --> string}
+  FnRef CompWave ->
+    (cn "Set sync-wave on Function "
+      (cn FnRef
+        (cn " to a value less than "
+          (cn (str CompWave) ".")))))
 
 \* R6d: Composition wave <= XR wave *\
 (define check-r6d-composition-before-xr
@@ -167,11 +230,41 @@
   [_ | Rest] -> (extract-fn-refs Rest))
 
 \* Top-level R6 check.
-   The per-app sub-checks (check-r6a/b/d) all consume Compositions, XRDs,
-   or Functions; if all three are empty, every per-app result is [], so
-   skip the 1000×N dispatch entirely. *\
+   R6a/R6d run per-Argo-Application against same-App XRDs/Compositions and
+   that App's SyncWaves. R6b runs globally and only fires on cross-App
+   Function/Composition pairs (Option B). When all of Compositions, XRDs,
+   and Functions are empty, every result is [] so we skip the dispatch. *\
 (define check-r6
   {(list (list A)) --> (list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
   _ [] [] [] -> []
   ArgoApps Compositions XRDs Functions ->
-    (flatten (map (/. App (check-r6-app App Compositions XRDs Functions)) ArgoApps)))
+    (append
+      (flatten (map (/. App (check-r6-app App Compositions XRDs)) ArgoApps))
+      (check-r6b-global ArgoApps Compositions Functions)))
+
+\* Helper: look up an Argo Application's SyncWaves by Name. Returns [] when
+   the App is not found (or AppName is empty), which makes find-wave default
+   to 0 — the same behaviour as the unannotated case. *\
+(define app-sync-waves
+  {string --> (list (list A)) --> (list (list A))}
+  _ [] -> []
+  AppName [[argo-app-fact AppName _ SyncWaves _] | _] -> SyncWaves
+  AppName [_ | Rest] -> (app-sync-waves AppName Rest))
+
+\* Helper: look up an Argo Application's source-loc by Name. Returns a
+   placeholder source-loc when not found — used as the diagnostic anchor for
+   cross-App R6b emissions, which logically belong to the Composition's App. *\
+(define app-source
+  {string --> (list (list A)) --> source-loc}
+  _ [] -> [source "" 0]
+  AppName [[argo-app-fact AppName _ _ AppSrc] | _] -> AppSrc
+  AppName [_ | Rest] -> (app-source AppName Rest))
+
+\* Helper: look up a Function's OwningApp by Name from the Functions fact
+   list. Returns "" when not found, which check-r6b-pair treats as
+   unowned/cross-App-irrelevant. *\
+(define function-app
+  {string --> (list (list A)) --> string}
+  _ [] -> ""
+  FnName [[function-fact FnName _ _ _ OwningApp] | _] -> OwningApp
+  FnName [_ | Rest] -> (function-app FnName Rest))

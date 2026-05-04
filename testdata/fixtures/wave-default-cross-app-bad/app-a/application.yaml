@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cross-bad-app-a
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: app-a
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: team-a
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-cross-bad
+spec:
+  package: xpkg.upbound.io/example/function-cross-bad:v0.1.0
