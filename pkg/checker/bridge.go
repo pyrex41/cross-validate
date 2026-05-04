@@ -36,6 +36,12 @@ type Config struct {
 	// the bridge searches upwards from the current working directory for
 	// a "kernel" directory containing check.shen.
 	KernelPath string
+
+	// RuleAllowlist, when non-empty, restricts kernel rule dispatch to
+	// the listed rule codes. Empty (the default) means run all rules.
+	// The kernel skips per-rule dispatches whose code isn't on the list,
+	// so non-listed rules don't even compute satisfied markers.
+	RuleAllowlist []string
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +305,7 @@ func CheckWithObligations(w *types.World, cfg Config) RunResult {
 	}
 
 	tSerialize := time.Now()
-	worldObj := worldToShenObj(w, trajectories)
+	worldObj := worldToShenObj(w, trajectories, cfg.RuleAllowlist)
 	if timing {
 		fmt.Fprintf(os.Stderr, "  [timing] serialize   %v\n", time.Since(tSerialize))
 	}
@@ -476,7 +482,7 @@ func sortedSection[T any](tag string, src []T, less func(a, b T) int, toObj func
 	return section(tag, objs)
 }
 
-func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
+func worldToShenObj(w *types.World, trajectories []trajectory.Step, ruleAllowlist []string) kl.Obj {
 	// Compositions sort once and feed both the `compositions` section and the
 	// `resolved-patches` section, so patches follow the composition ordering.
 	comps := slices.Clone(w.Compositions)
@@ -562,6 +568,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step) kl.Obj {
 		prodPatternsSection(w.ProdPatterns),
 		stringListSection("crossplane-state-needs-orphan-carveouts",
 			w.NameCarveouts["crossplane-state-needs-orphan"]),
+		stringListSection("rule-allowlist", ruleAllowlist),
 		trajectoryToObj(trajectories),
 	}
 	return makeList(sections)

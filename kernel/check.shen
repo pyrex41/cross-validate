@@ -60,6 +60,23 @@
   Tag [[Tag | Content] | _] -> Content
   Tag [_ | Rest] -> (extract-section Tag Rest))
 
+\* rule-allowed? — true when Allowlist is empty (= run everything) or
+   when Code appears in Allowlist. Empty-allowlist-means-all is what
+   keeps default behavior identical for callers that don't pass a focus
+   preset. The empty-list short-circuit must be on the OUTER call only;
+   the recursive helper below distinguishes "no allowlist set" from
+   "exhausted search without a hit". *\
+(define rule-allowed?
+  {string --> (list string) --> boolean}
+  _ [] -> true
+  Code Allowlist -> (rule-member? Code Allowlist))
+
+(define rule-member?
+  {string --> (list string) --> boolean}
+  _ [] -> false
+  Code [Code | _] -> true
+  Code [_ | Rest] -> (rule-member? Code Rest))
+
 \* ===== Main entry point ===== *\
 
 (define check-world
@@ -97,38 +114,45 @@
          AppSetAutosyncFacts (extract-section appset-autosync-facts Sections)
          ProdPatterns (extract-section prod-patterns Sections)
          R23Carveouts (extract-section crossplane-state-needs-orphan-carveouts Sections)
+         Allowlist    (extract-section rule-allowlist Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
             rules which ran without violations emit a satisfied marker
             judgment. The bridge filters those before returning Diagnostics
-            but counts them for the audit-proof RunSummary. *\
-         R1 (mark-rule "XPC001" (check-r1 CRDs XRDs))
-         R2 (mark-rule "XPC002" (check-r2 Resources CRDs))
-         R3 (mark-rule "XPC003" (check-r3 Compositions XRDs))
-         R4 (mark-rule "XPC004" (check-r4 Compositions Functions))
-         R5 (mark-rule "XPC005" (check-r5 ResolvedPatches))
-         R6 (mark-rule "XPC006" (check-r6 ArgoApps Compositions XRDs Functions))
-         R6c (mark-rule "XPC006" (check-r6c ArgoApps CRDs))
-         R7 (mark-rule "XPC007" (check-r7 ArgoApps Compositions))
-         R8 (mark-rule "XPC008" (check-r8 Resources XRDs))
-         R9 (mark-rule "XPC009" (check-r9 Compositions Resources))
-         R10 (mark-rule "XPC010" (check-r10 ResolvedPatches))
-         R11 (mark-rule "XPC011" (check-r11 Resources Compositions Providers CRDs))
-         R12 (mark-rule "XPC012" (check-r12-cross Trajectory MountRefs))
-         R14 (mark-rule "XPC014" (check-r14-cross Trajectory SARefs RBACBindings))
-         R15 (mark-rule "XPC.D.kind-whitelisted" (check-r15 ArgoApps ArgoAppProjLinks ArgoAppProjects Resources CRDs))
-         R16 (mark-rule "XPC.E.selector-needs-ignore-diff" (check-r16 SelectorUsages IgnoreDiffEntries))
-         R17 (mark-rule "XPC.A.resource-field-valid" (check-r17 ResourceFieldFacts))
-         R18 (mark-rule "XPC.H.helm-renders" (check-r18 RenderResults))
-         R19 (mark-rule "XPC.H.values-well-typed" (check-r19 RenderResults))
-         R20 (mark-rule "XPC.H.render-deterministic" (check-r20 DeterminismResults))
-         R21 (mark-rule "XPC.E.late-init-needs-ignore-diff" (check-r21 LateInitUsages IgnoreDiffEntries))
-         R22All (check-r22 SSAMPConflicts SSAMPMode)
-         R22 (mark-r22-rules R22All)
-         R23 (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts R23Carveouts))
-         R24 (mark-rule "XPC.E.appset-finalizer-without-preserve" (check-r24 AppSetFinalizerFacts))
-         R25 (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts ProdPatterns))
+            but counts them for the audit-proof RunSummary.
+            Each dispatch is gated by rule-allowed? so a non-empty allowlist
+            (e.g. --focus=inc6-floor) skips the entire check-rN call rather
+            than running it and dropping the output afterwards. *\
+         R1 (if (rule-allowed? "XPC001" Allowlist) (mark-rule "XPC001" (check-r1 CRDs XRDs)) [])
+         R2 (if (rule-allowed? "XPC002" Allowlist) (mark-rule "XPC002" (check-r2 Resources CRDs)) [])
+         R3 (if (rule-allowed? "XPC003" Allowlist) (mark-rule "XPC003" (check-r3 Compositions XRDs)) [])
+         R4 (if (rule-allowed? "XPC004" Allowlist) (mark-rule "XPC004" (check-r4 Compositions Functions)) [])
+         R5 (if (rule-allowed? "XPC005" Allowlist) (mark-rule "XPC005" (check-r5 ResolvedPatches)) [])
+         R6 (if (rule-allowed? "XPC006" Allowlist) (mark-rule "XPC006" (check-r6 ArgoApps Compositions XRDs Functions)) [])
+         R6c (if (rule-allowed? "XPC006" Allowlist) (mark-rule "XPC006" (check-r6c ArgoApps CRDs)) [])
+         R7 (if (rule-allowed? "XPC007" Allowlist) (mark-rule "XPC007" (check-r7 ArgoApps Compositions)) [])
+         R8 (if (rule-allowed? "XPC008" Allowlist) (mark-rule "XPC008" (check-r8 Resources XRDs)) [])
+         R9 (if (rule-allowed? "XPC009" Allowlist) (mark-rule "XPC009" (check-r9 Compositions Resources)) [])
+         R10 (if (rule-allowed? "XPC010" Allowlist) (mark-rule "XPC010" (check-r10 ResolvedPatches)) [])
+         R11 (if (rule-allowed? "XPC011" Allowlist) (mark-rule "XPC011" (check-r11 Resources Compositions Providers CRDs)) [])
+         R12 (if (rule-allowed? "XPC012" Allowlist) (mark-rule "XPC012" (check-r12-cross Trajectory MountRefs)) [])
+         R14 (if (rule-allowed? "XPC014" Allowlist) (mark-rule "XPC014" (check-r14-cross Trajectory SARefs RBACBindings)) [])
+         R15 (if (rule-allowed? "XPC.D.kind-whitelisted" Allowlist) (mark-rule "XPC.D.kind-whitelisted" (check-r15 ArgoApps ArgoAppProjLinks ArgoAppProjects Resources CRDs)) [])
+         R16 (if (rule-allowed? "XPC.E.selector-needs-ignore-diff" Allowlist) (mark-rule "XPC.E.selector-needs-ignore-diff" (check-r16 SelectorUsages IgnoreDiffEntries)) [])
+         R17 (if (rule-allowed? "XPC.A.resource-field-valid" Allowlist) (mark-rule "XPC.A.resource-field-valid" (check-r17 ResourceFieldFacts)) [])
+         R18 (if (rule-allowed? "XPC.H.helm-renders" Allowlist) (mark-rule "XPC.H.helm-renders" (check-r18 RenderResults)) [])
+         R19 (if (rule-allowed? "XPC.H.values-well-typed" Allowlist) (mark-rule "XPC.H.values-well-typed" (check-r19 RenderResults)) [])
+         R20 (if (rule-allowed? "XPC.H.render-deterministic" Allowlist) (mark-rule "XPC.H.render-deterministic" (check-r20 DeterminismResults)) [])
+         R21 (if (rule-allowed? "XPC.E.late-init-needs-ignore-diff" Allowlist) (mark-rule "XPC.E.late-init-needs-ignore-diff" (check-r21 LateInitUsages IgnoreDiffEntries)) [])
+         R22 (if (or (rule-allowed? "XPC.E.ssa-managementpolicies-observe" Allowlist)
+                     (or (rule-allowed? "XPC.E.ssa-managementpolicies-partial" Allowlist)
+                         (rule-allowed? "XPC.E.ssa-managementpolicies-nondefault" Allowlist)))
+                  (mark-r22-rules (check-r22 SSAMPConflicts SSAMPMode))
+                  [])
+         R23 (if (rule-allowed? "XPC.S.crossplane-state-needs-orphan" Allowlist) (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts R23Carveouts)) [])
+         R24 (if (rule-allowed? "XPC.E.appset-finalizer-without-preserve" Allowlist) (mark-rule "XPC.E.appset-finalizer-without-preserve" (check-r24 AppSetFinalizerFacts)) [])
+         R25 (if (rule-allowed? "XPC.E.prod-appset-autosync" Allowlist) (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts ProdPatterns)) [])
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10

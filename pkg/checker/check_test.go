@@ -1335,3 +1335,52 @@ func TestEndToEnd_WebhookConversion(t *testing.T) {
 		t.Error("expected XPC002 error for webhook conversion, not found")
 	}
 }
+
+// TestFocus_Inc6Floor_SuppressesNonAllowlistedRules pins the contract that
+// --focus=inc6-floor only emits R23/R24/R25 codes. The fixture is one that
+// otherwise triggers R2 (XPC002): unfocused it must emit XPC002, focused it
+// must not.
+func TestFocus_Inc6Floor_SuppressesNonAllowlistedRules(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/webhook-conversion")
+
+	unfocused := checkFixture(t, world, Config{})
+	if len(findDiagByCode(unfocused, "XPC002")) == 0 {
+		t.Fatalf("setup failure: unfocused run must emit XPC002 for this fixture")
+	}
+
+	allowlist := []string{
+		"XPC.S.crossplane-state-needs-orphan",
+		"XPC.E.appset-finalizer-without-preserve",
+		"XPC.E.prod-appset-autosync",
+	}
+	focused := checkFixture(t, world, Config{RuleAllowlist: allowlist})
+
+	if got := findDiagByCode(focused, "XPC002"); len(got) != 0 {
+		t.Errorf("focus=inc6-floor must suppress XPC002, got %d", len(got))
+	}
+	for _, d := range focused {
+		switch d.Code {
+		case "XPC.S.crossplane-state-needs-orphan",
+			"XPC.E.appset-finalizer-without-preserve",
+			"XPC.E.prod-appset-autosync":
+		default:
+			t.Errorf("focus=inc6-floor leaked code %s: %+v", d.Code, d)
+		}
+	}
+}
+
+// TestFocus_AllowlistEmitsR23 confirms a focused run still produces the
+// allowlisted code on a fixture that triggers it.
+func TestFocus_AllowlistEmitsR23(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/crossplane-state-needs-orphan/positive")
+
+	allowlist := []string{
+		"XPC.S.crossplane-state-needs-orphan",
+		"XPC.E.appset-finalizer-without-preserve",
+		"XPC.E.prod-appset-autosync",
+	}
+	diags := checkFixture(t, world, Config{RuleAllowlist: allowlist})
+	if len(findDiagByCode(diags, "XPC.S.crossplane-state-needs-orphan")) == 0 {
+		t.Errorf("focus=inc6-floor on positive R23 fixture must emit XPC.S.crossplane-state-needs-orphan")
+	}
+}
