@@ -619,6 +619,21 @@ func TestR16_SelectorDrift(t *testing.T) {
 	}
 }
 
+func TestR16_ManagedFieldsManagersCrossplane(t *testing.T) {
+	// Canonical Crossplane-on-Argo pattern: a wildcard ignoreDifferences
+	// entry with managedFieldsManagers: [crossplane] suppresses every
+	// Crossplane-written field on every Crossplane-managed resource.
+	// The selector usage is real and would normally fire; the entry covers
+	// it because Crossplane field-manages the resolved path.
+	world := loadFixture(t, "../../testdata/fixtures/selector-drift-mfm-crossplane")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.E.selector-needs-ignore-diff")
+	if len(got) != 0 {
+		t.Fatalf("selector-drift-mfm-crossplane: expected 0 XPC.E.selector-needs-ignore-diff diagnostics, got %d: %+v", len(got), got)
+	}
+}
+
 func TestR16_SelectorDrift_ArrayPath(t *testing.T) {
 	// Array-indexed registry entries (networkInterfaces[].subnetIdSelector,
 	// securityGroupSelector) should expand per array element. The fixture's

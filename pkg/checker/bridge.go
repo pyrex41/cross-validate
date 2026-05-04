@@ -1256,30 +1256,35 @@ func buildIgnoreDiffEntries(apps []types.ArgoApplication) []types.IgnoreDiffEntr
 			emitted := false
 			for _, jp := range diff.JSONPointers {
 				out = append(out, types.IgnoreDiffEntry{
-					AppName:     app.Name,
-					Group:       diff.Group,
-					Kind:        diff.Kind,
-					JSONPointer: jp,
-					JQPath:      "",
+					AppName:               app.Name,
+					Group:                 diff.Group,
+					Kind:                  diff.Kind,
+					JSONPointer:           jp,
+					JQPath:                "",
+					ManagedFieldsManagers: diff.ManagedFieldsManagers,
 				})
 				emitted = true
 			}
 			for _, jq := range diff.JQPathExpressions {
 				out = append(out, types.IgnoreDiffEntry{
-					AppName:     app.Name,
-					Group:       diff.Group,
-					Kind:        diff.Kind,
-					JSONPointer: "",
-					JQPath:      jq,
+					AppName:               app.Name,
+					Group:                 diff.Group,
+					Kind:                  diff.Kind,
+					JSONPointer:           "",
+					JQPath:                jq,
+					ManagedFieldsManagers: diff.ManagedFieldsManagers,
 				})
 				emitted = true
 			}
 			if !emitted {
-				// Preserve the scope entry even when no path expressions are set.
+				// A scope-only entry (no path expressions) still carries
+				// managedFieldsManagers — that's the canonical Crossplane-on-Argo
+				// pattern: `group: "*", kind: "*", managedFieldsManagers: [crossplane]`.
 				out = append(out, types.IgnoreDiffEntry{
-					AppName: app.Name,
-					Group:   diff.Group,
-					Kind:    diff.Kind,
+					AppName:               app.Name,
+					Group:                 diff.Group,
+					Kind:                  diff.Kind,
+					ManagedFieldsManagers: diff.ManagedFieldsManagers,
 				})
 			}
 		}
@@ -1298,10 +1303,15 @@ func ignoreDiffEntryCmp(a, b types.IgnoreDiffEntry) int {
 }
 
 func ignoreDiffEntryToObj(e types.IgnoreDiffEntry) kl.Obj {
+	mfm := make([]kl.Obj, 0, len(e.ManagedFieldsManagers))
+	for _, m := range e.ManagedFieldsManagers {
+		mfm = append(mfm, str(m))
+	}
 	return makeList([]kl.Obj{
 		sym("ignore-diff-entry"),
 		str(e.AppName), str(e.Group), str(e.Kind),
 		str(e.JSONPointer), str(e.JQPath),
+		makeList(mfm),
 	})
 }
 

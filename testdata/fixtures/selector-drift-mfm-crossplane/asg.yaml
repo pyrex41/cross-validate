@@ -1,0 +1,13 @@
+apiVersion: autoscaling.aws.upbound.io/v1beta1
+kind: AutoscalingGroup
+metadata:
+  name: preview-asg
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    minSize: 1
+    maxSize: 3
+    vpcZoneIdentifierSelector:
+      matchLabels:
+        env: preview

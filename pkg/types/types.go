@@ -898,6 +898,11 @@ type IgnoreDiffEntry struct {
 	JSONPointer string `json:"jsonPointer"`
 	// JQPath is one element from ignoreDifferences[].jqPathExpressions.
 	JQPath string `json:"jqPath"`
+	// ManagedFieldsManagers is the entry-level field-manager allowlist. When
+	// "crossplane" is in this list, Argo CD ignores every field that
+	// crossplane field-manages on resources in scope — covering all
+	// resolved-selector and late-init paths in one entry.
+	ManagedFieldsManagers []string `json:"managedFieldsManagers,omitempty"`
 }
 
 // World is the complete typed representation of a set of manifests.

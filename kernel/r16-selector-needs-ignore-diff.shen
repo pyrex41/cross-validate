@@ -33,24 +33,48 @@
   [C | Rest] Acc -> (r16-last-seg Rest [C | Acc]))
 
 
-\* r16-entry-covers? — true when an ignore-diff-entry covers ResolvedPath.
-   Matches against the leaf of ResolvedPath so that JSONPointer-style entries
-   (which use slashes) can still match dotted resolved paths.
-   Uses prelude string-contains? which is (string-contains? Haystack Needle). *\
+\* r16-string-list-member? — true when the string S appears in List. *\
+(define r16-string-list-member?
+  _ [] -> false
+  S [X | Rest] -> (if (= S X) true (r16-string-list-member? S Rest)))
+
+
+\* r16-scope-matches? — true when an ignoreDifferences entry's group/kind
+   apply to the resource. ArgoCD treats "*" as wildcard; we also treat the
+   empty string as wildcard so legacy fixtures and entries that omit
+   group/kind retain pre-scoping behaviour. *\
+(define r16-scope-matches?
+  EntryG EntryK ResG ResK ->
+    (and (or (= EntryG "*") (= EntryG "") (= EntryG ResG))
+         (or (= EntryK "*") (= EntryK "") (= EntryK ResK))))
+
+
+\* r16-entry-covers? — true when an ignore-diff-entry covers ResolvedPath
+   for a resource of (ResG, ResK).
+   Coverage reasons (logical OR), gated by scope:
+     - the entry's managedFieldsManagers includes "crossplane"
+       (canonical Crossplane-on-Argo pattern: every Crossplane-written
+       field is exempt, regardless of path)
+     - JSONPointer string-contains the leaf of ResolvedPath
+     - JQPath string-contains the leaf of ResolvedPath *\
 (define r16-entry-covers?
-  Leaf [ignore-diff-entry _ _ _ JSONPointer JQPath] ->
-    (or (and (not (= JSONPointer "")) (string-contains? JSONPointer Leaf))
-        (and (not (= JQPath ""))      (string-contains? JQPath Leaf)))
-  _ _ -> false)
+  Leaf ResG ResK [ignore-diff-entry _ EntryG EntryK JSONPointer JQPath MFM] ->
+    (if (r16-scope-matches? EntryG EntryK ResG ResK)
+        (or (r16-string-list-member? "crossplane" MFM)
+            (or (and (not (= JSONPointer "")) (string-contains? JSONPointer Leaf))
+                (and (not (= JQPath ""))      (string-contains? JQPath Leaf))))
+        false)
+  _ _ _ _ -> false)
 
 
-\* r16-covered? — true when at least one entry in IgnoreDiffEntries covers the leaf. *\
+\* r16-covered? — true when at least one entry in IgnoreDiffEntries covers
+   (ResG, ResK, Leaf). *\
 (define r16-covered?
-  Leaf [] -> false
-  Leaf [Entry | Rest] ->
-    (if (r16-entry-covers? Leaf Entry)
+  Leaf ResG ResK [] -> false
+  Leaf ResG ResK [Entry | Rest] ->
+    (if (r16-entry-covers? Leaf ResG ResK Entry)
         true
-        (r16-covered? Leaf Rest)))
+        (r16-covered? Leaf ResG ResK Rest)))
 
 
 \* r16-check-usage — check one SelectorUsage against all IgnoreDiffEntries.
@@ -59,7 +83,7 @@
   [selector-usage-fact Group Kind Name Namespace SelectorPath ResolvedPath Src]
     IgnoreDiffEntries ->
       (let Leaf (r16-leaf-of ResolvedPath)
-        (if (r16-covered? Leaf IgnoreDiffEntries)
+        (if (r16-covered? Leaf Group Kind IgnoreDiffEntries)
             []
             [(make-error "XPC.E.selector-needs-ignore-diff"
                 Src

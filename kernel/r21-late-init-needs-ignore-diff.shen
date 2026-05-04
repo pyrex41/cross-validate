@@ -31,21 +31,44 @@
   [C | Rest] Acc -> (r21-last-seg Rest [C | Acc]))
 
 
-\* r21-entry-covers? — true when an ignore-diff-entry covers FieldPath. *\
+\* r21-string-list-member? — true when the string S appears in List. *\
+(define r21-string-list-member?
+  _ [] -> false
+  S [X | Rest] -> (if (= S X) true (r21-string-list-member? S Rest)))
+
+
+\* r21-scope-matches? — entry group/kind apply to (ResG, ResK). "*" and ""
+   both act as wildcards (preserves pre-scoping behaviour for entries that
+   omit the scope filter). *\
+(define r21-scope-matches?
+  EntryG EntryK ResG ResK ->
+    (and (or (= EntryG "*") (= EntryG "") (= EntryG ResG))
+         (or (= EntryK "*") (= EntryK "") (= EntryK ResK))))
+
+
+\* r21-entry-covers? — true when an ignore-diff-entry covers FieldPath for
+   a resource of (ResG, ResK). Late-init paths are Crossplane-written, so
+   the canonical Crossplane-on-Argo wildcard
+   (`group: "*", kind: "*", managedFieldsManagers: [crossplane]`) covers
+   every late-init field. *\
 (define r21-entry-covers?
-  Leaf [ignore-diff-entry _ _ _ JSONPointer JQPath] ->
-    (or (and (not (= JSONPointer "")) (string-contains? JSONPointer Leaf))
-        (and (not (= JQPath ""))      (string-contains? JQPath Leaf)))
-  _ _ -> false)
+  Leaf ResG ResK [ignore-diff-entry _ EntryG EntryK JSONPointer JQPath MFM] ->
+    (if (r21-scope-matches? EntryG EntryK ResG ResK)
+        (or (r21-string-list-member? "crossplane" MFM)
+            (or (and (not (= JSONPointer "")) (string-contains? JSONPointer Leaf))
+                (and (not (= JQPath ""))      (string-contains? JQPath Leaf))))
+        false)
+  _ _ _ _ -> false)
 
 
-\* r21-covered? — true when at least one entry in IgnoreDiffEntries covers the leaf. *\
+\* r21-covered? — true when at least one entry in IgnoreDiffEntries covers
+   (ResG, ResK, Leaf). *\
 (define r21-covered?
-  Leaf [] -> false
-  Leaf [Entry | Rest] ->
-    (if (r21-entry-covers? Leaf Entry)
+  Leaf ResG ResK [] -> false
+  Leaf ResG ResK [Entry | Rest] ->
+    (if (r21-entry-covers? Leaf ResG ResK Entry)
         true
-        (r21-covered? Leaf Rest)))
+        (r21-covered? Leaf ResG ResK Rest)))
 
 
 \* r21-check-usage — check one LateInitUsage against all IgnoreDiffEntries.
@@ -54,7 +77,7 @@
   [late-init-usage-fact Group Kind Name Namespace FieldPath Src]
     IgnoreDiffEntries ->
       (let Leaf (r21-leaf-of FieldPath)
-        (if (r21-covered? Leaf IgnoreDiffEntries)
+        (if (r21-covered? Leaf Group Kind IgnoreDiffEntries)
             []
             [(make-error "XPC.E.late-init-needs-ignore-diff"
                 Src
