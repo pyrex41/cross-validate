@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ops-app
+  namespace: argocd
+spec:
+  project: ops
+  source:
+    repoURL: https://github.com/example/manifests
+    targetRevision: HEAD
+    path: ops
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ops

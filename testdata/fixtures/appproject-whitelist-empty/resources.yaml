@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locked-config
+  namespace: locked
+data:
+  key: value

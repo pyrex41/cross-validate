@@ -789,14 +789,11 @@ func argoGroupKindToObj(gk types.ArgoGroupKind) kl.Obj {
 }
 
 func argoAppProjectToObj(proj types.ArgoAppProject) kl.Obj {
-	var cwl []kl.Obj
-	for _, gk := range proj.ClusterResourceWhitelist {
-		cwl = append(cwl, argoGroupKindToObj(gk))
-	}
-	var nwl []kl.Obj
-	for _, gk := range proj.NamespaceResourceWhitelist {
-		nwl = append(nwl, argoGroupKindToObj(gk))
-	}
+	// ArgoCD: an absent whitelist key permits all kinds; an explicit empty
+	// list denies all. The kernel's R15 only sees the projected list, so
+	// synthesize a wildcard entry when the YAML key was missing.
+	cwl := projectWhitelist(proj.ClusterResourceWhitelist, proj.ClusterResourceWhitelistSet)
+	nwl := projectWhitelist(proj.NamespaceResourceWhitelist, proj.NamespaceResourceWhitelistSet)
 	return makeList([]kl.Obj{
 		sym("argo-appproject"),
 		str(proj.Name),
@@ -804,6 +801,17 @@ func argoAppProjectToObj(proj types.ArgoAppProject) kl.Obj {
 		makeList(cwl),
 		makeList(nwl),
 	})
+}
+
+func projectWhitelist(entries []types.ArgoGroupKind, set bool) []kl.Obj {
+	if !set {
+		return []kl.Obj{argoGroupKindToObj(types.ArgoGroupKind{Group: "*", Kind: "*"})}
+	}
+	out := make([]kl.Obj, 0, len(entries))
+	for _, gk := range entries {
+		out = append(out, argoGroupKindToObj(gk))
+	}
+	return out
 }
 
 func argoAppProjLinkToObj(app types.ArgoApplication) kl.Obj {

@@ -467,10 +467,20 @@ type ArgoAppProject struct {
 
 	// ClusterResourceWhitelist allows specific cluster-scoped kinds.
 	ClusterResourceWhitelist []ArgoGroupKind `json:"clusterResourceWhitelist,omitempty"`
+	// ClusterResourceWhitelistSet records whether `clusterResourceWhitelist`
+	// was present in the source YAML. ArgoCD treats absent (false) as
+	// permit-all and explicit-empty (true with len == 0) as deny-all; the
+	// slice alone cannot distinguish those because JSON `omitempty` collapses
+	// nil and empty.
+	ClusterResourceWhitelistSet bool `json:"clusterResourceWhitelistSet,omitempty"`
 	// ClusterResourceBlacklist denies specific cluster-scoped kinds.
 	ClusterResourceBlacklist []ArgoGroupKind `json:"clusterResourceBlacklist,omitempty"`
 	// NamespaceResourceWhitelist allows specific namespace-scoped kinds.
 	NamespaceResourceWhitelist []ArgoGroupKind `json:"namespaceResourceWhitelist,omitempty"`
+	// NamespaceResourceWhitelistSet records whether `namespaceResourceWhitelist`
+	// was present in the source YAML. See ClusterResourceWhitelistSet for the
+	// nil-vs-empty rationale.
+	NamespaceResourceWhitelistSet bool `json:"namespaceResourceWhitelistSet,omitempty"`
 	// NamespaceResourceBlacklist denies specific namespace-scoped kinds.
 	NamespaceResourceBlacklist []ArgoGroupKind `json:"namespaceResourceBlacklist,omitempty"`
 

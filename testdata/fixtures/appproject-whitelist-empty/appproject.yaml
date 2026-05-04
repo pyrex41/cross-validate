@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: locked
+  namespace: argocd
+spec:
+  description: Project with explicit empty namespaceResourceWhitelist —
+    ArgoCD treats this as deny-all for namespaced kinds.
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist: []

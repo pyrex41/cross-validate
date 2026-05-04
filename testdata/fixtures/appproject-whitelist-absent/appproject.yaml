@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: ops
+  namespace: argocd
+spec:
+  description: Ops project mirroring the fg-manifold convention — only
+    clusterResourceWhitelist declared; namespaceResourceWhitelist omitted
+    entirely (ArgoCD treats this as permit-all for namespaced kinds).
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
