@@ -114,12 +114,24 @@ func initShen(kernelPath string) error {
 	return shenErr
 }
 
+// kernelTempRoot is overridable in tests; defaults to os.TempDir.
+// Tests inject a hermetic root so concurrent / leftover-dir scenarios can
+// be exercised without polluting (or being polluted by) the system temp dir.
+var kernelTempRoot = os.TempDir
+
 // resolveOrMaterialiseKernel returns the on-disk kernel directory.
 // - explicitPath != "": honoured as-is (no embed extraction)
 // - explicitPath == "": embedded kernel/*.shen are extracted to a stable
 //   temp directory whose name is a hash of the embedded content. Re-runs of
 //   xpc with the same kernel content reuse the same directory; a kernel
 //   change produces a new directory and leaves the old one for /tmp turnover.
+//
+// Concurrent invocations and leftover partial dirs are safe: the marker file
+// `.xpc-kernel-digest` is the success signal, written last, after every
+// kernel file has been atomically renamed into place. A pre-existing dir
+// without a matching marker is treated as recoverable — files are republished
+// over it. Two processes racing into the same destination both succeed; their
+// per-file renames overwrite each other with byte-identical content.
 //
 // We touch disk only because the AOT-compiled Shen prelude
 // (internal/shenfull/reader.go) calls PrimReadFileAsByteList directly,
@@ -154,34 +166,48 @@ func resolveOrMaterialiseKernel(explicitPath string) (string, error) {
 		files = append(files, fileBytes{e.Name(), data})
 	}
 	digest := hex.EncodeToString(h.Sum(nil))[:16]
-	dir := filepath.Join(os.TempDir(), "xpc-kernel-"+digest)
+	tempRoot := kernelTempRoot()
+	dir := filepath.Join(tempRoot, "xpc-kernel-"+digest)
 
 	marker := filepath.Join(dir, ".xpc-kernel-digest")
 	if data, err := os.ReadFile(marker); err == nil && string(data) == digest {
 		return dir, nil
 	}
 
-	staging, err := os.MkdirTemp(os.TempDir(), "xpc-kernel-stage-")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create kernel dir: %w", err)
+	}
+
+	// Stage as a sibling of dir so per-file renames stay on the same filesystem.
+	staging, err := os.MkdirTemp(tempRoot, "xpc-kernel-stage-")
 	if err != nil {
 		return "", fmt.Errorf("create kernel staging dir: %w", err)
 	}
+	defer os.RemoveAll(staging)
+
 	for _, f := range files {
 		dst := filepath.Join(staging, f.name)
 		if err := os.WriteFile(dst, f.data, 0o600); err != nil {
-			os.RemoveAll(staging)
 			return "", fmt.Errorf("write %s: %w", f.name, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(staging, ".xpc-kernel-digest"), []byte(digest), 0o600); err != nil {
-		os.RemoveAll(staging)
-		return "", fmt.Errorf("write digest marker: %w", err)
-	}
-	if err := os.Rename(staging, dir); err != nil {
-		os.RemoveAll(staging)
-		if _, statErr := os.Stat(filepath.Join(dir, "check.shen")); statErr == nil {
-			return dir, nil
+
+	for _, f := range files {
+		src := filepath.Join(staging, f.name)
+		dst := filepath.Join(dir, f.name)
+		if err := os.Rename(src, dst); err != nil {
+			return "", fmt.Errorf("publish %s: %w", f.name, err)
 		}
-		return "", fmt.Errorf("publish kernel dir: %w", err)
+	}
+
+	// Marker written last: until it lands, a competing process treats this
+	// dir as not-yet-published and republishes over it. Re-check the marker
+	// before our own write — a competing process may have already finalised.
+	if data, err := os.ReadFile(marker); err == nil && string(data) == digest {
+		return dir, nil
+	}
+	if err := os.WriteFile(marker, []byte(digest), 0o600); err != nil {
+		return "", fmt.Errorf("write digest marker: %w", err)
 	}
 	return dir, nil
 }
