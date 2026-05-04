@@ -238,6 +238,46 @@ func TestR6_NoCartesianAcrossApps(t *testing.T) {
 	}
 }
 
+// TestR6b_DefaultSameAppNoFire is the Phase 3 (Option B) acceptance test.
+// A Function and Composition in the same Argo Application that both default
+// to wave 0 produced ~30 false-positive XPC006 errors on fg-manifold before
+// the cross-App-only scoping fix. Same-AppSet same-wave is fine: ArgoCD
+// applies them in one sync transaction and Crossplane reconciles. Expect
+// zero R6 findings here.
+func TestR6b_DefaultSameAppNoFire(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/wave-default-same-app")
+	diags := checkFixture(t, world, Config{})
+
+	for _, d := range diags {
+		if d.Code == "XPC006" {
+			t.Errorf("expected no XPC006 for same-App default-wave Function/Composition pair, got: %+v", d)
+		}
+	}
+}
+
+// TestR6b_DefaultCrossAppFires confirms the cross-App R6b path still fires
+// when a Function and Composition live in distinct Apps. Both default to
+// wave 0 so (< 0 0) is false → emit. With the Option B scoping the rule no
+// longer suppresses cross-App pairs.
+func TestR6b_DefaultCrossAppFires(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/wave-default-cross-app-bad")
+	diags := checkFixture(t, world, Config{})
+
+	xpc006 := findDiagByCode(diags, "XPC006")
+	if len(xpc006) == 0 {
+		t.Fatalf("expected at least 1 XPC006 for cross-App Function/Composition pair, got %d", len(xpc006))
+	}
+	mentionsFn := false
+	for _, d := range xpc006 {
+		if strings.Contains(d.Message, "function-cross-bad") {
+			mentionsFn = true
+		}
+	}
+	if !mentionsFn {
+		t.Errorf("expected R6b diagnostic to name function-cross-bad, got: %+v", xpc006)
+	}
+}
+
 func TestR7_LabelTracking(t *testing.T) {
 	world := types.NewWorld()
 	world.ArgoApps = append(world.ArgoApps, types.ArgoApplication{
