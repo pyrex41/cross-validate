@@ -69,6 +69,8 @@ func main() {
 		os.Exit(runPlan(os.Args[2:]))
 	case "explain":
 		os.Exit(runExplain(os.Args[2:]))
+	case "skill":
+		os.Exit(runSkill(os.Args[2:]))
 	case "version":
 		fmt.Printf("xpc %s\n", version)
 		os.Exit(0)
@@ -94,6 +96,7 @@ Usage:
   xpc bisect [flags] [<path>]      Find the commit that flipped a rule
   xpc plan [flags] <path>          Diff two refs; report destructive changes
   xpc explain <code>               Show docs for an error code (e.g., XPC002)
+  xpc skill install [target]       Install agent skill into <target>/.agents + .claude/
   xpc version                      Print version
 
 Check flags:
