@@ -1332,10 +1332,10 @@ func (b *Builder) addArgoAppProject(doc loader.LoadedDocument) error {
 		}
 
 		// resource whitelists/blacklists
-		proj.ClusterResourceWhitelist = parseGroupKindList(spec, "clusterResourceWhitelist")
-		proj.ClusterResourceBlacklist = parseGroupKindList(spec, "clusterResourceBlacklist")
-		proj.NamespaceResourceWhitelist = parseGroupKindList(spec, "namespaceResourceWhitelist")
-		proj.NamespaceResourceBlacklist = parseGroupKindList(spec, "namespaceResourceBlacklist")
+		proj.ClusterResourceWhitelist, proj.ClusterResourceWhitelistSet = parseGroupKindList(spec, "clusterResourceWhitelist")
+		proj.ClusterResourceBlacklist, _ = parseGroupKindList(spec, "clusterResourceBlacklist")
+		proj.NamespaceResourceWhitelist, proj.NamespaceResourceWhitelistSet = parseGroupKindList(spec, "namespaceResourceWhitelist")
+		proj.NamespaceResourceBlacklist, _ = parseGroupKindList(spec, "namespaceResourceBlacklist")
 
 		// syncWindows
 		if wins := getSlice(spec, "syncWindows"); wins != nil {
@@ -1598,12 +1598,16 @@ func getStringSlice(m map[string]interface{}, key string) []string {
 	return result
 }
 
-func parseGroupKindList(spec map[string]interface{}, key string) []types.ArgoGroupKind {
-	items := getSlice(spec, key)
-	if items == nil {
-		return nil
+// parseGroupKindList parses a YAML list of {group, kind} entries.
+// The second return value reports whether the key was present in the spec
+// at all (independent of whether the list was empty), so callers can
+// distinguish ArgoCD's "absent → permit-all" from "explicit [] → deny-all".
+func parseGroupKindList(spec map[string]interface{}, key string) ([]types.ArgoGroupKind, bool) {
+	if _, present := spec[key]; !present {
+		return nil, false
 	}
-	var result []types.ArgoGroupKind
+	items := getSlice(spec, key)
+	result := make([]types.ArgoGroupKind, 0, len(items))
 	for _, item := range items {
 		if m, ok := item.(map[string]interface{}); ok {
 			gk := types.ArgoGroupKind{}
@@ -1612,7 +1616,7 @@ func parseGroupKindList(spec map[string]interface{}, key string) []types.ArgoGro
 			result = append(result, gk)
 		}
 	}
-	return result
+	return result, true
 }
 
 func getSlice(m map[string]interface{}, key string) []interface{} {

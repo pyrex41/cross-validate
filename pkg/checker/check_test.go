@@ -510,6 +510,36 @@ func TestR15_NoCartesianAcrossApps(t *testing.T) {
 	}
 }
 
+// TestR15_WhitelistAbsent guards the fg-manifold convention where
+// `namespaceResourceWhitelist` is omitted from the AppProject YAML. ArgoCD
+// treats absence as permit-all, so a namespaced ConfigMap under such a
+// project must not fire R15.
+func TestR15_WhitelistAbsent(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-absent")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.D.kind-whitelisted")
+	if len(got) != 0 {
+		t.Fatalf("expected zero XPC.D.kind-whitelisted diagnostics for absent whitelist (permit-all), got %d: %+v", len(got), got)
+	}
+}
+
+// TestR15_WhitelistEmpty validates the deny-all path: when the project
+// declares `namespaceResourceWhitelist: []` explicitly, every namespaced
+// resource must fire.
+func TestR15_WhitelistEmpty(t *testing.T) {
+	world := loadFixture(t, "../../testdata/fixtures/appproject-whitelist-empty")
+	diags := checkFixture(t, world, Config{})
+
+	got := findDiagByCode(diags, "XPC.D.kind-whitelisted")
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 XPC.D.kind-whitelisted for explicit-empty whitelist (deny-all), got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", got[0].Severity)
+	}
+}
+
 func TestR16_SelectorDrift(t *testing.T) {
 	// Positive case: AutoscalingGroup has vpcZoneIdentifierSelector set and the
 	// owning Application has no ignoreDifferences entries. The registry maps
