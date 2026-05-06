@@ -286,7 +286,8 @@ func instantiateTemplate(as types.ArgoApplicationSet, params map[string]string) 
 			Name:      destName,
 			Namespace: destNS,
 		},
-		SyncPolicy: t.SyncPolicy,
+		SyncPolicy:        t.SyncPolicy,
+		IgnoreDifferences: t.IgnoreDifferences,
 	}, true
 }
 

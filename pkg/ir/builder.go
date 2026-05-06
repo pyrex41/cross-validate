@@ -1523,6 +1523,13 @@ func (b *Builder) parseAppSetTemplate(m map[string]interface{}) types.ArgoAppSet
 		if sp := getMap(spec, "syncPolicy"); sp != nil {
 			tmpl.SyncPolicy = b.parseArgoSyncPolicy(sp)
 		}
+		if diffs := getSlice(spec, "ignoreDifferences"); diffs != nil {
+			for _, d := range diffs {
+				if dm, ok := d.(map[string]interface{}); ok {
+					tmpl.IgnoreDifferences = append(tmpl.IgnoreDifferences, parseArgoIgnoreDiff(dm))
+				}
+			}
+		}
 	}
 
 	return tmpl

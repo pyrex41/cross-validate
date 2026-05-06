@@ -1,0 +1,11 @@
+apiVersion: rds.aws.upbound.io/v1beta1
+kind: ClusterInstance
+metadata:
+  name: aurora-preview-cluster-instance-1
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    monitoringRoleArnSelector:
+      matchLabels:
+        role: aurora-preview-cluster-monitoring

@@ -630,6 +630,12 @@ type ArgoAppSetTemplate struct {
 	Destination ArgoDestination `json:"destination"`
 	// SyncPolicy template.
 	SyncPolicy ArgoSyncPolicy `json:"syncPolicy"`
+	// IgnoreDifferences from spec.template.spec.ignoreDifferences. Argo CD's
+	// ApplicationSet controller copies these onto each generated Application
+	// verbatim; the entries' fields (group/kind/jsonPointers/jqPathExpressions/
+	// managedFieldsManagers) are not legally template-substituted, so a direct
+	// copy through instantiateTemplate is correct.
+	IgnoreDifferences []ArgoIgnoreDiff `json:"ignoreDifferences,omitempty"`
 }
 
 // SyncWaveEntry represents a resource's sync wave assignment.
