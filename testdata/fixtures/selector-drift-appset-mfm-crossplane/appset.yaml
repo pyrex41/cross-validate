@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: preview-infra
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: preview
+  template:
+    metadata:
+      name: '{{ .name }}-infra'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/manifests
+        targetRevision: HEAD
+        path: '{{ .name }}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: crossplane-system
+      ignoreDifferences:
+        - group: "*"
+          kind: "*"
+          managedFieldsManagers:
+            - crossplane
