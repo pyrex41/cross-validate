@@ -42,6 +42,12 @@ type Config struct {
 	// The kernel skips per-rule dispatches whose code isn't on the list,
 	// so non-listed rules don't even compute satisfied markers.
 	RuleAllowlist []string
+
+	// ProfileRules runs the kernel once per rule group using the existing
+	// allowlist mechanism and records timings for each group. The concatenated
+	// per-rule judgments become the returned diagnostics, avoiding an extra
+	// all-rules kernel call during profiling.
+	ProfileRules bool
 }
 
 // ---------------------------------------------------------------------------
@@ -126,11 +132,11 @@ func initShen(kernelPath string) error {
 var kernelTempRoot = os.TempDir
 
 // resolveOrMaterialiseKernel returns the on-disk kernel directory.
-// - explicitPath != "": honoured as-is (no embed extraction)
-// - explicitPath == "": embedded kernel/*.shen are extracted to a stable
-//   temp directory whose name is a hash of the embedded content. Re-runs of
-//   xpc with the same kernel content reuse the same directory; a kernel
-//   change produces a new directory and leaves the old one for /tmp turnover.
+//   - explicitPath != "": honoured as-is (no embed extraction)
+//   - explicitPath == "": embedded kernel/*.shen are extracted to a stable
+//     temp directory whose name is a hash of the embedded content. Re-runs of
+//     xpc with the same kernel content reuse the same directory; a kernel
+//     change produces a new directory and leaves the old one for /tmp turnover.
 //
 // Concurrent invocations and leftover partial dirs are safe: the marker file
 // `.xpc-kernel-digest` is the success signal, written last, after every
@@ -284,48 +290,172 @@ func Check(w *types.World, cfg Config) ([]types.Diagnostic, error) {
 // CheckWithObligations runs the Shen kernel and returns a RunResult.
 func CheckWithObligations(w *types.World, cfg Config) RunResult {
 	timing := os.Getenv("XPC_TIMING") != ""
+	var stageTimings []Timing
+	recordStage := func(name string, t0 time.Time) {
+		elapsed := time.Since(t0)
+		stageTimings = append(stageTimings, NewTiming(name, elapsed))
+		if timing {
+			fmt.Fprintf(os.Stderr, "  [timing] %-16s %v\n", name, elapsed)
+		}
+	}
+
 	tInit := time.Now()
 	if err := initShen(cfg.KernelPath); err != nil {
 		return RunResult{Diagnostics: []types.Diagnostic{{
 			Code:     "XPC000",
 			Severity: types.SeverityError,
 			Message:  err.Error(),
-		}}}
+		}}, StageTimings: stageTimings}
 	}
-	if timing {
-		fmt.Fprintf(os.Stderr, "  [timing] init-shen   %v\n", time.Since(tInit))
-	}
+	recordStage("init-shen", tInit)
 
-	tEnrich := time.Now()
+	tWaves := time.Now()
 	enrichSyncWaves(w)
+	recordStage("enrich-waves", tWaves)
+
+	tPatches := time.Now()
 	resolvePatchTypes(w)
+	recordStage("enrich-patches", tPatches)
+
+	tTrajectory := time.Now()
 	trajectories := trajectory.Simulate(w)
-	if timing {
-		fmt.Fprintf(os.Stderr, "  [timing] enrich      %v\n", time.Since(tEnrich))
+	recordStage("trajectory", tTrajectory)
+
+	if cfg.ProfileRules {
+		result := profileRules(w, trajectories, cfg.RuleAllowlist, timing, &stageTimings)
+		result.StageTimings = stageTimings
+		return result
 	}
 
 	tSerialize := time.Now()
 	worldObj := worldToShenObj(w, trajectories, cfg.RuleAllowlist)
-	if timing {
-		fmt.Fprintf(os.Stderr, "  [timing] serialize   %v\n", time.Since(tSerialize))
-	}
+	recordStage("serialize", tSerialize)
 
 	tCall := time.Now()
 	checkWorld := kl.PrimFunc(kl.MakeSymbol("check-world"))
 	result := kl.Call(&shenCF, checkWorld, worldObj)
-	if timing {
-		fmt.Fprintf(os.Stderr, "  [timing] kernel-call %v\n", time.Since(tCall))
-	}
+	recordStage("kernel-call", tCall)
 	if kl.IsError(result) {
 		return RunResult{Diagnostics: []types.Diagnostic{{
 			Code:     "XPC000",
 			Severity: types.SeverityError,
 			Message:  fmt.Sprintf("check-world: %s", kl.ObjString(result)),
-		}}}
+		}}, StageTimings: stageTimings}
 	}
 
+	tDecode := time.Now()
 	diags := objToDiagnostics(result)
-	return buildRunResult(diags)
+	out := buildRunResult(diags)
+	recordStage("decode", tDecode)
+	out.StageTimings = stageTimings
+	return out
+}
+
+type ruleGroup struct {
+	Name  string
+	Codes []string
+}
+
+func allRuleGroups() []ruleGroup {
+	return []ruleGroup{
+		{Name: "R1", Codes: []string{"XPC001"}},
+		{Name: "R2", Codes: []string{"XPC002"}},
+		{Name: "R3", Codes: []string{"XPC003"}},
+		{Name: "R4", Codes: []string{"XPC004"}},
+		{Name: "R5", Codes: []string{"XPC005"}},
+		{Name: "R6", Codes: []string{"XPC006"}},
+		{Name: "R7", Codes: []string{"XPC007"}},
+		{Name: "R8", Codes: []string{"XPC008"}},
+		{Name: "R9", Codes: []string{"XPC009"}},
+		{Name: "R10", Codes: []string{"XPC010"}},
+		{Name: "R11", Codes: []string{"XPC011"}},
+		{Name: "R12", Codes: []string{"XPC012"}},
+		{Name: "R14", Codes: []string{"XPC014"}},
+		{Name: "R15", Codes: []string{"XPC.D.kind-whitelisted"}},
+		{Name: "R16", Codes: []string{"XPC.E.selector-needs-ignore-diff"}},
+		{Name: "R17", Codes: []string{"XPC.A.resource-field-valid"}},
+		{Name: "R18", Codes: []string{"XPC.H.helm-renders"}},
+		{Name: "R19", Codes: []string{"XPC.H.values-well-typed"}},
+		{Name: "R20", Codes: []string{"XPC.H.render-deterministic"}},
+		{Name: "R21", Codes: []string{"XPC.E.late-init-needs-ignore-diff"}},
+		{Name: "R22", Codes: []string{
+			"XPC.E.ssa-managementpolicies-observe",
+			"XPC.E.ssa-managementpolicies-partial",
+			"XPC.E.ssa-managementpolicies-nondefault",
+		}},
+		{Name: "R23", Codes: []string{"XPC.S.crossplane-state-needs-orphan"}},
+		{Name: "R24", Codes: []string{"XPC.E.appset-finalizer-without-preserve"}},
+		{Name: "R25", Codes: []string{"XPC.E.prod-appset-autosync"}},
+	}
+}
+
+func selectedRuleGroups(allowlist []string) []ruleGroup {
+	groups := allRuleGroups()
+	if len(allowlist) == 0 {
+		return groups
+	}
+	allowed := make(map[string]struct{}, len(allowlist))
+	for _, code := range allowlist {
+		allowed[code] = struct{}{}
+	}
+	var out []ruleGroup
+	for _, group := range groups {
+		for _, code := range group.Codes {
+			if _, ok := allowed[code]; ok {
+				out = append(out, group)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func profileRules(w *types.World, trajectories []trajectory.Step, allowlist []string, timing bool, stageTimings *[]Timing) RunResult {
+	checkWorld := kl.PrimFunc(kl.MakeSymbol("check-world"))
+	staticSections := worldStaticSections(w, trajectories)
+	var all []types.Diagnostic
+	var ruleTimings []RuleTiming
+	var serializeTotal, kernelTotal time.Duration
+
+	for _, group := range selectedRuleGroups(allowlist) {
+		tSerialize := time.Now()
+		worldObj := worldObjFromSections(staticSections, group.Codes)
+		serializeTotal += time.Since(tSerialize)
+
+		tCall := time.Now()
+		resultObj := kl.Call(&shenCF, checkWorld, worldObj)
+		elapsed := time.Since(tCall)
+		kernelTotal += elapsed
+		if kl.IsError(resultObj) {
+			raw := []types.Diagnostic{{
+				Code:     "XPC000",
+				Severity: types.SeverityError,
+				Message:  fmt.Sprintf("%s: check-world: %s", group.Name, kl.ObjString(resultObj)),
+			}}
+			result := buildRunResult(raw)
+			ruleTimings = append(ruleTimings, NewRuleTiming(group.Name, group.Codes, elapsed, result))
+			all = append(all, raw...)
+			continue
+		}
+
+		raw := objToDiagnostics(resultObj)
+		groupResult := buildRunResult(raw)
+		ruleTimings = append(ruleTimings, NewRuleTiming(group.Name, group.Codes, elapsed, groupResult))
+		all = append(all, raw...)
+	}
+
+	if timing {
+		fmt.Fprintf(os.Stderr, "  [timing] %-16s %v\n", "profile-serialize", serializeTotal)
+		fmt.Fprintf(os.Stderr, "  [timing] %-16s %v\n", "profile-kernel", kernelTotal)
+		for _, rt := range ruleTimings {
+			fmt.Fprintf(os.Stderr, "  [rule]   %-16s %v (%d diagnostics)\n", rt.Rule, rt.Duration, rt.Diagnostics)
+		}
+	}
+	*stageTimings = append(*stageTimings, NewTiming("profile-serialize", serializeTotal), NewTiming("profile-kernel", kernelTotal))
+
+	result := buildRunResult(all)
+	result.RuleTimings = ruleTimings
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +548,9 @@ func resolvePatchTypes(w *types.World) {
 				if patch.FromFieldPath == "" || patch.ToFieldPath == "" {
 					continue
 				}
+				if resolvedTypesTransform(patch.Transforms) != "" {
+					continue
+				}
 				fromType := "unknown"
 				toType := "unknown"
 				if xrdSchema != nil {
@@ -439,6 +572,15 @@ func resolvePatchTypes(w *types.World) {
 			}
 		}
 	}
+}
+
+func resolvedTypesTransform(transforms []types.TransformInfo) string {
+	for _, t := range transforms {
+		if t.Type == "__resolved_types" {
+			return t.Convert
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +625,25 @@ func sortedSection[T any](tag string, src []T, less func(a, b T) int, toObj func
 }
 
 func worldToShenObj(w *types.World, trajectories []trajectory.Step, ruleAllowlist []string) kl.Obj {
+	return worldObjFromSections(worldStaticSections(w, trajectories), ruleAllowlist)
+}
+
+func worldObjFromSections(staticSections []kl.Obj, ruleAllowlist []string) kl.Obj {
+	sections := make([]kl.Obj, 0, len(staticSections)+2)
+	sections = append(sections, sym("world"))
+	sections = append(sections, staticSections...)
+	sections = append(sections, stringListSection("rule-allowlist", ruleAllowlist))
+	return makeList(sections)
+}
+
+func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Obj {
+	ignoreDiffEntries := getIgnoreDiffEntries(w)
+	r12Violations := buildR12Violations(w.MountRefs, trajectories)
+	r14Violations := buildR14Violations(w.SARefs, w.RBACBindings, trajectories)
+	r15Violations := buildR15Violations(w)
+	r16Violations := buildR16Violations(w.SelectorUsages, ignoreDiffEntries)
+	r21Violations := buildR21Violations(w.LateInitUsages, ignoreDiffEntries)
+
 	// Compositions sort once and feed both the `compositions` section and the
 	// `resolved-patches` section, so patches follow the composition ordering.
 	comps := slices.Clone(w.Compositions)
@@ -533,8 +694,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step, ruleAllowlis
 		}
 	}
 
-	sections := []kl.Obj{
-		sym("world"),
+	return []kl.Obj{
 		sortedSection("crds", w.CRDs, crdCmp, crdToObj),
 		sortedSection("xrds", w.XRDs, crdCmp, xrdToObj),
 		section("compositions", compObjs),
@@ -558,7 +718,7 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step, ruleAllowlis
 		sortedSection("selector-usages", w.SelectorUsages, selectorUsageCmp, selectorUsageToObj),
 		sortedSection("late-init-mappings", w.LateInitMappings, lateInitMappingCmp, lateInitMappingToObj),
 		sortedSection("late-init-usages", w.LateInitUsages, lateInitUsageCmp, lateInitUsageToObj),
-		sortedSection("ignore-diff-entries", buildIgnoreDiffEntries(w.ArgoApps), ignoreDiffEntryCmp, ignoreDiffEntryToObj),
+		sortedSection("ignore-diff-entries", ignoreDiffEntries, ignoreDiffEntryCmp, ignoreDiffEntryToObj),
 		sortedSection("resource-field-facts", w.ResourceFieldFacts, resourceFieldFactCmp, resourceFieldFactToObj),
 		sortedSection("render-results", w.RenderResults, renderResultCmp, renderResultToObj),
 		sortedSection("determinism-results", w.DeterminismResults, determinismResultCmp, determinismResultToObj),
@@ -568,10 +728,493 @@ func worldToShenObj(w *types.World, trajectories []trajectory.Step, ruleAllowlis
 		prodPatternsSection(w.ProdPatterns),
 		stringListSection("crossplane-state-needs-orphan-carveouts",
 			w.NameCarveouts["crossplane-state-needs-orphan"]),
-		stringListSection("rule-allowlist", ruleAllowlist),
+		sortedSection("r12-violations", r12Violations, r12ViolationCmp, r12ViolationToObj),
+		sortedSection("r14-violations", r14Violations, r14ViolationCmp, r14ViolationToObj),
+		sortedSection("r15-violations", r15Violations, r15ViolationCmp, r15ViolationToObj),
+		sortedSection("r16-violations", r16Violations, r16ViolationCmp, r16ViolationToObj),
+		sortedSection("r21-violations", r21Violations, r21ViolationCmp, r21ViolationToObj),
 		trajectoryToObj(trajectories),
 	}
-	return makeList(sections)
+}
+
+type r12Violation struct {
+	OwnerKind       string
+	OwnerName       string
+	OwnerNamespace  string
+	TargetKind      string
+	TargetName      string
+	TargetNamespace string
+	MountKind       string
+	Source          types.SourceLocation
+}
+
+type r14Violation struct {
+	BindingKind      string
+	BindingName      string
+	BindingNamespace string
+	RoleKind         string
+	RoleName         string
+	RoleNamespace    string
+	OwnerKind        string
+	OwnerName        string
+	Source           types.SourceLocation
+	BindingSource    types.SourceLocation
+}
+
+type r15Violation struct {
+	AppName      string
+	ProjectName  string
+	Group        string
+	Kind         string
+	Name         string
+	WhitelistKey string
+	Source       types.SourceLocation
+}
+
+type r16Violation struct {
+	Group        string
+	Kind         string
+	Name         string
+	Namespace    string
+	SelectorPath string
+	ResolvedPath string
+	Leaf         string
+	Source       types.SourceLocation
+}
+
+type r21Violation struct {
+	Group     string
+	Kind      string
+	Name      string
+	Namespace string
+	FieldPath string
+	Leaf      string
+	Source    types.SourceLocation
+}
+
+func buildR12Violations(mountRefs []types.MountRef, trajectories []trajectory.Step) []r12Violation {
+	refs := slices.Clone(mountRefs)
+	slices.SortFunc(refs, mountRefCmp)
+	stateSets := buildStateKeySets(trajectories)
+	seen := make(map[string]struct{})
+	var out []r12Violation
+	for _, ref := range refs {
+		if ref.Optional {
+			continue
+		}
+		key := strings.Join([]string{
+			ref.OwnerKind, ref.OwnerName, ref.OwnerNamespace,
+			ref.TargetKind, ref.TargetName, ref.TargetNamespace,
+		}, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		for i := range trajectories {
+			state := stateSets[i]
+			if !state[stateKey(ref.OwnerKind, ref.OwnerNamespace, ref.OwnerName)] {
+				continue
+			}
+			if state[stateKey(ref.TargetKind, ref.TargetNamespace, ref.TargetName)] {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, r12Violation{
+				OwnerKind:       ref.OwnerKind,
+				OwnerName:       ref.OwnerName,
+				OwnerNamespace:  ref.OwnerNamespace,
+				TargetKind:      ref.TargetKind,
+				TargetName:      ref.TargetName,
+				TargetNamespace: ref.TargetNamespace,
+				MountKind:       ref.MountKind,
+				Source:          ref.Source,
+			})
+			break
+		}
+	}
+	return out
+}
+
+func buildR14Violations(saRefs []types.SARef, bindings []types.RBACBinding, trajectories []trajectory.Step) []r14Violation {
+	sas := slices.Clone(saRefs)
+	slices.SortFunc(sas, saRefCmp)
+	bs := slices.Clone(bindings)
+	slices.SortFunc(bs, rbacBindingCmp)
+	stateSets := buildStateKeySets(trajectories)
+
+	bindingsBySA := make(map[string][]types.RBACBinding)
+	for _, b := range bs {
+		if b.SubjectKind != "ServiceAccount" {
+			continue
+		}
+		key := b.SubjectName + "\x00" + b.SubjectNamespace
+		bindingsBySA[key] = append(bindingsBySA[key], b)
+	}
+
+	var out []r14Violation
+	for i := range trajectories {
+		state := stateSets[i]
+		for _, sa := range sas {
+			if !state[stateKey(sa.OwnerKind, sa.OwnerNamespace, sa.OwnerName)] {
+				continue
+			}
+			myBindings := bindingsBySA[sa.SAName+"\x00"+sa.SANamespace]
+			if len(myBindings) == 0 {
+				continue
+			}
+			anyLive := false
+			for _, b := range myBindings {
+				bindingLive := state[stateKey(b.BindingKind, b.BindingNamespace, b.BindingName)]
+				roleLive := state[stateKey(b.RoleKind, b.RoleNamespace, b.RoleName)]
+				if bindingLive && roleLive {
+					anyLive = true
+					break
+				}
+			}
+			if anyLive {
+				continue
+			}
+			for _, b := range myBindings {
+				bindingLive := state[stateKey(b.BindingKind, b.BindingNamespace, b.BindingName)]
+				roleLive := state[stateKey(b.RoleKind, b.RoleNamespace, b.RoleName)]
+				if bindingLive && roleLive {
+					continue
+				}
+				out = append(out, r14Violation{
+					BindingKind:      b.BindingKind,
+					BindingName:      b.BindingName,
+					BindingNamespace: b.BindingNamespace,
+					RoleKind:         b.RoleKind,
+					RoleName:         b.RoleName,
+					RoleNamespace:    b.RoleNamespace,
+					OwnerKind:        sa.OwnerKind,
+					OwnerName:        sa.OwnerName,
+					Source:           sa.Source,
+					BindingSource:    b.Source,
+				})
+			}
+		}
+	}
+	return out
+}
+
+func buildStateKeySets(trajectories []trajectory.Step) []map[string]bool {
+	out := make([]map[string]bool, len(trajectories))
+	for i, step := range trajectories {
+		keys := make(map[string]bool, len(step.State.Resources))
+		for key := range step.State.Resources {
+			keys[stateKey(key.Kind, key.Namespace, key.Name)] = true
+		}
+		out[i] = keys
+	}
+	return out
+}
+
+func stateKey(kind, namespace, name string) string {
+	return kind + "\x00" + namespace + "\x00" + name
+}
+
+func buildR15Violations(w *types.World) []r15Violation {
+	if len(w.Resources) == 0 {
+		return nil
+	}
+	apps := slices.Clone(w.ArgoApps)
+	slices.SortFunc(apps, argoAppCmp)
+	resources := slices.Clone(w.Resources)
+	slices.SortFunc(resources, resourceCmp)
+
+	resourcesByApp := make(map[string][]types.ResourceInfo)
+	for _, res := range resources {
+		if res.OwningApp == "" {
+			continue
+		}
+		resourcesByApp[res.OwningApp] = append(resourcesByApp[res.OwningApp], res)
+	}
+
+	appProject := make(map[string]string, len(w.ArgoApps))
+	for _, app := range w.ArgoApps {
+		project := app.Project
+		if project == "" {
+			project = "default"
+		}
+		appProject[app.Name] = project
+	}
+	projects := make(map[string]types.ArgoAppProject, len(w.ArgoProjects))
+	for _, proj := range w.ArgoProjects {
+		projects[proj.Name] = proj
+	}
+	clusterScoped := make(map[string]bool, len(w.CRDs))
+	for _, crd := range w.CRDs {
+		clusterScoped[crd.Group+"\x00"+crd.Kind] = crd.Scope == "Cluster"
+	}
+
+	var out []r15Violation
+	for _, app := range apps {
+		projectName := appProject[app.Name]
+		if projectName == "" {
+			projectName = "default"
+		}
+		project, ok := projects[projectName]
+		if !ok {
+			continue
+		}
+		for _, res := range resourcesByApp[app.Name] {
+			group := apiVersionGroup(res.APIVersion)
+			isCluster := clusterScoped[group+"\x00"+res.Kind]
+			whitelistKey := "namespaceResourceWhitelist"
+			whitelist := projectWhitelistEntries(project.NamespaceResourceWhitelist, project.NamespaceResourceWhitelistSet)
+			if isCluster {
+				whitelistKey = "clusterResourceWhitelist"
+				whitelist = projectWhitelistEntries(project.ClusterResourceWhitelist, project.ClusterResourceWhitelistSet)
+			}
+			if groupKindWhitelisted(group, res.Kind, whitelist) {
+				continue
+			}
+			out = append(out, r15Violation{
+				AppName:      app.Name,
+				ProjectName:  projectName,
+				Group:        group,
+				Kind:         res.Kind,
+				Name:         res.Name,
+				WhitelistKey: whitelistKey,
+				Source:       res.Source,
+			})
+		}
+	}
+	return out
+}
+
+func buildR16Violations(usages []types.SelectorUsage, entries []types.IgnoreDiffEntry) []r16Violation {
+	sorted := slices.Clone(usages)
+	slices.SortFunc(sorted, selectorUsageCmp)
+	index := newIgnoreDiffIndex(entries)
+	var out []r16Violation
+	for _, usage := range sorted {
+		leaf := leafSegment(usage.ResolvedPath)
+		if index.covers(usage.ResourceGroup, usage.ResourceKind, leaf) {
+			continue
+		}
+		out = append(out, r16Violation{
+			Group:        usage.ResourceGroup,
+			Kind:         usage.ResourceKind,
+			Name:         usage.ResourceName,
+			Namespace:    usage.ResourceNamespace,
+			SelectorPath: usage.SelectorPath,
+			ResolvedPath: usage.ResolvedPath,
+			Leaf:         leaf,
+			Source:       usage.Source,
+		})
+	}
+	return out
+}
+
+func buildR21Violations(usages []types.LateInitUsage, entries []types.IgnoreDiffEntry) []r21Violation {
+	sorted := slices.Clone(usages)
+	slices.SortFunc(sorted, lateInitUsageCmp)
+	index := newIgnoreDiffIndex(entries)
+	var out []r21Violation
+	for _, usage := range sorted {
+		leaf := leafSegment(usage.FieldPath)
+		if index.covers(usage.ResourceGroup, usage.ResourceKind, leaf) {
+			continue
+		}
+		out = append(out, r21Violation{
+			Group:     usage.ResourceGroup,
+			Kind:      usage.ResourceKind,
+			Name:      usage.ResourceName,
+			Namespace: usage.ResourceNamespace,
+			FieldPath: usage.FieldPath,
+			Leaf:      leaf,
+			Source:    usage.Source,
+		})
+	}
+	return out
+}
+
+func apiVersionGroup(apiVersion string) string {
+	parts := strings.SplitN(apiVersion, "/", 2)
+	if len(parts) == 2 {
+		return parts[0]
+	}
+	return ""
+}
+
+func projectWhitelistEntries(entries []types.ArgoGroupKind, set bool) []types.ArgoGroupKind {
+	if !set {
+		return []types.ArgoGroupKind{{Group: "*", Kind: "*"}}
+	}
+	return entries
+}
+
+func groupKindWhitelisted(group, kind string, entries []types.ArgoGroupKind) bool {
+	for _, entry := range entries {
+		groupMatches := entry.Group == "*" || entry.Group == group
+		kindMatches := entry.Kind == "*" || entry.Kind == kind
+		if groupMatches && kindMatches {
+			return true
+		}
+	}
+	return false
+}
+
+type ignoreDiffIndex struct {
+	entriesByScope map[string][]types.IgnoreDiffEntry
+}
+
+func newIgnoreDiffIndex(entries []types.IgnoreDiffEntry) ignoreDiffIndex {
+	out := ignoreDiffIndex{entriesByScope: make(map[string][]types.IgnoreDiffEntry)}
+	for _, entry := range entries {
+		out.entriesByScope[ignoreDiffScopeKey(entry.Group, entry.Kind)] = append(out.entriesByScope[ignoreDiffScopeKey(entry.Group, entry.Kind)], entry)
+	}
+	return out
+}
+
+func (idx ignoreDiffIndex) covers(group, kind, leaf string) bool {
+	for _, key := range []string{
+		ignoreDiffScopeKey(group, kind),
+		ignoreDiffScopeKey(group, "*"),
+		ignoreDiffScopeKey("*", kind),
+		ignoreDiffScopeKey("*", "*"),
+		ignoreDiffScopeKey("", kind),
+		ignoreDiffScopeKey(group, ""),
+		ignoreDiffScopeKey("", ""),
+	} {
+		for _, entry := range idx.entriesByScope[key] {
+			if ignoreDiffEntryCovers(entry, group, kind, leaf) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ignoreDiffScopeKey(group, kind string) string {
+	return group + "\x00" + kind
+}
+
+func ignoreDiffEntryCovers(entry types.IgnoreDiffEntry, group, kind, leaf string) bool {
+	if !ignoreDiffScopeMatches(entry.Group, entry.Kind, group, kind) {
+		return false
+	}
+	for _, manager := range entry.ManagedFieldsManagers {
+		if manager == "crossplane" {
+			return true
+		}
+	}
+	return (entry.JSONPointer != "" && strings.Contains(entry.JSONPointer, leaf)) ||
+		(entry.JQPath != "" && strings.Contains(entry.JQPath, leaf))
+}
+
+func ignoreDiffScopeMatches(entryGroup, entryKind, group, kind string) bool {
+	groupMatches := entryGroup == "*" || entryGroup == "" || entryGroup == group
+	kindMatches := entryKind == "*" || entryKind == "" || entryKind == kind
+	return groupMatches && kindMatches
+}
+
+func leafSegment(path string) string {
+	if idx := strings.LastIndex(path, "."); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+func r12ViolationCmp(a, b r12Violation) int {
+	if c := cmp.Compare(a.OwnerKind, b.OwnerKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.OwnerName, b.OwnerName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.TargetKind, b.TargetKind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.TargetName, b.TargetName)
+}
+
+func r12ViolationToObj(v r12Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r12-violation"),
+		str(v.OwnerKind), str(v.OwnerName), str(v.OwnerNamespace),
+		str(v.TargetKind), str(v.TargetName), str(v.TargetNamespace),
+		str(v.MountKind), sourceToObj(v.Source),
+	})
+}
+
+func r14ViolationCmp(a, b r14Violation) int {
+	if c := cmp.Compare(a.OwnerKind, b.OwnerKind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.OwnerName, b.OwnerName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.BindingKind, b.BindingKind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.BindingName, b.BindingName)
+}
+
+func r14ViolationToObj(v r14Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r14-violation"),
+		str(v.BindingKind), str(v.BindingName), str(v.BindingNamespace),
+		str(v.RoleKind), str(v.RoleName), str(v.RoleNamespace),
+		str(v.OwnerKind), str(v.OwnerName),
+		sourceToObj(v.Source), sourceToObj(v.BindingSource),
+	})
+}
+
+func r15ViolationCmp(a, b r15Violation) int {
+	if c := cmp.Compare(a.AppName, b.AppName); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Name, b.Name)
+}
+
+func r15ViolationToObj(v r15Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r15-violation"),
+		str(v.AppName), str(v.ProjectName), str(v.Group), str(v.Kind), str(v.Name),
+		str(v.WhitelistKey), sourceToObj(v.Source),
+	})
+}
+
+func r16ViolationCmp(a, b r16Violation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.SelectorPath, b.SelectorPath)
+}
+
+func r16ViolationToObj(v r16Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r16-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.SelectorPath), str(v.ResolvedPath), str(v.Leaf),
+		sourceToObj(v.Source),
+	})
+}
+
+func r21ViolationCmp(a, b r21Violation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.FieldPath, b.FieldPath)
+}
+
+func r21ViolationToObj(v r21Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r21-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.FieldPath), str(v.Leaf), sourceToObj(v.Source),
+	})
 }
 
 func crdCmp(a, b types.CRDInfo) int {
@@ -1290,6 +1933,14 @@ func buildIgnoreDiffEntries(apps []types.ArgoApplication) []types.IgnoreDiffEntr
 		}
 	}
 	return out
+}
+
+func getIgnoreDiffEntries(w *types.World) []types.IgnoreDiffEntry {
+	if w.IgnoreDiffEntries != nil {
+		return w.IgnoreDiffEntries
+	}
+	w.IgnoreDiffEntries = buildIgnoreDiffEntries(w.ArgoApps)
+	return w.IgnoreDiffEntries
 }
 
 func ignoreDiffEntryCmp(a, b types.IgnoreDiffEntry) int {

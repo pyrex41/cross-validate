@@ -6,10 +6,7 @@ import (
 
 // SchemaKey identifies a schema by the manifest's (apiVersion, kind) tuple.
 // APIVersion is the full Kubernetes-style value (e.g. "example.com/v1alpha1").
-type SchemaKey struct {
-	APIVersion string
-	Kind       string
-}
+type SchemaKey = types.SchemaKey
 
 // BuildSchemaIndex consolidates the XRD + CRD schema maps stored on a World
 // into a single (apiVersion, kind) → schema-map index. This is the single
@@ -27,6 +24,9 @@ type SchemaKey struct {
 func BuildSchemaIndex(w *types.World) map[SchemaKey]map[string]interface{} {
 	if w == nil {
 		return nil
+	}
+	if w.SchemaIndex != nil {
+		return w.SchemaIndex
 	}
 	out := make(map[SchemaKey]map[string]interface{})
 
@@ -61,5 +61,6 @@ func BuildSchemaIndex(w *types.World) map[SchemaKey]map[string]interface{} {
 		}
 	}
 
+	w.SchemaIndex = out
 	return out
 }

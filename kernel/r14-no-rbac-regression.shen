@@ -149,8 +149,23 @@
   _ _ _ _ -> [])
 
 
+\* r14-cross-violation-to-judgment — Go precomputes the expensive
+   trajectory/state/binding joins and sends only missing-live-binding facts. *\
+(define r14-cross-violation-to-judgment
+  [r14-violation BKind BName _ _ _ _ OK ON Src BSrc] ->
+    (make-error "XPC014"
+      Src
+      (cn "RBAC regression: " (cn BKind (cn "/" (cn BName
+        (cn " or its Role is absent from state while " (cn OK (cn "/" (cn ON " still needs it"))))))))
+      (cn "Pod-bearing resource " (cn OK (cn "/" (cn ON
+        (cn " pins a ServiceAccount whose permissions flow through binding " (cn BName
+          ". The binding or its role is not present in the trajectory state at this step, so the workload loses the access it declared."))))))
+      (cn "Order the deletion of " (cn BName
+        " to run after the dependent workload is torn down, or keep the binding in place."))
+      [BSrc])
+  _ -> [])
+
 \* Top-level R14 cross-step check *\
 (define check-r14-cross
-  {(list (list A)) --> (list (list A)) --> (list (list A)) --> (list judgment)}
-  Trajectory SARefs Bindings ->
-    (flatten (map (/. S (check-r14-cross-step S SARefs Bindings)) Trajectory)))
+  {(list (list A)) --> (list judgment)}
+  Violations -> (map (/. V (r14-cross-violation-to-judgment V)) Violations))

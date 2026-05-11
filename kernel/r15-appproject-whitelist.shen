@@ -109,14 +109,24 @@
   _ _ _ _ _ -> [])
 
 
-\* check-r15 — top-level R15 check.
-   Per-app loop is skipped when Resources is empty: every per-app emit
-   requires walking the owned resources, so an empty resource list means
-   the entire iteration produces []. Cuts a 1000×1000-style cost on big
-   ArgoApp-only repos (ApplicationSets that haven't expanded yet, etc.). *\
+\* r15-violation-to-judgment — Go precomputes app/resource/project joins and
+   emits only resources that are not whitelisted. *\
+(define r15-violation-to-judgment
+  [r15-violation AppName ProjName Group Kind _ WLKey ResSrc] ->
+    (let GDisplay (if (= Group "") "core" Group)
+      (make-error "XPC.D.kind-whitelisted"
+        ResSrc
+        (cn "kind " (cn Kind (cn " (group " (cn GDisplay (cn ") not in AppProject " (cn ProjName " whitelist"))))))
+        (cn "Application '" (cn AppName
+          (cn "' is managed by AppProject '" (cn ProjName
+            (cn "', but " (cn Kind
+              (cn " (group: " (cn GDisplay
+                (cn ") is not in the "
+                  (cn WLKey " of that AppProject. Argo CD will refuse to sync this resource."))))))))))
+        (cn "Add {group: " (cn GDisplay (cn ", kind: " (cn Kind "} to the whitelist in the AppProject."))))
+        []))
+  _ -> [])
+
+\* check-r15 — top-level R15 check. *\
 (define check-r15
-  _ _ _ [] _ -> []
-  ArgoApps AppProjLinks AppProjects Resources CRDs ->
-    (flatten (map (/. App
-                    (check-r15-app App AppProjLinks AppProjects Resources CRDs))
-                  ArgoApps)))
+  Violations -> (map (/. V (r15-violation-to-judgment V)) Violations))

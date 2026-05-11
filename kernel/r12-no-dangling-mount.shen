@@ -126,9 +126,14 @@
     (check-r12-cross-fold Trajectory Rest Seen Acc))
 
 
-\* Top-level R12 cross-step check — dedups emissions per
-   (owner-kind, owner-name, owner-ns, target-kind, target-name, target-ns). *\
+\* r12-cross-violation-to-judgment — Go precomputes the expensive
+   trajectory/state join and sends only violating mount refs here. *\
+(define r12-cross-violation-to-judgment
+  [r12-violation OK ON _ TK TN _ MK Src] -> (r12-cross-emit OK ON TK TN MK Src)
+  _ -> [])
+
+\* Top-level R12 cross-step check — accepts precomputed, deduped
+   r12-violation facts from the Go bridge. *\
 (define check-r12-cross
-  {(list (list A)) --> (list (list A)) --> (list judgment)}
-  Trajectory MountRefs ->
-    (hd (tl (check-r12-cross-fold Trajectory MountRefs [] []))))
+  {(list (list A)) --> (list judgment)}
+  Violations -> (map (/. V (r12-cross-violation-to-judgment V)) Violations))

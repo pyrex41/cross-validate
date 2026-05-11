@@ -94,11 +94,24 @@
   _ _ -> [])
 
 
-\* check-r21 — top-level R21 check.
-   LateInitUsages: list of late-init-usage-fact tuples.
-   IgnoreDiffEntries: list of ignore-diff-entry tuples. *\
+\* r21-violation-to-judgment — Go precomputes ignoreDifferences coverage and
+   emits only late-init usages that are not covered. *\
+(define r21-violation-to-judgment
+  [r21-violation Group Kind Name _ FieldPath Leaf Src] ->
+    (make-error "XPC.E.late-init-needs-ignore-diff"
+      Src
+      (cn Kind (cn "/" (cn Name (cn ": late-init field " FieldPath))))
+      (cn "The field " (cn FieldPath
+        (cn " on " (cn Kind
+          (cn " (group: " (cn Group
+            (cn ") is late-initialized by the Crossplane provider from observed cloud state. "
+              "No ignoreDifferences entry covers this path. Argo CD will fight the provider.")))))))
+      (cn "Either add ignoreDifferences on the owning Application covering "
+        (cn Leaf
+          ", OR set managementPolicies to omit LateInitialize, OR use omitLateInitialize on the resource."))
+      [])
+  _ -> [])
+
+\* check-r21 — top-level R21 check. *\
 (define check-r21
-  LateInitUsages IgnoreDiffEntries ->
-    (flatten (map (/. Usage
-                    (r21-check-usage Usage IgnoreDiffEntries))
-                  LateInitUsages)))
+  Violations -> (map (/. V (r21-violation-to-judgment V)) Violations))

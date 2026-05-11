@@ -651,6 +651,12 @@ type SchemaInfo struct {
 	Schema map[string]interface{} `json:"schema"`
 }
 
+// SchemaKey identifies a schema by a manifest's (apiVersion, kind) tuple.
+type SchemaKey struct {
+	APIVersion string
+	Kind       string
+}
+
 // MountRef records that a workload resource (Pod-bearing kind) mounts a
 // ConfigMap or Secret as a volume, projected volume, or envFrom.
 type MountRef struct {
@@ -677,14 +683,14 @@ type SARef struct {
 
 // RBACBinding records a (Cluster)RoleBinding subject → role edge.
 type RBACBinding struct {
-	BindingKind      string         `json:"bindingKind"` // RoleBinding | ClusterRoleBinding
-	BindingName      string         `json:"bindingName"`
-	BindingNamespace string         `json:"bindingNamespace,omitempty"`
-	SubjectKind      string         `json:"subjectKind"` // ServiceAccount | User | Group
-	SubjectName      string         `json:"subjectName"`
-	SubjectNamespace string         `json:"subjectNamespace,omitempty"`
-	RoleKind         string         `json:"roleKind"` // Role | ClusterRole
-	RoleName         string         `json:"roleName"`
+	BindingKind      string `json:"bindingKind"` // RoleBinding | ClusterRoleBinding
+	BindingName      string `json:"bindingName"`
+	BindingNamespace string `json:"bindingNamespace,omitempty"`
+	SubjectKind      string `json:"subjectKind"` // ServiceAccount | User | Group
+	SubjectName      string `json:"subjectName"`
+	SubjectNamespace string `json:"subjectNamespace,omitempty"`
+	RoleKind         string `json:"roleKind"` // Role | ClusterRole
+	RoleName         string `json:"roleName"`
 	// RoleNamespace is the namespace of the Role the RoleRef targets. The
 	// correct value depends on the (BindingKind, RoleKind) pair per
 	// Kubernetes semantics:
@@ -1016,6 +1022,14 @@ type World struct {
 	// kernel sees pre-collapsed `bypass-yes`/`bypass-no` symbols, never
 	// the annotation strings.
 	BypassKeys BypassKeySet `json:"-"`
+
+	// SchemaIndex caches the consolidated CRD/XRD schema index used by field
+	// validation and patch type resolution.
+	SchemaIndex map[SchemaKey]map[string]interface{} `json:"-"`
+
+	// IgnoreDiffEntries caches the flattened ignoreDifferences rows consumed by
+	// selector and late-init drift checks.
+	IgnoreDiffEntries []IgnoreDiffEntry `json:"-"`
 }
 
 // BypassKeySet captures the resolved annotation keys per logical bypass.

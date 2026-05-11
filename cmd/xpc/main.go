@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -114,6 +115,8 @@ Check flags:
   --skip-appset-expand Skip ApplicationSet generator expansion
   --appset-fixture=<file>  YAML fixture for pullRequest/scmProvider generators
                              (shape: {appset-name: [{key: value, ...}]})
+  --profile-rules    Time each kernel rule group independently
+  --profile-out=<path>  Write stage/rule timing profile JSON to path
   --kernel-path=<dir>  Explicit path to the Shen kernel directory (overrides
                        upward cwd search; also XPC_KERNEL_PATH env var)
   --config=<path>      Explicit path to xpc.yaml (overrides upward cwd
@@ -196,6 +199,8 @@ func runCheck(args []string) int {
 	configPath := os.Getenv("XPC_CONFIG_PATH")
 	ssaMPMode := "observe"
 	focusPreset := "all"
+	profileRules := false
+	profileOut := ""
 	var paths []string
 
 	for _, arg := range args {
@@ -208,6 +213,8 @@ func runCheck(args []string) int {
 			skipRender = true
 		case arg == "--skip-appset-expand":
 			skipAppSetExpand = true
+		case arg == "--profile-rules":
+			profileRules = true
 		case len(arg) > 9 && arg[:9] == "--format=":
 			format = report.Format(arg[9:])
 		case len(arg) > 11 && arg[:11] == "--snapshot=":
@@ -226,6 +233,8 @@ func runCheck(args []string) int {
 			kernelPath = strings.TrimPrefix(arg, "--kernel-path=")
 		case strings.HasPrefix(arg, "--config="):
 			configPath = strings.TrimPrefix(arg, "--config=")
+		case strings.HasPrefix(arg, "--profile-out="):
+			profileOut = strings.TrimPrefix(arg, "--profile-out=")
 		case strings.HasPrefix(arg, "--ssa-mp-mode="):
 			val := strings.TrimPrefix(arg, "--ssa-mp-mode=")
 			switch val {
@@ -358,6 +367,7 @@ func runCheck(args []string) int {
 		StrictConversions: strictConversions,
 		KernelPath:        kernelPath,
 		RuleAllowlist:     focusPresetAllowlist(focusPreset),
+		ProfileRules:      profileRules,
 	}
 
 	tCheck := time.Now()
@@ -412,6 +422,13 @@ func runCheck(args []string) int {
 		return 1
 	}
 
+	if profileRules || profileOut != "" {
+		if err := writeProfile(profileOut, result); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing profile: %v\n", err)
+			return 1
+		}
+	}
+
 	// Generate proof if requested
 	if generateProof {
 		irDigest := ir.DigestWorld(world)
@@ -455,6 +472,26 @@ func runCheck(args []string) int {
 		}
 	}
 	return 0
+}
+
+func writeProfile(path string, result checker.RunResult) error {
+	payload := struct {
+		StageTimings []checker.Timing     `json:"stageTimings"`
+		RuleTimings  []checker.RuleTiming `json:"ruleTimings,omitempty"`
+	}{
+		StageTimings: result.StageTimings,
+		RuleTimings:  result.RuleTimings,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if path == "" {
+		_, err = os.Stderr.Write(data)
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func runDumpIR(args []string) int {
@@ -1101,6 +1138,9 @@ func loadAppSetFixtures(path string) (map[string][]map[string]string, error) {
 }
 
 func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
+	w.SchemaIndex = nil
+	w.IgnoreDiffEntries = nil
+
 	// Add CRDs from snapshot that aren't already in the world
 	existingCRDs := make(map[string]bool)
 	for _, crd := range w.CRDs {

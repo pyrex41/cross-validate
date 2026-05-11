@@ -100,11 +100,24 @@
   _ _ -> [])
 
 
-\* check-r16 — top-level R16 check.
-   SelectorUsages: list of selector-usage-fact tuples.
-   IgnoreDiffEntries: list of ignore-diff-entry tuples. *\
+\* r16-violation-to-judgment — Go precomputes ignoreDifferences coverage and
+   emits only selector usages that are not covered. *\
+(define r16-violation-to-judgment
+  [r16-violation Group Kind Name _ SelectorPath ResolvedPath Leaf Src] ->
+    (make-error "XPC.E.selector-needs-ignore-diff"
+      Src
+      (cn Kind (cn "/" (cn Name (cn ": selector " (cn SelectorPath (cn " resolves to " ResolvedPath))))))
+      (cn "The field " (cn SelectorPath
+        (cn " on " (cn Kind
+          (cn " (group: " (cn Group
+            (cn ") is a Crossplane selector that resolves via late-init. Crossplane writes "
+              (cn ResolvedPath
+                " after resolution. No ignoreDifferences entry covers this path. Argo CD will fight Crossplane."))))))))
+      (cn "Add ignoreDifferences to the owning Application: group: "
+        (cn Group (cn ", kind: " (cn Kind (cn ", jsonPointers containing: " Leaf)))))
+      [])
+  _ -> [])
+
+\* check-r16 — top-level R16 check. *\
 (define check-r16
-  SelectorUsages IgnoreDiffEntries ->
-    (flatten (map (/. Usage
-                    (r16-check-usage Usage IgnoreDiffEntries))
-                  SelectorUsages)))
+  Violations -> (map (/. V (r16-violation-to-judgment V)) Violations))

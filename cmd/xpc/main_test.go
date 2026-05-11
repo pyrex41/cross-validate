@@ -1,8 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/pyrex41/cross-validate-/pkg/checker"
 	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
@@ -134,4 +140,54 @@ func TestMergeSnapshotIntoWorld_NewSlices(t *testing.T) {
 			t.Fatalf("expected snapshot ArgoAppProject to be appended, got %+v", w.ArgoProjects)
 		}
 	})
+}
+
+func TestRunCheck_ProfileRules_WritesProfileSeparately(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	fixture := filepath.Join("..", "..", "testdata", "fixtures", "appproject-whitelist-absent")
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := runCheck([]string{
+		"--format=human",
+		"--skip-render",
+		"--profile-rules",
+		"--profile-out=" + profilePath,
+		fixture,
+	})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	stdoutBytes, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if code != 0 {
+		t.Fatalf("runCheck returned %d, stdout:\n%s", code, string(stdoutBytes))
+	}
+	stdout := string(stdoutBytes)
+	if strings.Contains(stdout, "ruleTimings") || strings.Contains(stdout, "stageTimings") {
+		t.Fatalf("profile JSON leaked into stdout:\n%s", stdout)
+	}
+
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	var payload struct {
+		StageTimings []checker.Timing     `json:"stageTimings"`
+		RuleTimings  []checker.RuleTiming `json:"ruleTimings"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode profile: %v\n%s", err, data)
+	}
+	if len(payload.StageTimings) == 0 {
+		t.Fatal("expected stage timings in profile")
+	}
+	if len(payload.RuleTimings) == 0 {
+		t.Fatal("expected rule timings in profile")
+	}
 }
