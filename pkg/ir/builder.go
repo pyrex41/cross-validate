@@ -145,6 +145,11 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 		b.runDeterminismChecks()
 		b.renderCompositions(docs)
 	}
+	// Static go-template grammar check. Runs unconditionally (even under
+	// --skip-render): it needs no crossplane binary or sample XR, and is the
+	// only pass that catches template syntax errors in repos where the
+	// composite XR is synthesized at runtime rather than committed.
+	b.checkCompositionTemplates()
 	// Enrichment runs AFTER composition rendering so every downstream
 	// extractor (mount refs, SA refs, RBAC bindings, field-validation
 	// facts, late-init usages, CP deletion-policy facts, SSA/MP
