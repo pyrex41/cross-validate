@@ -52,6 +52,47 @@ type Config struct {
 	// NameCarveouts configures rule-specific name substrings that exempt a
 	// resource from a rule. Purely additive over the built-in carve-outs.
 	NameCarveouts NameCarveoutsConfig `yaml:"name-carveouts"`
+
+	// ExternalSecretStores configures D5 (XPC.K.externalsecret-store): the
+	// allowlist of secretStoreRef.name values an ExternalSecret may reference.
+	// Opt-in — an empty allow-names list disables the check entirely.
+	ExternalSecretStores ExternalSecretStoresConfig `yaml:"external-secret-stores"`
+
+	// EnvLabel configures D3 (XPC.E.fargate-claim-env-label): the required
+	// environment label on Crossplane claim kinds. All fields optional; empty
+	// fields fall back to built-in defaults.
+	EnvLabel EnvLabelConfig `yaml:"env-label"`
+
+	// AllowedProviderConfigs supplements D1 (XPC.B.providerconfig-resolves):
+	// extra ProviderConfig names that are known to exist at runtime but are
+	// not committed as manifests in the checked set (e.g. created by a
+	// separate bootstrap app). A providerConfigRef.name resolves if it names
+	// either a declared ProviderConfig OR an entry in this list. Empty (the
+	// default) means pure reference integrity against declared ProviderConfigs.
+	AllowedProviderConfigs []string `yaml:"allowed-provider-configs"`
+}
+
+// ExternalSecretStoresConfig configures D5 (XPC.K.externalsecret-store).
+type ExternalSecretStoresConfig struct {
+	// AllowedNames is the set of secretStoreRef.name values an ExternalSecret
+	// may reference. When empty (the default) the rule is disabled. When
+	// non-empty, an ExternalSecret whose secretStoreRef.name is not in the
+	// list is flagged — catching a typo'd / wrong store that would silently
+	// fail with SecretSyncedError.
+	AllowedNames []string `yaml:"allowed-names"`
+}
+
+// EnvLabelConfig configures D3 (XPC.E.fargate-claim-env-label). Each field, if
+// non-empty, REPLACES the corresponding built-in default.
+type EnvLabelConfig struct {
+	// Key is the label that must be present on claim kinds. Default
+	// "app.facilitygrid.io/environment".
+	Key string `yaml:"key"`
+	// ClaimKinds are the resource kinds the rule polices. Default
+	// {FargateApp, FargateWorker, FargateService}.
+	ClaimKinds []string `yaml:"claim-kinds"`
+	// AllowedValues are the permitted label values. Default {prod, preview, ops}.
+	AllowedValues []string `yaml:"allowed-values"`
 }
 
 // ProdPatternsConfig configures R25's prod-name classification.

@@ -1,0 +1,30 @@
+# GOOD: FargateApp claim with a valid environment label → no diagnostic.
+apiVersion: platform.facilitygrid.net/v1alpha1
+kind: FargateApp
+metadata:
+  name: jcb
+  namespace: prod
+  labels:
+    app.facilitygrid.io/environment: prod
+spec:
+  image: jcb:latest
+---
+# BAD (missing): FargateWorker claim with no environment label.
+apiVersion: platform.facilitygrid.net/v1alpha1
+kind: FargateWorker
+metadata:
+  name: jcb-worker
+  namespace: prod
+spec:
+  image: jcb-worker:latest
+---
+# BAD (invalid): FargateService claim with an out-of-enum value (typo).
+apiVersion: platform.facilitygrid.net/v1alpha1
+kind: FargateService
+metadata:
+  name: jcb-svc
+  namespace: prod
+  labels:
+    app.facilitygrid.io/environment: prdo
+spec:
+  image: jcb-svc:latest

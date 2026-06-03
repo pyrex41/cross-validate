@@ -19,6 +19,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/audit"
 	"github.com/pyrex41/cross-validate-/pkg/bisect"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
+	"github.com/pyrex41/cross-validate-/pkg/clustersrc"
 	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
@@ -128,9 +129,16 @@ Check flags:
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
-  --cluster=<name>     Name of the cluster context (default: current)
+  --cluster=<name>     Name recorded in the snapshot (default: local)
+  --from-cluster       Capture from a live cluster via kubectl (instead of
+                       manifests); implies live resources. Requires kubectl.
+  --context=<name>     kube-context for --from-cluster (default: current-context)
+  --kubectl-bin=<path> Path to kubectl (default: first 'kubectl' on PATH)
   --diff=<a>,<b>       Diff two snapshot files
   --include-resources  Include resource instances and Argo objects in the snapshot
+
+  A snapshot captured with --from-cluster is a valid --base/--head for
+  'xpc plan' — diff it against a git ref for git-vs-cluster drift.
 
 Proof subcommands:
   xpc proof show <proof-file>              Show proof summary
@@ -534,6 +542,9 @@ func runSnapshot(args []string) int {
 	clusterName := "local"
 	diffPaths := ""
 	var includeResources bool
+	var fromCluster bool
+	kubeContext := ""
+	kubectlBin := ""
 	var paths []string
 
 	for _, arg := range args {
@@ -544,6 +555,12 @@ func runSnapshot(args []string) int {
 			clusterName = arg[10:]
 		case len(arg) > 7 && arg[:7] == "--diff=":
 			diffPaths = arg[7:]
+		case arg == "--from-cluster":
+			fromCluster = true
+		case len(arg) > 10 && arg[:10] == "--context=":
+			kubeContext = arg[10:]
+		case len(arg) > 14 && arg[:14] == "--kubectl-bin=":
+			kubectlBin = arg[14:]
 		case arg == "--include-resources":
 			includeResources = true
 		case arg == "--help" || arg == "-h":
@@ -578,40 +595,63 @@ func runSnapshot(args []string) int {
 		return 0
 	}
 
-	// Snapshot from manifests (filesystem mode)
-	if len(paths) == 0 {
-		paths = append(paths, ".")
-	}
+	var snap *snapshot.Snapshot
 
-	var allDocs []loader.LoadedDocument
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if fromCluster {
+		// Live-cluster mode: capture via kubectl. No silent fallback to the
+		// filesystem — a snapshot that quietly came from disk would corrupt
+		// every downstream git-vs-reality comparison.
+		if len(paths) > 0 {
+			fmt.Fprintln(os.Stderr, "error: --from-cluster does not take path arguments")
 			return 1
 		}
-		var docs []loader.LoadedDocument
-		if info.IsDir() {
-			docs, err = loader.LoadDirectory(path)
-		} else {
-			docs, err = loader.LoadFile(path)
-		}
+		capturer := &clustersrc.Capturer{KubectlBin: kubectlBin, Context: kubeContext}
+		captured, err := capturer.Capture(clusterName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading %s: %v\n", path, err)
+			if clustersrc.IsKubectlAbsent(err) {
+				fmt.Fprintln(os.Stderr, "error: --from-cluster requires kubectl on PATH (or --kubectl-bin=)")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error capturing cluster: %v\n", err)
 			return 1
 		}
-		allDocs = append(allDocs, docs...)
-	}
+		snap = captured
+	} else {
+		// Snapshot from manifests (filesystem mode)
+		if len(paths) == 0 {
+			paths = append(paths, ".")
+		}
 
-	builder := ir.NewBuilder()
-	world, err := builder.Build(allDocs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
-		return 1
-	}
+		var allDocs []loader.LoadedDocument
+		for _, path := range paths {
+			info, err := os.Stat(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			var docs []loader.LoadedDocument
+			if info.IsDir() {
+				docs, err = loader.LoadDirectory(path)
+			} else {
+				docs, err = loader.LoadFile(path)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error loading %s: %v\n", path, err)
+				return 1
+			}
+			allDocs = append(allDocs, docs...)
+		}
 
-	snap := snapshot.FromWorldWithOptions(world, clusterName,
-		snapshot.FromWorldOptions{IncludeResources: includeResources})
+		builder := ir.NewBuilder()
+		world, err := builder.Build(allDocs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
+			return 1
+		}
+
+		snap = snapshot.FromWorldWithOptions(world, clusterName,
+			snapshot.FromWorldOptions{IncludeResources: includeResources})
+	}
 
 	if outputPath != "" {
 		if err := snap.Save(outputPath); err != nil {
@@ -1074,7 +1114,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.B.providerconfig-resolves, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.fargate-claim-env-label, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.K.externalsecret-store, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
 		return 1
 	}
 
@@ -1247,6 +1287,60 @@ func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
 }
 
 var errorExplanations = map[string]string{
+	"XPC.K.externalsecret-store": `XPC.K.externalsecret-store: ExternalSecret references a non-allowed secret store
+
+An ExternalSecret's spec.secretStoreRef.name is not in the configured allowlist
+(external-secret-stores.allowed-names in xpc.yaml).
+
+An ExternalSecret binds to a (Cluster)SecretStore by name. A typo'd or wrong
+store name names a store that does not exist, so the external-secrets operator
+fails to sync with SecretSyncedError — the target Secret is never created and
+every workload mounting it fails to start.
+
+Opt-in: the rule is silent until external-secret-stores.allowed-names is set
+(e.g. the three fg stores aws-secrets-manager-{cluster,preview,prod}).
+
+Fix: reference an allowed (Cluster)SecretStore, or add the name to
+external-secret-stores.allowed-names if it is legitimate.`,
+
+	"XPC.E.fargate-claim-env-label": `XPC.E.fargate-claim-env-label: Crossplane claim missing/invalid environment label
+
+A Crossplane claim of a policed kind (FargateApp / FargateWorker /
+FargateService by default) either lacks the app.facilitygrid.io/environment
+label or carries a value outside the allowed enum (prod / preview / ops).
+
+The environment label drives blast-radius reasoning, monitoring escalation, and
+account scoping. A missing label makes the claim invisible to that tooling; a
+typo'd or non-existent value silently misroutes it.
+
+This is a forward-looking rule: claims live in Helm values files, so coverage
+depends on the scan scope including deploy/facilitygrid/{prod,preview}/ (whose
+values parse as claim docs) or on Helm rendering being enabled.
+
+Fix: add or correct app.facilitygrid.io/environment to one of {prod, preview,
+ops}. The key, claim kinds, and allowed values are configurable via the
+env-label block in xpc.yaml.`,
+
+	"XPC.B.providerconfig-resolves": `XPC.B.providerconfig-resolves: providerConfigRef names no declared ProviderConfig
+
+A resource's spec.providerConfigRef.name does not resolve to any declared
+ProviderConfig or ClusterProviderConfig in the checked set, and is not listed
+in xpc.yaml's allowed-provider-configs.
+
+A Crossplane managed resource binds to its credentials/account via
+spec.providerConfigRef.name. A misspelled name (e.g. "ops-accout") names
+nothing: Crossplane cannot resolve the reference, the resource never
+reconciles, and the deploy looks healthy while the external object is silently
+never created.
+
+Matching is by name only (a forgiving first pass) — it catches the dominant
+failure mode, a typo that resolves to nothing, without modeling per-provider-
+family scoping.
+
+Fix: correct providerConfigRef.name to match a declared ProviderConfig. If the
+ProviderConfig is created out-of-band (e.g. a separate bootstrap app), add its
+name to allowed-provider-configs in xpc.yaml.`,
+
 	"XPC001": `XPC001: CRD/XRD version coherence
 
 Every CRD must have exactly one storage version. Every declared version must

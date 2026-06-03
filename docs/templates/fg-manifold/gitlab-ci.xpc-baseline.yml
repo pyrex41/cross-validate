@@ -1,0 +1,49 @@
+# ============================================================================
+# xpc-baseline-snapshot — Part B nightly baseline.
+#
+# Publishes a portable .xpcsnap of fg-manifold `main` as a CI artifact. It is
+# the baseline that `xpc plan --base=<snap> --head=<ref>` (and the
+# `xpc snapshot --from-cluster` drift compare) diff against.
+#
+# Gated on the scheduled-pipeline source — wire a daily cron under
+# CI/CD > Schedules (target branch: main). Same PINNED-release prerequisite as
+# validate-manifests: set XPC_VERSION to a published tag.
+#
+# This captures the MANIFEST baseline (the git side), which works today. A
+# live-cluster baseline (the reality side) uses `xpc snapshot --from-cluster`
+# and a runner with cluster credentials — add that as a second job once a
+# cluster-capable runner exists.
+# ============================================================================
+
+xpc-baseline-snapshot:
+  stage: validate
+  image: ${ECR_REGISTRY}/ci-runner:latest   # needs curl; + helm/kustomize for
+                                             # full render fidelity (see NOTE)
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    XPC_VERSION: "v0.1.0"   # <-- set to the real release tag
+    XPC_RELEASE_URL: "https://github.com/pyrex41/cross-validate/releases/download/${XPC_VERSION}/xpc-linux-amd64"
+  before_script:
+    - curl -fsSL "${XPC_RELEASE_URL}" -o /usr/local/bin/xpc && chmod +x /usr/local/bin/xpc
+  script:
+    # --include-resources so resource identities are present (plan diffs on them).
+    - |
+      xpc snapshot --include-resources \
+        --cluster=fg-manifold-main \
+        --output=fg-manifold-main.xpcsnap \
+        deploy/facilitygrid/ops/applications \
+        deploy/facilitygrid/ops/applicationsets
+    - echo "baseline digest:" && head -c 80 fg-manifold-main.xpcsnap >/dev/null; xpc snapshot --diff=fg-manifold-main.xpcsnap,fg-manifold-main.xpcsnap >/dev/null 2>&1 || true
+  artifacts:
+    paths:
+      - fg-manifold-main.xpcsnap
+    expire_in: 14 days
+
+# NOTE on render fidelity: this baseline runs without helm/kustomize, so
+# Helm/Kustomize-sourced Applications are captured only as their raw manifests,
+# not their rendered output. For a baseline that `xpc plan` can diff for true
+# drift on rendered resources, add helm + kustomize to the image and drop the
+# implicit skip (xpc renders when the binaries are on PATH). Tradeoff: heavier
+# image + slower job vs. complete coverage. Start manifest-only; upgrade if the
+# drift report shows gaps.

@@ -1,0 +1,37 @@
+# GOOD: references an allowed cluster store → no diagnostic.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: good-secret
+  namespace: app
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager-cluster
+    kind: ClusterSecretStore
+  target:
+    name: good-secret
+  data:
+    - secretKey: password
+      remoteRef:
+        key: facilitygrid/ops/app
+        property: password
+---
+# BAD: typo'd store name (not in allowlist) → XPC.K.externalsecret-store.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: typo-secret
+  namespace: app
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: ClusterSecretStore
+  target:
+    name: typo-secret
+  data:
+    - secretKey: password
+      remoteRef:
+        key: facilitygrid/ops/app
+        property: password

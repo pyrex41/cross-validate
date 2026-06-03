@@ -21,6 +21,71 @@ func ResolveProdPatterns(cfg *Config) []string {
 	return append([]string(nil), defaultProdAppSetNameSubstrings...)
 }
 
+// ResolveExternalSecretStoreNames returns the allowlist of secretStoreRef.name
+// values for D5 (XPC.K.externalsecret-store). No built-in default: an absent or
+// empty config yields an empty list, which disables the rule.
+func ResolveExternalSecretStoreNames(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, s := range cfg.ExternalSecretStores.AllowedNames {
+		if s == "" || containsString(out, s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// Built-in defaults for D3 (XPC.E.fargate-claim-env-label).
+var (
+	defaultEnvLabelKey           = "app.facilitygrid.io/environment"
+	defaultEnvLabelClaimKinds    = []string{"FargateApp", "FargateWorker", "FargateService"}
+	defaultEnvLabelAllowedValues = []string{"prod", "preview", "ops"}
+)
+
+// ResolveEnvLabel returns the resolved (key, claimKinds, allowedValues) for D3.
+// Each non-empty config field replaces its built-in default; empty fields keep
+// the default.
+func ResolveEnvLabel(cfg *Config) (key string, claimKinds []string, allowedValues []string) {
+	key = defaultEnvLabelKey
+	claimKinds = append([]string(nil), defaultEnvLabelClaimKinds...)
+	allowedValues = append([]string(nil), defaultEnvLabelAllowedValues...)
+	if cfg == nil {
+		return key, claimKinds, allowedValues
+	}
+	if cfg.EnvLabel.Key != "" {
+		key = cfg.EnvLabel.Key
+	}
+	if len(cfg.EnvLabel.ClaimKinds) > 0 {
+		claimKinds = append([]string(nil), cfg.EnvLabel.ClaimKinds...)
+	}
+	if len(cfg.EnvLabel.AllowedValues) > 0 {
+		allowedValues = append([]string(nil), cfg.EnvLabel.AllowedValues...)
+	}
+	return key, claimKinds, allowedValues
+}
+
+// ResolveAllowedProviderConfigs returns the user-supplied list of extra
+// ProviderConfig names that D1 (XPC.B.providerconfig-resolves) treats as
+// resolvable even when not declared as manifests. No built-in defaults: an
+// absent or empty config yields an empty list, so the rule checks pure
+// reference integrity against declared ProviderConfigs.
+func ResolveAllowedProviderConfigs(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, s := range cfg.AllowedProviderConfigs {
+		if s == "" || containsString(out, s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // ResolveAllowDeleteKeys returns every annotation key (primary + aliases)
 // whose value "true" silences R23 / R26 for the resource carrying it.
 // Replace-on-primary, additive-on-aliases. Order: primary first, then

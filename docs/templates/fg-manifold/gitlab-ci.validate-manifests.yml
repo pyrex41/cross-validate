@@ -1,0 +1,89 @@
+# ============================================================================
+# validate-manifests — fg-manifold GitOps lint: Layer-1 (yamllint) + Layer-3 (xpc).
+#
+# Paste this job into deploy fg-manifold's .gitlab-ci.yml (e.g. right after the
+# existing `validate-mr` job). REPORT-ONLY for now via `allow_failure: true`
+# (see CUTOVER at the bottom).
+#
+# PREREQUISITE: a published xpc release binary. CI pulls a PINNED version (see
+# the `XPC_VERSION` variable + the curl in before_script). Cut a release of
+# github.com/pyrex41/cross-validate that carries the rule wave + capture work,
+# then set XPC_VERSION to its tag. Until that release exists this job cannot run.
+#
+# SCOPE (verified — do NOT widen under --skip-render):
+#   deploy/facilitygrid/ops/applications + deploy/facilitygrid/ops/applicationsets
+#   These MUST be checked TOGETHER so ApplicationSet `ignoreDifferences`
+#   propagation works; a sub-dir alone explodes false positives (191 vs 68).
+#
+#   prod/ + preview/ are intentionally EXCLUDED here: under --skip-render they
+#   add nothing. D3 (fargate-claim-env-label) skips the nameless flat Helm
+#   *-values.yaml claim shapes, and every D5 ExternalSecret store ref lives
+#   under ops/applications. Meaningful tenant-claim coverage needs a render
+#   pass (drop --skip-render for a prod/preview run) — a later step, not this one.
+#
+#   ops/bootstrap (the ~1.5 GB .terraform tree) is excluded by not listing it.
+#
+# SARIF NOTE: GitLab's `reports:sast` expects GitLab's OWN SAST report JSON,
+# NOT raw SARIF — so we publish xpc.sarif as a plain downloadable artifact only.
+# Inline MR annotations would need either a SARIF-ingesting integration or a
+# SARIF->Code Quality JSON conversion; decide that before relying on inline UX.
+# ============================================================================
+
+validate-manifests:
+  stage: validate
+  # Needs: curl (pull xpc), python3+pip (yamllint), git (MR diff). Adjust to an
+  # image in your registry that has these, or add installs to before_script.
+  image: ${ECR_REGISTRY}/ci-runner:latest
+  allow_failure: true                       # REPORT-ONLY — remove at cutover
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - !reference [.gate-skip, rules]        # skip downstream-source pipelines
+  variables:
+    # Pin to the released xpc tag that carries the rule wave + capture work.
+    XPC_VERSION: "v0.1.0"   # <-- set to the real release tag
+    XPC_RELEASE_URL: "https://github.com/pyrex41/cross-validate/releases/download/${XPC_VERSION}/xpc-linux-amd64"
+    XPC_SCOPE: >-
+      deploy/facilitygrid/ops/applications
+      deploy/facilitygrid/ops/applicationsets
+  before_script:
+    - curl -fsSL "${XPC_RELEASE_URL}" -o /usr/local/bin/xpc && chmod +x /usr/local/bin/xpc
+    - command -v yamllint >/dev/null 2>&1 || pip install --quiet yamllint
+  script:
+    # --- Layer 1: yamllint over CHANGED YAML only (fast). On MRs diff against
+    #     the target branch; on main, lint the full scope. Uses the committed
+    #     .yamllint (ignores Helm-templated *-values.yaml). ---
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch --depth 50 origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME";
+        CHANGED=$(git diff --name-only "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"...HEAD -- '*.yaml' '*.yml' | grep '^deploy/facilitygrid/' || true);
+      else
+        CHANGED=$(git ls-files 'deploy/facilitygrid/**/*.yaml' 'deploy/facilitygrid/**/*.yml');
+      fi
+      if [ -n "$CHANGED" ]; then
+        echo "$CHANGED" | xargs yamllint -c .yamllint;
+      else
+        echo "no changed YAML under deploy/facilitygrid — skipping yamllint";
+      fi
+    # --- Layer 3: xpc over the scope (renders skipped; SARIF to a file).
+    #     xpc.yaml at repo root is auto-discovered (upward cwd search).
+    #     `|| true` keeps the script step from masking the artifact upload;
+    #     allow_failure already makes the job non-blocking while report-only. ---
+    - xpc check --skip-render --format=sarif $XPC_SCOPE > xpc.sarif || true
+    - echo "xpc findings written to xpc.sarif (download from job artifacts)"
+  artifacts:
+    when: always
+    paths:
+      - xpc.sarif
+    expire_in: 30 days
+
+# ----------------------------------------------------------------------------
+# CUTOVER TO BLOCKING (after the report-only window is clean):
+#   1. Fix or carve-out every error-severity finding (tune xpc.yaml, or add the
+#      documented bypass annotations for intentional cases).
+#   2. Remove `allow_failure: true`.
+#   3. Change the xpc step to fail the job:  `xpc check ... > xpc.sarif`  (drop
+#      the `|| true`) so a non-zero xpc exit fails the pipeline.
+#   4. (Optional) wire inline MR annotations once the SARIF-ingestion question
+#      above is resolved.
+# ----------------------------------------------------------------------------

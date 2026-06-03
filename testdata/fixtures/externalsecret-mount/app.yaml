@@ -1,0 +1,63 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: externalsecret-mount
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: main
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-api
+---
+# ExternalSecret materializes the Secret at runtime via the external-secrets
+# operator. It carries a later sync-wave than the consumer below — mirroring
+# fg-manifold's platform-api, where the Deployment (wave 0) mounts a Secret
+# produced by an ExternalSecret annotated wave 1. The synthesized target Secret
+# must be modeled as present from the start so this does NOT fire XPC012.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: platform-api-externalsecret
+  namespace: platform-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager-cluster
+    kind: ClusterSecretStore
+  target:
+    name: platform-api-secrets
+  data:
+    - secretKey: AURORA_HOST
+      remoteRef:
+        key: facilitygrid/ops/platform-api
+        property: aurora_host
+---
+# Consumer at wave 0 (no annotation) with a non-optional mount of the
+# ESO-produced Secret. Without the ExternalSecret-target synthesis this would
+# false-fire XPC012 ("absent from trajectory state").
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-api
+  namespace: platform-api
+spec:
+  selector:
+    matchLabels:
+      app: platform-api
+  template:
+    metadata:
+      labels:
+        app: platform-api
+    spec:
+      containers:
+        - name: app
+          image: platform-api:latest
+          envFrom:
+            - secretRef:
+                name: platform-api-secrets

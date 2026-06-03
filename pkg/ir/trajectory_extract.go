@@ -62,6 +62,9 @@ func ensureKnobDefaults(w *types.World) {
 	if w.StateBearingKinds == nil {
 		w.StateBearingKinds = config.ResolveStateBearingKinds(nil, StateBearingKindsRegistry())
 	}
+	if w.EnvLabelKey == "" {
+		w.EnvLabelKey, w.EnvLabelClaimKinds, w.EnvLabelAllowedValues = config.ResolveEnvLabel(nil)
+	}
 	if w.ProdPatterns == nil {
 		w.ProdPatterns = config.ResolveProdPatterns(nil)
 	}

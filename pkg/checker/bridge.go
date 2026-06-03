@@ -643,6 +643,9 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 	r15Violations := buildR15Violations(w)
 	r16Violations := buildR16Violations(w.SelectorUsages, ignoreDiffEntries)
 	r21Violations := buildR21Violations(w.LateInitUsages, ignoreDiffEntries)
+	providerConfigRefViolations := buildProviderConfigRefViolations(w)
+	fargateEnvLabelViolations := buildFargateEnvLabelViolations(w)
+	esoStoreViolations := buildESOStoreViolations(w)
 
 	// Compositions sort once and feed both the `compositions` section and the
 	// `resolved-patches` section, so patches follow the composition ordering.
@@ -733,6 +736,9 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		sortedSection("r15-violations", r15Violations, r15ViolationCmp, r15ViolationToObj),
 		sortedSection("r16-violations", r16Violations, r16ViolationCmp, r16ViolationToObj),
 		sortedSection("r21-violations", r21Violations, r21ViolationCmp, r21ViolationToObj),
+		sortedSection("providerconfig-ref-violations", providerConfigRefViolations, providerConfigRefViolationCmp, providerConfigRefViolationToObj),
+		sortedSection("fargate-env-label-violations", fargateEnvLabelViolations, fargateEnvLabelViolationCmp, fargateEnvLabelViolationToObj),
+		sortedSection("eso-store-violations", esoStoreViolations, esoStoreViolationCmp, esoStoreViolationToObj),
 		trajectoryToObj(trajectories),
 	}
 }
@@ -780,6 +786,39 @@ type r16Violation struct {
 	ResolvedPath string
 	Leaf         string
 	Source       types.SourceLocation
+}
+
+// esoStoreViolation is one ExternalSecret whose secretStoreRef.name is not in
+// the configured allowlist. Feeds D5 (XPC.K.externalsecret-store).
+type esoStoreViolation struct {
+	Name      string
+	Namespace string
+	StoreName string
+	Source    types.SourceLocation
+}
+
+// fargateEnvLabelViolation is one claim resource that either lacks the required
+// environment label or carries an out-of-enum value. Feeds D3
+// (XPC.E.fargate-claim-env-label). Reason is "missing" or "invalid".
+type fargateEnvLabelViolation struct {
+	Kind      string
+	Name      string
+	Namespace string
+	Reason    string
+	Value     string
+	Source    types.SourceLocation
+}
+
+// providerConfigRefViolation is one resource whose spec.providerConfigRef.name
+// does not resolve to any declared ProviderConfig (or allowed-provider-configs
+// entry). Feeds D1 (XPC.B.providerconfig-resolves).
+type providerConfigRefViolation struct {
+	Group     string
+	Kind      string
+	Name      string
+	Namespace string
+	RefName   string
+	Source    types.SourceLocation
 }
 
 type r21Violation struct {
@@ -1005,6 +1044,222 @@ func buildR16Violations(usages []types.SelectorUsage, entries []types.IgnoreDiff
 		})
 	}
 	return out
+}
+
+// buildESOStoreViolations flags every ExternalSecret whose secretStoreRef.name
+// is not in w.ESOAllowedStoreNames. Disabled (returns nil) when the allowlist
+// is empty. Catches a typo'd or wrong store name, which fails silently at
+// reconcile with SecretSyncedError. Feeds D5 (XPC.K.externalsecret-store).
+func buildESOStoreViolations(w *types.World) []esoStoreViolation {
+	if len(w.Resources) == 0 || len(w.ESOAllowedStoreNames) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(w.ESOAllowedStoreNames))
+	for _, n := range w.ESOAllowedStoreNames {
+		allowed[n] = true
+	}
+
+	resources := slices.Clone(w.Resources)
+	slices.SortFunc(resources, resourceCmp)
+
+	var out []esoStoreViolation
+	for _, res := range resources {
+		if res.Kind != "ExternalSecret" || !strings.HasPrefix(res.APIVersion, "external-secrets.io/") {
+			continue
+		}
+		store := secretStoreRefName(res.Raw)
+		if store == "" || allowed[store] {
+			continue
+		}
+		out = append(out, esoStoreViolation{
+			Name:      res.Name,
+			Namespace: res.Namespace,
+			StoreName: store,
+			Source:    res.Source,
+		})
+	}
+	return out
+}
+
+// secretStoreRefName reads spec.secretStoreRef.name from an ExternalSecret's
+// raw manifest, returning "" when absent.
+func secretStoreRefName(raw map[string]interface{}) string {
+	spec, ok := raw["spec"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	ref, ok := spec["secretStoreRef"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	name, _ := ref["name"].(string)
+	return name
+}
+
+func esoStoreViolationCmp(a, b esoStoreViolation) int {
+	if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.StoreName, b.StoreName)
+}
+
+func esoStoreViolationToObj(v esoStoreViolation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("eso-store-violation"),
+		str(v.Name), str(v.Namespace), str(v.StoreName),
+		sourceToObj(v.Source),
+	})
+}
+
+// buildFargateEnvLabelViolations flags every claim-kind resource (per
+// w.EnvLabelClaimKinds) that lacks the required environment label
+// (w.EnvLabelKey) or carries a value outside the allowed enum
+// (w.EnvLabelAllowedValues). Feeds D3 (XPC.E.fargate-claim-env-label).
+func buildFargateEnvLabelViolations(w *types.World) []fargateEnvLabelViolation {
+	if len(w.Resources) == 0 || len(w.EnvLabelClaimKinds) == 0 {
+		return nil
+	}
+	claimKinds := make(map[string]bool, len(w.EnvLabelClaimKinds))
+	for _, k := range w.EnvLabelClaimKinds {
+		claimKinds[k] = true
+	}
+	allowed := make(map[string]bool, len(w.EnvLabelAllowedValues))
+	for _, v := range w.EnvLabelAllowedValues {
+		allowed[v] = true
+	}
+
+	resources := slices.Clone(w.Resources)
+	slices.SortFunc(resources, resourceCmp)
+
+	var out []fargateEnvLabelViolation
+	for _, res := range resources {
+		if !claimKinds[res.Kind] {
+			continue
+		}
+		// Skip nameless docs: a real claim manifest always has metadata.name.
+		// Crossplane claim shapes also appear flat inside Helm *values* files
+		// (top-level kind/labels, no metadata block); those parse as nameless,
+		// label-less claims and must not be flagged — only the rendered claim
+		// (or a committed manifest) is a real subject for this rule.
+		if res.Name == "" {
+			continue
+		}
+		val, ok := res.Labels[w.EnvLabelKey]
+		switch {
+		case !ok || val == "":
+			out = append(out, fargateEnvLabelViolation{
+				Kind: res.Kind, Name: res.Name, Namespace: res.Namespace,
+				Reason: "missing", Source: res.Source,
+			})
+		case !allowed[val]:
+			out = append(out, fargateEnvLabelViolation{
+				Kind: res.Kind, Name: res.Name, Namespace: res.Namespace,
+				Reason: "invalid", Value: val, Source: res.Source,
+			})
+		}
+	}
+	return out
+}
+
+func fargateEnvLabelViolationCmp(a, b fargateEnvLabelViolation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Namespace, b.Namespace)
+}
+
+func fargateEnvLabelViolationToObj(v fargateEnvLabelViolation) kl.Obj {
+	reasonSym := "env-missing"
+	if v.Reason == "invalid" {
+		reasonSym = "env-invalid"
+	}
+	return makeList([]kl.Obj{
+		sym("fargate-env-label-violation"),
+		str(v.Kind), str(v.Name), str(v.Namespace),
+		sym(reasonSym), str(v.Value),
+		sourceToObj(v.Source),
+	})
+}
+
+// buildProviderConfigRefViolations flags every resource whose
+// spec.providerConfigRef.name does not name a declared ProviderConfig /
+// ClusterProviderConfig (or an allowed-provider-configs entry). Matched by
+// name only — a forgiving first pass that catches the dominant failure mode
+// (a typo'd ref that resolves to nothing, leaving the resource permanently
+// un-reconciled) without modeling per-provider-family scoping.
+func buildProviderConfigRefViolations(w *types.World) []providerConfigRefViolation {
+	if len(w.Resources) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(w.Resources))
+	for _, res := range w.Resources {
+		if res.Kind == "ProviderConfig" || res.Kind == "ClusterProviderConfig" {
+			known[res.Name] = true
+		}
+	}
+	for _, name := range w.AllowedProviderConfigs {
+		known[name] = true
+	}
+
+	resources := slices.Clone(w.Resources)
+	slices.SortFunc(resources, resourceCmp)
+
+	var out []providerConfigRefViolation
+	for _, res := range resources {
+		ref := providerConfigRefName(res.Raw)
+		if ref == "" || known[ref] {
+			continue
+		}
+		out = append(out, providerConfigRefViolation{
+			Group:     apiVersionGroup(res.APIVersion),
+			Kind:      res.Kind,
+			Name:      res.Name,
+			Namespace: res.Namespace,
+			RefName:   ref,
+			Source:    res.Source,
+		})
+	}
+	return out
+}
+
+// providerConfigRefName reads spec.providerConfigRef.name from a resource's
+// raw manifest, returning "" when the field is absent (non-Crossplane-MR).
+func providerConfigRefName(raw map[string]interface{}) string {
+	spec, ok := raw["spec"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	ref, ok := spec["providerConfigRef"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	name, _ := ref["name"].(string)
+	return name
+}
+
+func providerConfigRefViolationCmp(a, b providerConfigRefViolation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.RefName, b.RefName)
+}
+
+func providerConfigRefViolationToObj(v providerConfigRefViolation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("providerconfig-ref-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.RefName),
+		sourceToObj(v.Source),
+	})
 }
 
 func buildR21Violations(usages []types.LateInitUsage, entries []types.IgnoreDiffEntry) []r21Violation {

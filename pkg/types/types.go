@@ -1005,6 +1005,24 @@ type World struct {
 	// ensureKnobDefaults in trajectory_extract.go.
 	StateBearingKinds []ArgoGroupKind `json:"-"`
 
+	// ESOAllowedStoreNames is the resolved allowlist of secretStoreRef.name
+	// values for D5 (XPC.K.externalsecret-store). Empty disables the rule.
+	ESOAllowedStoreNames []string `json:"-"`
+
+	// EnvLabel* are the resolved settings for D3
+	// (XPC.E.fargate-claim-env-label): the required label key, the claim kinds
+	// it polices, and the permitted values. Populated by the IR builder from
+	// xpc.yaml's env-label block (or defaults).
+	EnvLabelKey           string   `json:"-"`
+	EnvLabelClaimKinds    []string `json:"-"`
+	EnvLabelAllowedValues []string `json:"-"`
+
+	// AllowedProviderConfigs is the resolved list of extra ProviderConfig
+	// names D1 (XPC.B.providerconfig-resolves) treats as resolvable even when
+	// not declared as manifests. Populated by the IR builder from xpc.yaml's
+	// allowed-provider-configs; empty by default (pure reference integrity).
+	AllowedProviderConfigs []string `json:"-"`
+
 	// ProdPatterns is the resolved substring list R25 should match
 	// ApplicationSet names against. Populated by the IR builder from the
 	// loaded *config.Config (or its Default()). Crosses to the kernel as
