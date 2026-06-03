@@ -27,6 +27,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/report"
 	"github.com/pyrex41/cross-validate-/pkg/snapshot"
 	"github.com/pyrex41/cross-validate-/pkg/types"
+	"github.com/pyrex41/cross-validate-/pkg/waiver"
 )
 
 const version = "0.2.0"
@@ -126,6 +127,11 @@ Check flags:
                        observe (default, narrow), partial, any (broadest)
   --focus=<preset>     Restrict to a curated rule subset. Presets:
                        all (default), inc6-floor (R23+R24+R25 only)
+  --waivers=<path>     Path to the accepted-risk register (default: upward
+                       search for .xpc-waivers.yaml; also XPC_WAIVERS_PATH)
+  --show-waived        List suppressed findings (to stderr) instead of just
+                       a count
+  --no-waivers         Ignore .xpc-waivers.yaml entirely (report everything)
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
@@ -209,6 +215,9 @@ func runCheck(args []string) int {
 	focusPreset := "all"
 	profileRules := false
 	profileOut := ""
+	waiversPath := os.Getenv("XPC_WAIVERS_PATH")
+	showWaived := false
+	noWaivers := false
 	var paths []string
 
 	for _, arg := range args {
@@ -243,6 +252,12 @@ func runCheck(args []string) int {
 			configPath = strings.TrimPrefix(arg, "--config=")
 		case strings.HasPrefix(arg, "--profile-out="):
 			profileOut = strings.TrimPrefix(arg, "--profile-out=")
+		case strings.HasPrefix(arg, "--waivers="):
+			waiversPath = strings.TrimPrefix(arg, "--waivers=")
+		case arg == "--show-waived":
+			showWaived = true
+		case arg == "--no-waivers":
+			noWaivers = true
 		case strings.HasPrefix(arg, "--ssa-mp-mode="):
 			val := strings.TrimPrefix(arg, "--ssa-mp-mode=")
 			switch val {
@@ -419,6 +434,37 @@ func runCheck(args []string) int {
 						})
 						kustSeen = true
 					}
+				}
+			}
+		}
+	}
+
+	// Apply accepted-risk waivers (.xpc-waivers.yaml). A matched, non-expired
+	// waiver drops its finding from the failing set; an expired waiver re-fires
+	// the finding plus a warning; an unused waiver surfaces an info. Suppressed
+	// findings stay auditable via the stderr summary and --show-waived, so the
+	// register is never a silent black hole.
+	if !noWaivers {
+		wv, err := waiver.Resolve(waiversPath, cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading waivers: %v\n", err)
+			return 1
+		}
+		if err := wv.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "error in %s: %v\n", waiver.CanonicalFileName, err)
+			return 1
+		}
+		if len(wv.Waivers) > 0 {
+			wres := wv.Apply(diags, time.Now())
+			diags = wres.Active
+			if len(wres.Waived) > 0 || wres.ExpiredCount > 0 || wres.UnusedCount > 0 {
+				fmt.Fprintf(os.Stderr, "waivers: %d suppressed, %d expired (re-firing), %d unused\n",
+					len(wres.Waived), wres.ExpiredCount, wres.UnusedCount)
+			}
+			if showWaived {
+				for _, d := range wres.Waived {
+					fmt.Fprintf(os.Stderr, "  waived %s %s:%d\n    %s\n",
+						d.Code, d.Source.File, d.Source.Line, d.Message)
 				}
 			}
 		}
@@ -1114,7 +1160,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.B.providerconfig-resolves, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.fargate-claim-env-label, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.K.externalsecret-store, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.B.providerconfig-resolves, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.fargate-claim-env-label, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.K.externalsecret-store, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan, XPC.W.waiver-expired, XPC.W.waiver-unused")
 		return 1
 	}
 
@@ -1287,6 +1333,25 @@ func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
 }
 
 var errorExplanations = map[string]string{
+	"XPC.W.waiver-expired": `XPC.W.waiver-expired: an accepted-risk waiver has expired (warning)
+
+A .xpc-waivers.yaml entry matched a finding but its expires_at date has passed.
+Expired waivers stop suppressing — the underlying finding re-fires — and this
+warning is emitted so the acceptance gets re-justified rather than silently
+living forever.
+
+Fix: either resolve the underlying finding, or (if it is still genuinely
+accepted) update the waiver's reason and push expires_at forward after a fresh
+review.`,
+
+	"XPC.W.waiver-unused": `XPC.W.waiver-unused: an accepted-risk waiver matched no finding (info)
+
+A .xpc-waivers.yaml entry did not match any current finding — usually because
+the underlying issue was fixed or the resource was removed. Keeping dead
+waivers around erodes trust in the register.
+
+Fix: remove the waiver from .xpc-waivers.yaml.`,
+
 	"XPC.K.externalsecret-store": `XPC.K.externalsecret-store: ExternalSecret references a non-allowed secret store
 
 An ExternalSecret's spec.secretStoreRef.name is not in the configured allowlist

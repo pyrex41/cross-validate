@@ -13,6 +13,7 @@ snippets fold in the fixes from the adoption planning review.
 | `.yamllint` | repo root | Layer-1 ruleset; ignores Helm-templated `*-values.yaml`. |
 | `gitlab-ci.validate-manifests.yml` | merge into `.gitlab-ci.yml` | Report-only MR gate: yamllint (Layer 1) + `xpc check` (Layer 3). |
 | `gitlab-ci.xpc-baseline.yml` | merge into `.gitlab-ci.yml` | Nightly `.xpcsnap` baseline artifact (Part B). |
+| `.xpc-waivers.yaml` | repo root | Accepted-risk register (example). Lets you flip the gate to blocking while known findings sit waived with a reason + expiry. |
 
 ## Prerequisite: publish an xpc release
 
@@ -38,8 +39,12 @@ eventually, but not required for this flow.
 3. Triage: fix or carve-out. Populate `allowed-provider-configs` from any
    `XPC.B.providerconfig-resolves` findings that are bootstrap/terraform-created
    (real but uncommitted) rather than typos.
-4. When clean, follow the CUTOVER note in `gitlab-ci.validate-manifests.yml` to
-   make it blocking.
+4. For findings you accept but can't fix now (e.g. the ~29 Postgres orphan
+   findings), add entries to `.xpc-waivers.yaml` with a reason + tracking ticket
+   + expiry. Waived findings drop out of the failing set, so you can go blocking
+   without fixing everything first — and expired waivers re-fire to force review.
+5. When the *unwaived* set is clean, follow the CUTOVER note in
+   `gitlab-ci.validate-manifests.yml` to make it blocking.
 
 ## Open decisions (in-file)
 

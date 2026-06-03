@@ -120,9 +120,17 @@ waivers:
 
 ### Identity
 
-A waiver matches a finding when `(rule, file, kind, name)` all match. Add `namespace` if the same kind+name appears in multiple namespaces. If the underlying resource changes substantially after the waiver was written, xpc will surface a *staleness warning* — re-justify rather than just bumping the date.
+A waiver matches a finding when its `rule` equals the diagnostic code, its `file` matches the source path (suffix / basename), and the diagnostic message contains `name` (and `kind`, when given). At least one of `file` or `name` is required, so a waiver can never blanket-suppress a whole rule. `namespace` is documentary.
 
-> **CLI status note**: a `xpc waive <code> <file>:<resource> --reason=...` shortcut and the `xpc check` waiver-honoring logic are landing as a follow-up. For now, the file is hand-edited and the format above is what xpc will read once that lands. The discipline (explicit reason, expires_at, user confirmation) does not change.
+`xpc check` honors `.xpc-waivers.yaml` automatically (upward search from cwd; override with `--waivers=<path>` or `XPC_WAIVERS_PATH`, disable with `--no-waivers`):
+
+- A matched, **non-expired** waiver drops its finding from the report and the exit code (CI passes).
+- An **expired** waiver does NOT suppress — the finding re-fires and a `XPC.W.waiver-expired` warning is emitted, so accepted-risk can't silently become permanent.
+- A waiver matching **no** finding surfaces a `XPC.W.waiver-unused` info — remove it.
+- Suppressed findings stay auditable: `xpc check` prints `waivers: N suppressed, …` to stderr, and `--show-waived` lists them.
+- A malformed waiver file (missing `rule` / `reason` / `expires_at`, or a bad date) is a hard error.
+
+> **Not yet implemented:** the `xpc waive <code> <file>:<resource> --reason=…` convenience command (hand-edit the file for now) and the content-hash *staleness warning* for a resource that changed after the waiver was written.
 
 ## PR / MR review
 

@@ -1,0 +1,45 @@
+# .xpc-waivers.yaml — fg-manifold accepted-risk register (STARTER / example).
+#
+# Goes at the fg-manifold repo root. `xpc check` discovers it automatically
+# (upward search), so a matched, non-expired waiver drops its finding from the
+# failing set while everything else stays enforced — this is what lets you flip
+# the CI gate to BLOCKING without first fixing every legacy finding.
+#
+# Discipline (enforced by xpc — a malformed entry fails the check):
+#   - rule + (file or name) + reason + expires_at are REQUIRED.
+#   - reason must explain WHY it's accepted (a sentence, not "because").
+#   - expires_at forces re-review. An expired waiver STOPS suppressing (the
+#     finding re-fires + a warning), so accepted-risk never silently sticks.
+#
+# Inspect first: `xpc explain <rule>`; see what's suppressed with
+# `xpc check --show-waived`; remove a waiver and the finding returns.
+
+waivers:
+  # ---- Example: the ~29 Postgres state-bearing findings the v0.1.0 run surfaced.
+  # These postgresql.sql.crossplane.io Database/Role/Grant resources declare no
+  # deletionPolicy. The real fix is to add `deletionPolicy: Orphan` (batch MR);
+  # until that lands, accept them with a tracking ticket and a short expiry.
+  #
+  # One entry per resource. Match on rule + name (+ file to disambiguate).
+  - rule: XPC.S.crossplane-state-needs-orphan
+    file: deploy/facilitygrid/ops/applications/signoz/aws/us-east-2/facilitygrid-ops/manifests/database.yaml
+    kind: Database
+    name: signoz   # <-- set to the resource's metadata.name
+    reason: |
+      Postgres DB for signoz lacks deletionPolicy: Orphan. Batched into the
+      INC-6 follow-up MR (TICKET-XXXX); runtime VAP blocks deletion meanwhile.
+    added_by: reuben
+    added_at: 2026-06-03
+    expires_at: 2026-09-01
+
+  # ---- Example: an intentionally-dangling mount (lazy bootstrap ConfigMap).
+  - rule: XPC012
+    file: deploy/facilitygrid/ops/applications/e2e-db-pool/aws/us-east-2/facilitygrid-ops/manifests/cronjob.yaml
+    kind: CronJob
+    name: e2e-pool-replenish
+    reason: |
+      pool-seed ConfigMap is created lazily by the e2e bootstrap job in a
+      sibling Application; the mount is intentional and the pod retries.
+    added_by: reuben
+    added_at: 2026-06-03
+    expires_at: 2026-09-01
