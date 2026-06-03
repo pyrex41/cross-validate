@@ -1,0 +1,15 @@
+# Bare taskDefinition (non-canonical) BUT managementPolicies omits Update, so
+# upjet never issues the external UpdateService — the non-canonical value
+# cannot drive a storm. R31 must stay silent (suppressed by managementPolicies).
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: Service
+metadata:
+  name: fg-preview-chart-service
+  namespace: crossplane-system
+spec:
+  managementPolicies:
+    - Observe
+  forProvider:
+    region: us-east-2
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service
+    launchType: FARGATE

@@ -1,0 +1,35 @@
+# Reproduces the MR !2232 pre-fix shape: a go-templating Composition that
+# assigns the ECS Service forProvider.taskDefinition to a hardcoded ARN literal
+# ending in the bare family name (no :revision). The rendered Service is never
+# committed (the composite XR is synthesized at runtime), so only Tier-2 (this
+# template scan) can see it. R31 must fire at warn severity.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateservice-preview
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateService
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $familyName := $xr.spec.name -}}
+            apiVersion: ecs.aws.upbound.io/v1beta1
+            kind: Service
+            metadata:
+              name: {{ $familyName }}
+            spec:
+              forProvider:
+                region: {{ $xr.spec.logRegion }}
+                taskDefinition: arn:aws:ecs:{{ $xr.spec.logRegion }}:362836553677:task-definition/{{ $familyName }}
+                launchType: FARGATE

@@ -153,6 +153,11 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// only pass that catches template syntax errors in repos where the
 	// composite XR is synthesized at runtime rather than committed.
 	b.checkCompositionTemplates()
+	// Category M Tier-2: flag registered canonical-form fields assigned to
+	// hardcoded non-canonical ARN literals in unrendered composition bodies
+	// (the MR !2232 shape, invisible to the resource-walk and live-snapshot
+	// tiers). Runs unconditionally like checkCompositionTemplates.
+	b.checkCompositionCanonicalForm()
 	// Inject virtual Secrets for ExternalSecret targets BEFORE trajectory
 	// enrichment so R12 (XPC012) treats operator-materialized Secrets as
 	// present in cluster state instead of false-firing on every ESO mount.

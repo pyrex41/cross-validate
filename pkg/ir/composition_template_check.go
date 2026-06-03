@@ -3,6 +3,7 @@ package ir
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"text/template"
 
 	"github.com/pyrex41/cross-validate-/pkg/types"
@@ -57,6 +58,95 @@ func (b *Builder) checkCompositionTemplates() {
 				})
 			}
 		}
+	}
+}
+
+// checkCompositionCanonicalForm scans every go-templating Composition body for
+// registered canonical-form fields (CanonicalFormRegistry) assigned to a
+// hardcoded, non-canonical ARN literal — the MR !2232 reconcile-storm shape.
+// This is category M Tier-2 (heuristic): in a GitOps repo the ECS Service is
+// produced by this Composition at runtime, so it never reaches World.Resources
+// (Tier-1) and has no live status (Tier-3); only the template text is here.
+//
+// The scan is deliberately conservative to keep false positives low — see
+// templateRHSNonCanonical. Findings are folded into R31 at warn severity.
+func (b *Builder) checkCompositionCanonicalForm() {
+	mappings := CanonicalFormRegistry()
+	if len(mappings) == 0 {
+		return
+	}
+	for _, comp := range b.world.Compositions {
+		for _, step := range comp.Pipeline {
+			if step.InputKind != "GoTemplate" {
+				continue
+			}
+			sc, ok := b.world.Schemas[step.InputDigest]
+			if !ok {
+				continue
+			}
+			inline, ok := sc.Schema["inline"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tmplText, ok := inline["template"].(string)
+			if !ok || tmplText == "" {
+				continue
+			}
+			for _, m := range mappings {
+				leaf := lastDotted(m.FieldPath)
+				re := regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(leaf) + `:[ \t]*(.*\S)[ \t]*$`)
+				for _, sub := range re.FindAllStringSubmatch(tmplText, -1) {
+					rhs := sub[1]
+					if !templateRHSNonCanonical(m.Detector, rhs) {
+						continue
+					}
+					b.world.CanonicalFormTemplateFindings = append(b.world.CanonicalFormTemplateFindings,
+						types.CanonicalFormTemplateFinding{
+							Composition: comp.Name,
+							Group:       m.Group,
+							Kind:        m.Kind,
+							Field:       leaf,
+							RHS:         rhs,
+							Canonical:   m.Canonical,
+							Reason:      m.Reason,
+							Source:      comp.Source,
+						})
+				}
+			}
+		}
+	}
+}
+
+// templateRHSNonCanonical reports whether a Composition template's right-hand
+// side for a registered field is a hardcoded non-canonical literal.
+//
+// For "arn-requires-revision" the discriminator that separates the MR !2232 bug
+// from its fix:
+//   - BAD  taskDefinition: arn:aws:ecs:{{ $region }}:...:task-definition/{{ $familyName }}
+//     a hardcoded ARN literal — the segment after the last "/" carries no
+//     ":revision".
+//   - GOOD taskDefinition: {{ $taskDefArn | default (printf "...") }}
+//     a value computed entirely by a template action (the fix resolves the
+//     versioned ARN from the observed TaskDefinition). A pure "{{ ... }}" RHS,
+//     or any RHS that mentions atProvider, is assumed resolved and not flagged.
+//
+// Consequence: a composition that computes an unversioned value entirely inside
+// "{{ ... }}" is a miss here (Tier-1/Tier-3 catch the rendered/live form). That
+// is the intended trade — Tier-2 only flags what it can see with confidence.
+func templateRHSNonCanonical(detector, rhs string) bool {
+	rhs = strings.TrimSpace(rhs)
+	switch detector {
+	case "arn-requires-revision":
+		if strings.HasPrefix(rhs, "{{") || strings.Contains(rhs, "atProvider") {
+			return false
+		}
+		i := strings.LastIndex(rhs, "/")
+		if i < 0 {
+			return false
+		}
+		return !strings.Contains(rhs[i+1:], ":")
+	default:
+		return false
 	}
 }
 
