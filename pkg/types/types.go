@@ -861,6 +861,103 @@ type LateInitUsage struct {
 	Source            SourceLocation `json:"source"`
 }
 
+// CanonicalFormMapping is a registry row in category M (Convergence /
+// steady-state). It names a (Group, Kind, FieldPath) whose forProvider value
+// the provider canonicalizes on read-back, so a non-canonical literal causes
+// a permanent upjet diff: desired never equals observed, every reconcile
+// re-issues the external Update, and the control loop storms. Distinct from
+// LateInitMapping (Argo-vs-Crossplane drift) — this is upjet-vs-cloud, and
+// the remedy is a canonical value or a managementPolicies that omits Update,
+// NOT an Argo ignoreDifferences entry.
+//
+// Detector is the classifier id applied to the field value:
+//   - "arn-requires-revision": the segment after the last "/" (or the whole
+//     scalar) must contain a ":" version/revision suffix. Catches ECS Service
+//     taskDefinition set to a bare family/ARN with no :revision.
+type CanonicalFormMapping struct {
+	Group     string `json:"group"`
+	Kind      string `json:"kind"`
+	FieldPath string `json:"fieldPath"`
+	Detector  string `json:"detector"`
+	Canonical string `json:"canonical"`
+	Reason    string `json:"reason"`
+}
+
+// CanonicalFormUsage records a concrete resource that sets a registered
+// canonical-form field, with the value and the static verdicts the kernel
+// needs. Populated by extractCanonicalFormUsages (Tier-1, static). The Go
+// layer pre-decides NonCanonical / UpdateDisabled / Bypass; the bridge folds
+// them into a violation only when actionable, mirroring R21.
+type CanonicalFormUsage struct {
+	ResourceGroup     string `json:"resourceGroup"`
+	ResourceKind      string `json:"resourceKind"`
+	ResourceName      string `json:"resourceName"`
+	ResourceNamespace string `json:"resourceNamespace,omitempty"`
+	FieldPath         string `json:"fieldPath"`
+	Value             string `json:"value"`
+	Canonical         string `json:"canonical"`
+	Reason            string `json:"reason"`
+	// NonCanonical is true when Value is present and fails the detector.
+	NonCanonical bool `json:"nonCanonical"`
+	// UpdateDisabled is true when spec.managementPolicies is present and omits
+	// both "*" and "Update": upjet will not call the external Update, so the
+	// non-canonical value cannot drive a storm. Suppresses the violation.
+	UpdateDisabled bool `json:"updateDisabled"`
+	// Bypass is true when an explicit opt-out annotation is set.
+	Bypass bool           `json:"bypass"`
+	Source SourceLocation `json:"source"`
+}
+
+// CanonicalFormTemplateFinding records a registered canonical-form field that a
+// go-templating Composition assigns to a hardcoded, non-canonical ARN literal
+// (Tier-2, heuristic). This is the path that catches MR !2232 at CI time: the
+// ECS Service is produced by a Composition rendered at runtime, so it is absent
+// from World.Resources (Tier-1 sees nothing) and has no live status (Tier-3
+// sees nothing) — only the template text is available. Populated by
+// Builder.checkCompositionCanonicalForm; folded into the R31
+// (XPC.M.forprovider-canonical-form) diagnostics at warn severity, since a
+// textual scan of an unrendered template cannot be as certain as a concrete
+// value.
+type CanonicalFormTemplateFinding struct {
+	Composition string         `json:"composition"`
+	Group       string         `json:"group"`
+	Kind        string         `json:"kind"`
+	Field       string         `json:"field"`
+	RHS         string         `json:"rhs"`
+	Canonical   string         `json:"canonical"`
+	Reason      string         `json:"reason"`
+	Source      SourceLocation `json:"source"`
+}
+
+// FixedPointUsage records, for one managed resource captured from a live
+// cluster, a forProvider leaf whose value diverges from the corresponding
+// status.atProvider leaf. This is the Tier-3 (dynamic) storm fingerprint:
+// desired != observed on a field, captured from reality rather than
+// predicted. Populated by extractFixedPointUsages, which only finds anything
+// when status-bearing Resources are present (a --from-cluster snapshot merged
+// via mergeSnapshotIntoWorld); on plain disk manifests atProvider is absent
+// and no rows are produced.
+type FixedPointUsage struct {
+	ResourceGroup     string `json:"resourceGroup"`
+	ResourceKind      string `json:"resourceKind"`
+	ResourceName      string `json:"resourceName"`
+	ResourceNamespace string `json:"resourceNamespace,omitempty"`
+	// FieldPath is the leaf path under spec.forProvider (e.g.
+	// "spec.forProvider.taskDefinition").
+	FieldPath string `json:"fieldPath"`
+	Desired   string `json:"desired"`  // forProvider value
+	Observed  string `json:"observed"` // atProvider value
+	// Registered is true when (Group,Kind,leaf) is in the canonical-form
+	// registry: a known-non-convergent field, so a single-snapshot divergence
+	// is already conclusive (error). Unregistered divergences are the
+	// high-recall long tail (warn; confirm with a second snapshot).
+	Registered bool `json:"registered"`
+	// UpdateDisabled mirrors CanonicalFormUsage: managementPolicies omitting
+	// Update means no external Update fires, so the divergence cannot storm.
+	UpdateDisabled bool           `json:"updateDisabled"`
+	Source         SourceLocation `json:"source"`
+}
+
 // SSAMPConflict records a potential interaction between Argo CD's
 // ServerSideApply sync option and a managed resource's managementPolicies
 // declaration. R22 (XPC.E.ssa-managementpolicies-*) joins these per
@@ -954,6 +1051,28 @@ type World struct {
 	// LateInitUsages records every resource that declares a value at a
 	// late-init field path. Populated by EnrichTrajectoryData.
 	LateInitUsages []LateInitUsage `json:"-"`
+
+	// CanonicalFormMappings is the static registry of provider-canonicalized
+	// forProvider fields (category M). Populated from
+	// pkg/ir/canonical_form_registry.go; not extracted from YAML.
+	CanonicalFormMappings []CanonicalFormMapping `json:"-"`
+
+	// CanonicalFormUsages records every resource that sets a registered
+	// canonical-form field (Tier-1, static). Populated by EnrichTrajectoryData
+	// and consumed by Shen rule R31 (XPC.M.forprovider-canonical-form).
+	CanonicalFormUsages []CanonicalFormUsage `json:"-"`
+
+	// CanonicalFormTemplateFindings records registered canonical-form fields
+	// assigned to hardcoded non-canonical ARN literals in go-templating
+	// Composition bodies (Tier-2, heuristic). Populated by
+	// Builder.checkCompositionCanonicalForm; folded into R31 at warn severity.
+	CanonicalFormTemplateFindings []CanonicalFormTemplateFinding `json:"-"`
+
+	// FixedPointUsages records forProvider/atProvider divergences observed on
+	// live (status-bearing) resources (Tier-3, dynamic). Populated by
+	// EnrichTrajectoryData and consumed by Shen rule R32
+	// (XPC.M.observed-desired-fixed-point).
+	FixedPointUsages []FixedPointUsage `json:"-"`
 
 	// ResourceFieldFacts records every schema-validation violation detected
 	// while walking a concrete manifest against its CRD/XRD schema. Populated

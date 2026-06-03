@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/pyrex41/cross-validate-/pkg/config"
@@ -48,6 +49,9 @@ func EnrichTrajectoryData(w *types.World) {
 	extractSelectorUsages(w)
 	w.LateInitMappings = LateInitRegistry()
 	extractLateInitUsages(w)
+	w.CanonicalFormMappings = CanonicalFormRegistry()
+	extractCanonicalFormUsages(w)
+	extractFixedPointUsages(w)
 	extractSSAMPConflicts(w)
 	extractCPDeletionPolicyFacts(w)
 }
@@ -165,6 +169,220 @@ func extractLateInitUsages(w *types.World) {
 			}
 		}
 	}
+}
+
+// allowNonCanonicalAnnotation is the explicit opt-out for R31/R32: a resource
+// annotated with this key (truthy value) is exempt from the canonical-form and
+// fixed-point checks. Mirrors the bypass-annotation pattern used by R23.
+const allowNonCanonicalAnnotation = "xpc.io/allow-noncanonical"
+
+// extractCanonicalFormUsages populates w.CanonicalFormUsages (Tier-1, static)
+// by joining w.CanonicalFormMappings against each resource's Raw map. For each
+// registered (Group, Kind, FieldPath) it reads the scalar value, classifies it
+// against the mapping's Detector, and records the managementPolicies / bypass
+// verdicts the kernel needs. Works on any concrete managed resource present in
+// the World — a raw committed MR or one produced by Helm/Crossplane render.
+func extractCanonicalFormUsages(w *types.World) {
+	type gk struct{ group, kind string }
+	index := make(map[gk][]types.CanonicalFormMapping)
+	for _, m := range w.CanonicalFormMappings {
+		index[gk{m.Group, m.Kind}] = append(index[gk{m.Group, m.Kind}], m)
+	}
+
+	for _, res := range w.Resources {
+		resGroup := groupFromAPIVersion(res.APIVersion)
+		mappings, ok := index[gk{resGroup, res.Kind}]
+		if !ok {
+			continue
+		}
+		updDisabled := managementUpdateDisabled(getMap(res.Raw, "spec"))
+		bypass := annotationTruthy(res.Annotations, allowNonCanonicalAnnotation)
+		for _, m := range mappings {
+			for _, hit := range WalkPath(res.Raw, m.FieldPath) {
+				val, ok := scalarString(hit.Value)
+				if !ok || val == "" {
+					// Field absent or non-scalar (e.g. a value xpc cannot read
+					// because it is still a Composition template). Emit no usage
+					// — Tier-2 handles the unrendered-template case.
+					continue
+				}
+				w.CanonicalFormUsages = append(w.CanonicalFormUsages, types.CanonicalFormUsage{
+					ResourceGroup:     resGroup,
+					ResourceKind:      res.Kind,
+					ResourceName:      res.Name,
+					ResourceNamespace: res.Namespace,
+					FieldPath:         hit.Path,
+					Value:             val,
+					Canonical:         m.Canonical,
+					Reason:            m.Reason,
+					NonCanonical:      failsCanonicalDetector(m.Detector, val),
+					UpdateDisabled:    updDisabled,
+					Bypass:            bypass,
+					Source:            res.Source,
+				})
+			}
+		}
+	}
+}
+
+// extractFixedPointUsages populates w.FixedPointUsages (Tier-3, dynamic) by
+// comparing each managed resource's spec.forProvider leaves against the
+// matching status.atProvider leaves. A scalar string leaf present in both but
+// holding different values is the reconcile-storm fingerprint: desired never
+// converges to observed. Only fires on status-bearing resources (a
+// --from-cluster snapshot merged into the World); on disk manifests
+// status.atProvider is absent and this produces nothing.
+//
+// A leaf whose (Group, Kind, leaf) is in the canonical-form registry is marked
+// Registered: a known-non-convergent field, conclusive from a single snapshot
+// (the kernel escalates it to error). Unregistered divergences are the
+// high-recall long tail the registry does not know about (warn — confirm with
+// a second snapshot, since a single snapshot cannot distinguish a storm from a
+// resource mid-update).
+func extractFixedPointUsages(w *types.World) {
+	type gkl struct{ group, kind, leaf string }
+	registered := make(map[gkl]bool)
+	for _, m := range w.CanonicalFormMappings {
+		registered[gkl{m.Group, m.Kind, leafSeg(m.FieldPath)}] = true
+	}
+
+	for _, res := range w.Resources {
+		spec := getMap(res.Raw, "spec")
+		forProvider := getMap(spec, "forProvider")
+		status := getMap(res.Raw, "status")
+		atProvider := getMap(status, "atProvider")
+		if len(forProvider) == 0 || len(atProvider) == 0 {
+			continue
+		}
+		resGroup := groupFromAPIVersion(res.APIVersion)
+		updDisabled := managementUpdateDisabled(spec)
+		bypass := annotationTruthy(res.Annotations, allowNonCanonicalAnnotation)
+		if bypass {
+			continue
+		}
+
+		desired := map[string]string{}
+		flattenStringLeaves("", forProvider, desired)
+		observed := map[string]string{}
+		flattenStringLeaves("", atProvider, observed)
+
+		for leaf, dv := range desired {
+			ov, ok := observed[leaf]
+			if !ok || dv == ov {
+				continue
+			}
+			w.FixedPointUsages = append(w.FixedPointUsages, types.FixedPointUsage{
+				ResourceGroup:     resGroup,
+				ResourceKind:      res.Kind,
+				ResourceName:      res.Name,
+				ResourceNamespace: res.Namespace,
+				FieldPath:         "spec.forProvider." + leaf,
+				Desired:           dv,
+				Observed:          ov,
+				Registered:        registered[gkl{resGroup, res.Kind, lastDotted(leaf)}],
+				UpdateDisabled:    updDisabled,
+				Source:            res.Source,
+			})
+		}
+	}
+}
+
+// failsCanonicalDetector reports whether value violates the named detector.
+func failsCanonicalDetector(detector, value string) bool {
+	switch detector {
+	case "arn-requires-revision":
+		// The identifying segment (after the last "/", or the whole scalar) must
+		// carry a ":revision" suffix. "arn:aws:ecs:..." has colons in the
+		// service prefix, so only the post-"/" segment is examined.
+		seg := value
+		if i := strings.LastIndex(value, "/"); i >= 0 {
+			seg = value[i+1:]
+		}
+		return !strings.Contains(seg, ":")
+	default:
+		return false
+	}
+}
+
+// managementUpdateDisabled reports whether spec.managementPolicies is present
+// and omits both "*" and "Update". When so, upjet never calls the external
+// Update, so a non-canonical forProvider value cannot drive a storm. An absent
+// managementPolicies field defaults to ["*"] (full management) → not disabled.
+func managementUpdateDisabled(spec map[string]interface{}) bool {
+	raw, ok := spec["managementPolicies"]
+	if !ok {
+		return false
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, p := range list {
+		s, _ := p.(string)
+		if s == "*" || s == "Update" {
+			return false
+		}
+	}
+	return true
+}
+
+// annotationTruthy reports whether annotations[key] is set to a truthy value.
+func annotationTruthy(annotations map[string]string, key string) bool {
+	v, ok := annotations[key]
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// scalarString returns the string form of v when v is a scalar string (the
+// only shape normalization bites in practice); ("", false) otherwise.
+func scalarString(v interface{}) (string, bool) {
+	s, ok := v.(string)
+	return s, ok
+}
+
+// flattenStringLeaves recursively walks a decoded map and records every scalar
+// string leaf under its dotted path (arrays use [i] indices). Non-string
+// scalars and container nodes are skipped — see extractFixedPointUsages.
+func flattenStringLeaves(prefix string, m map[string]interface{}, out map[string]string) {
+	for k, v := range m {
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		switch t := v.(type) {
+		case string:
+			out[path] = t
+		case map[string]interface{}:
+			flattenStringLeaves(path, t, out)
+		case []interface{}:
+			for i, e := range t {
+				ip := path + "[" + strconv.Itoa(i) + "]"
+				if sub, ok := e.(map[string]interface{}); ok {
+					flattenStringLeaves(ip, sub, out)
+				} else if s, ok := e.(string); ok {
+					out[ip] = s
+				}
+			}
+		}
+	}
+}
+
+// leafSeg / lastDotted return the last dotted segment of a path. leafSeg
+// strips array indices from its input first ("a.b[0].c" → "c").
+func leafSeg(path string) string { return lastDotted(path) }
+
+func lastDotted(path string) string {
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // groupFromAPIVersion extracts the API group from an APIVersion string.

@@ -1,0 +1,14 @@
+# Same Service but taskDefinition carries the :revision suffix AWS echoes back
+# (the MR !2232 fix resolves this from the observed TaskDefinition). The value
+# is a fixed point of the read-back → no storm → R31 must stay silent.
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: Service
+metadata:
+  name: fg-preview-chart-service
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-2
+    cluster: arn:aws:ecs:us-east-2:362836553677:cluster/preview
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service:42
+    launchType: FARGATE

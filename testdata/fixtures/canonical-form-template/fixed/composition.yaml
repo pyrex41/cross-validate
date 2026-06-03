@@ -1,0 +1,39 @@
+# The MR !2232 fix: taskDefinition is computed entirely inside a template
+# action, resolving the versioned ARN from the observed TaskDefinition (the
+# $taskDefArn variable, populated from .observed...status.atProvider.arn). A
+# pure "{{ ... }}" RHS is assumed resolved, so Tier-2 must stay silent.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateservice-preview
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateService
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $familyName := $xr.spec.name -}}
+            {{- $taskDefArn := "" -}}
+            {{- if .observed.resources -}}
+              {{- $td := index .observed.resources "task-definition" -}}
+              {{- if $td -}}{{- $taskDefArn = $td.resource.status.atProvider.arn | default "" -}}{{- end -}}
+            {{- end -}}
+            apiVersion: ecs.aws.upbound.io/v1beta1
+            kind: Service
+            metadata:
+              name: {{ $familyName }}
+            spec:
+              forProvider:
+                region: {{ $xr.spec.logRegion }}
+                taskDefinition: {{ $taskDefArn | default (printf "arn:aws:ecs:%s:362836553677:task-definition/%s" $xr.spec.logRegion $familyName) }}
+                launchType: FARGATE

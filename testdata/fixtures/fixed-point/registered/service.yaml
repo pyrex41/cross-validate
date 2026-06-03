@@ -1,0 +1,17 @@
+# A live (status-bearing) ECS Service captured from a storming cluster:
+# spec.forProvider.taskDefinition (bare) diverges from the observed
+# status.atProvider.taskDefinition (versioned). taskDefinition is in the
+# canonical-form registry → a single snapshot is conclusive → R32 error.
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: Service
+metadata:
+  name: fg-preview-chart-service
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-2
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service
+    launchType: FARGATE
+status:
+  atProvider:
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service:42
