@@ -1,0 +1,19 @@
+# A live Service whose taskDefinition is canonical (matches the read-back), but
+# a different forProvider field (cluster) diverges from status.atProvider. That
+# leaf is NOT in the registry — the high-recall long tail — so R32 fires at
+# warn severity (a single snapshot cannot rule out a transient mid-update).
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: Service
+metadata:
+  name: fg-preview-other-service
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-2
+    cluster: arn:aws:ecs:us-east-2:362836553677:cluster/preview-blue
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-other-service:7
+    launchType: FARGATE
+status:
+  atProvider:
+    cluster: arn:aws:ecs:us-east-2:362836553677:cluster/preview-green
+    taskDefinition: arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-other-service:7

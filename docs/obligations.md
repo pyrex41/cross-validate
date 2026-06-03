@@ -214,6 +214,57 @@ versions marked not-served.
 
 **Absorbs**: R11
 
+### M: Convergence / steady-state obligations
+
+**Scope**: `(managed-resource x normalization-rule)`.
+
+Catch configuration whose control loop can never reach a fixed point. Some
+upjet-generated provider fields are canonicalized by the cloud on read-back
+(e.g. ECS `Service.spec.forProvider.taskDefinition` is echoed as
+`family:revision`). Writing a non-canonical literal makes desired `!=` observed
+forever: upjet re-issues the external Update on every reconcile and the status
+write conflicts with the poll loop — a self-sustaining **reconcile storm**
+(fg-manifold MR !2232). This is distinct from category E / late-init
+(Argo-vs-Crossplane): here the fight is **upjet-vs-cloud**, so an Argo
+`ignoreDifferences` entry does nothing. The invariant: every registered
+forProvider field is a **fixed point** of the provider's read-back, OR the
+field is excluded from the external Update via `managementPolicies`.
+
+The category is checked at three escalating tiers, all under the same code
+family, so coverage degrades gracefully with how much context is available:
+
+- **Tier 1 — static (resource walk).** A registry of normalization-prone
+  `(group, kind, field, detector)` rows (`pkg/ir/canonical_form_registry.go`,
+  seeded from storm-fixing MRs exactly like the R21 late-init registry). Every
+  concrete managed resource — a raw committed MR or a rendered one — is checked;
+  a non-canonical value that upjet would actually push fires at **error**.
+- **Tier 2 — heuristic (composition template scan).** In a GitOps repo the
+  resource is produced by a Composition rendered at runtime, so it is absent
+  from the resource set and has no live status. A textual scan of the unrendered
+  go-templating body flags registered fields assigned to hardcoded non-canonical
+  ARN literals at **warn** (a value computed entirely inside `{{ ... }}`, or one
+  that mentions `atProvider`, is assumed resolved and not flagged).
+- **Tier 3 — dynamic (live snapshot).** On a `--from-cluster` snapshot merged
+  into the World, compare every `spec.forProvider.*` leaf against the matching
+  `status.atProvider.*` leaf. A persistent divergence is the storm fingerprint
+  captured from reality. A registered field is conclusive from one snapshot
+  (**error**); the unregistered long tail is **warn** (confirm with a second
+  snapshot, since one cannot distinguish a storm from a resource mid-update).
+
+**Generators**:
+- `forprovider-canonical-form` -- registered forProvider field holds a
+  non-canonical literal, not excluded from Update (**implemented** — R31 /
+  `XPC.M.forprovider-canonical-form`; Tier-1 resource walk at error, Tier-2
+  composition-template scan at warn; registry seeded from fg-manifold MR !2232;
+  bypass `xpc.io/allow-noncanonical`)
+- `observed-desired-fixed-point` -- live `forProvider` leaf diverges from its
+  `status.atProvider` counterpart (**implemented** — R32 /
+  `XPC.M.observed-desired-fixed-point`; Tier-3, registry-aware severity; only
+  fires on status-bearing resources from a `--from-cluster` snapshot)
+
+**Absorbs**: (new — static + dynamic floor for the Crossplane reconcile-storm
+failure mode; fg-manifold MR !2232)
+
 ## Error codes
 
 Legacy codes `XPC001`-`XPC014` remain as aliases. `XPC012`, `XPC013`, and

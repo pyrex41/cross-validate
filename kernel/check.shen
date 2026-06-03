@@ -42,6 +42,8 @@
 (load "r28-providerconfig-resolves.shen")
 (load "r29-fargate-claim-env-label.shen")
 (load "r30-externalsecret-store.shen")
+(load "r31-forprovider-canonical-form.shen")
+(load "r32-observed-desired-fixed-point.shen")
 
 \* ===== IR reading ===== *\
 
@@ -126,6 +128,8 @@
          R28Violations (extract-section providerconfig-ref-violations Sections)
          R29Violations (extract-section fargate-env-label-violations Sections)
          R30Violations (extract-section eso-store-violations Sections)
+         R31Violations (extract-section canonical-form-violations Sections)
+         R32Violations (extract-section fixed-point-violations Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -167,10 +171,12 @@
          R28 (if (rule-allowed? "XPC.B.providerconfig-resolves" Allowlist) (mark-rule "XPC.B.providerconfig-resolves" (check-r28 R28Violations)) [])
          R29 (if (rule-allowed? "XPC.E.fargate-claim-env-label" Allowlist) (mark-rule "XPC.E.fargate-claim-env-label" (check-r29 R29Violations)) [])
          R30 (if (rule-allowed? "XPC.K.externalsecret-store" Allowlist) (mark-rule "XPC.K.externalsecret-store" (check-r30 R30Violations)) [])
+         R31 (if (rule-allowed? "XPC.M.forprovider-canonical-form" Allowlist) (mark-rule "XPC.M.forprovider-canonical-form" (check-r31 R31Violations)) [])
+         R32 (if (rule-allowed? "XPC.M.observed-desired-fixed-point" Allowlist) (mark-rule "XPC.M.observed-desired-fixed-point" (check-r32 R32Violations)) [])
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 R30)))))))))))))))))))))))))))))
+          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 (append R30 (append R31 R32)))))))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

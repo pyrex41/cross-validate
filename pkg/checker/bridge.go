@@ -386,6 +386,8 @@ func allRuleGroups() []ruleGroup {
 		{Name: "R23", Codes: []string{"XPC.S.crossplane-state-needs-orphan"}},
 		{Name: "R24", Codes: []string{"XPC.E.appset-finalizer-without-preserve"}},
 		{Name: "R25", Codes: []string{"XPC.E.prod-appset-autosync"}},
+		{Name: "R31", Codes: []string{"XPC.M.forprovider-canonical-form"}},
+		{Name: "R32", Codes: []string{"XPC.M.observed-desired-fixed-point"}},
 	}
 }
 
@@ -643,6 +645,10 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 	r15Violations := buildR15Violations(w)
 	r16Violations := buildR16Violations(w.SelectorUsages, ignoreDiffEntries)
 	r21Violations := buildR21Violations(w.LateInitUsages, ignoreDiffEntries)
+	canonicalFormViolations := buildCanonicalFormViolations(w.CanonicalFormUsages)
+	canonicalFormViolations = append(canonicalFormViolations,
+		buildCanonicalFormTemplateViolations(w.CanonicalFormTemplateFindings)...)
+	fixedPointViolations := buildFixedPointViolations(w.FixedPointUsages)
 	providerConfigRefViolations := buildProviderConfigRefViolations(w)
 	fargateEnvLabelViolations := buildFargateEnvLabelViolations(w)
 	esoStoreViolations := buildESOStoreViolations(w)
@@ -736,6 +742,8 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		sortedSection("r15-violations", r15Violations, r15ViolationCmp, r15ViolationToObj),
 		sortedSection("r16-violations", r16Violations, r16ViolationCmp, r16ViolationToObj),
 		sortedSection("r21-violations", r21Violations, r21ViolationCmp, r21ViolationToObj),
+		sortedSection("canonical-form-violations", canonicalFormViolations, r31ViolationCmp, r31ViolationToObj),
+		sortedSection("fixed-point-violations", fixedPointViolations, r32ViolationCmp, r32ViolationToObj),
 		sortedSection("providerconfig-ref-violations", providerConfigRefViolations, providerConfigRefViolationCmp, providerConfigRefViolationToObj),
 		sortedSection("fargate-env-label-violations", fargateEnvLabelViolations, fargateEnvLabelViolationCmp, fargateEnvLabelViolationToObj),
 		sortedSection("eso-store-violations", esoStoreViolations, esoStoreViolationCmp, esoStoreViolationToObj),
@@ -1469,6 +1477,129 @@ func r21ViolationToObj(v r21Violation) kl.Obj {
 		sym("r21-violation"),
 		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
 		str(v.FieldPath), str(v.Leaf), sourceToObj(v.Source),
+	})
+}
+
+// ── R31 / XPC.M.forprovider-canonical-form (Tier-1, static) ──────────────────
+
+type r31Violation struct {
+	Group, Kind, Name, Namespace string
+	FieldPath, Value, Canonical  string
+	Reason                       string
+	// Heuristic marks a Tier-2 finding (an unrendered composition template
+	// scan) vs a Tier-1 finding (a concrete resource value). The kernel
+	// renders heuristic findings at warn severity, concrete ones at error.
+	Heuristic bool
+	Source    types.SourceLocation
+}
+
+// buildCanonicalFormViolations folds CanonicalFormUsages into the actionable
+// set: a usage fires only when the value is non-canonical AND upjet would
+// actually issue the external Update (managementPolicies does not disable it)
+// AND no explicit bypass annotation opts it out.
+func buildCanonicalFormViolations(usages []types.CanonicalFormUsage) []r31Violation {
+	var out []r31Violation
+	for _, u := range usages {
+		if !u.NonCanonical || u.UpdateDisabled || u.Bypass {
+			continue
+		}
+		out = append(out, r31Violation{
+			Group: u.ResourceGroup, Kind: u.ResourceKind,
+			Name: u.ResourceName, Namespace: u.ResourceNamespace,
+			FieldPath: u.FieldPath, Value: u.Value, Canonical: u.Canonical,
+			Reason: u.Reason, Source: u.Source,
+		})
+	}
+	return out
+}
+
+// buildCanonicalFormTemplateViolations turns Tier-2 composition-template
+// findings into r31Violations marked Heuristic (warn). Name carries the
+// Composition; FieldPath is the leaf; Value is the offending RHS snippet.
+func buildCanonicalFormTemplateViolations(findings []types.CanonicalFormTemplateFinding) []r31Violation {
+	var out []r31Violation
+	for _, f := range findings {
+		out = append(out, r31Violation{
+			Group: f.Group, Kind: f.Kind, Name: f.Composition,
+			FieldPath: f.Field, Value: f.RHS, Canonical: f.Canonical,
+			Reason: f.Reason, Heuristic: true, Source: f.Source,
+		})
+	}
+	return out
+}
+
+func r31ViolationCmp(a, b r31Violation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.FieldPath, b.FieldPath)
+}
+
+func r31ViolationToObj(v r31Violation) kl.Obj {
+	originSym := "origin-resource"
+	if v.Heuristic {
+		originSym = "origin-template"
+	}
+	return makeList([]kl.Obj{
+		sym("r31-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.FieldPath), str(v.Value), str(v.Canonical), str(v.Reason),
+		sym(originSym),
+		sourceToObj(v.Source),
+	})
+}
+
+// ── R32 / XPC.M.observed-desired-fixed-point (Tier-3, dynamic) ───────────────
+
+type r32Violation struct {
+	Group, Kind, Name, Namespace string
+	FieldPath, Desired, Observed string
+	Registered                   bool
+	Source                       types.SourceLocation
+}
+
+// buildFixedPointViolations drops divergences that cannot storm (Update
+// disabled). Registered carries through so the kernel escalates known-non-
+// convergent fields to error and leaves the unregistered long tail at warn.
+func buildFixedPointViolations(usages []types.FixedPointUsage) []r32Violation {
+	var out []r32Violation
+	for _, u := range usages {
+		if u.UpdateDisabled {
+			continue
+		}
+		out = append(out, r32Violation{
+			Group: u.ResourceGroup, Kind: u.ResourceKind,
+			Name: u.ResourceName, Namespace: u.ResourceNamespace,
+			FieldPath: u.FieldPath, Desired: u.Desired, Observed: u.Observed,
+			Registered: u.Registered, Source: u.Source,
+		})
+	}
+	return out
+}
+
+func r32ViolationCmp(a, b r32Violation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.FieldPath, b.FieldPath)
+}
+
+func r32ViolationToObj(v r32Violation) kl.Obj {
+	regSym := "registered-no"
+	if v.Registered {
+		regSym = "registered-yes"
+	}
+	return makeList([]kl.Obj{
+		sym("r32-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.FieldPath), str(v.Desired), str(v.Observed), sym(regSym),
+		sourceToObj(v.Source),
 	})
 }
 
