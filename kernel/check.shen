@@ -39,6 +39,9 @@
 (load "r23-crossplane-state-needs-orphan.shen")
 (load "r24-appset-finalizer-without-preserve.shen")
 (load "r25-prod-appset-autosync.shen")
+(load "r28-providerconfig-resolves.shen")
+(load "r29-fargate-claim-env-label.shen")
+(load "r30-externalsecret-store.shen")
 
 \* ===== IR reading ===== *\
 
@@ -120,6 +123,9 @@
          R15Violations (extract-section r15-violations Sections)
          R16Violations (extract-section r16-violations Sections)
          R21Violations (extract-section r21-violations Sections)
+         R28Violations (extract-section providerconfig-ref-violations Sections)
+         R29Violations (extract-section fargate-env-label-violations Sections)
+         R30Violations (extract-section eso-store-violations Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -158,10 +164,13 @@
          R23 (if (rule-allowed? "XPC.S.crossplane-state-needs-orphan" Allowlist) (mark-rule "XPC.S.crossplane-state-needs-orphan" (check-r23 CPDeletionPolicyFacts R23Carveouts)) [])
          R24 (if (rule-allowed? "XPC.E.appset-finalizer-without-preserve" Allowlist) (mark-rule "XPC.E.appset-finalizer-without-preserve" (check-r24 AppSetFinalizerFacts)) [])
          R25 (if (rule-allowed? "XPC.E.prod-appset-autosync" Allowlist) (mark-rule "XPC.E.prod-appset-autosync" (check-r25 AppSetAutosyncFacts ProdPatterns)) [])
+         R28 (if (rule-allowed? "XPC.B.providerconfig-resolves" Allowlist) (mark-rule "XPC.B.providerconfig-resolves" (check-r28 R28Violations)) [])
+         R29 (if (rule-allowed? "XPC.E.fargate-claim-env-label" Allowlist) (mark-rule "XPC.E.fargate-claim-env-label" (check-r29 R29Violations)) [])
+         R30 (if (rule-allowed? "XPC.K.externalsecret-store" Allowlist) (mark-rule "XPC.K.externalsecret-store" (check-r30 R30Violations)) [])
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 R25))))))))))))))))))))))))))
+          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 R30)))))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

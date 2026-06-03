@@ -1,0 +1,40 @@
+# Declared ProviderConfigs — the resolvable name set.
+apiVersion: aws.upbound.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: prod-account
+spec:
+  credentials:
+    source: IRSA
+---
+apiVersion: mysql.sql.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: aurora-prod-mysql
+spec:
+  credentials:
+    source: None
+---
+# GOOD: references a declared ProviderConfig → no diagnostic.
+apiVersion: rds.aws.upbound.io/v1beta2
+kind: Cluster
+metadata:
+  name: aurora-prod-cluster
+spec:
+  deletionPolicy: Orphan
+  providerConfigRef:
+    name: prod-account
+  forProvider:
+    region: us-east-2
+---
+# BAD: typo'd providerConfigRef → names nothing → XPC.B.providerconfig-resolves.
+apiVersion: rds.aws.upbound.io/v1beta2
+kind: Cluster
+metadata:
+  name: aurora-typo-cluster
+spec:
+  deletionPolicy: Orphan
+  providerConfigRef:
+    name: prod-accout
+  forProvider:
+    region: us-east-2

@@ -1,0 +1,6 @@
+version: 1
+external-secret-stores:
+  allowed-names:
+    - aws-secrets-manager-cluster
+    - aws-secrets-manager-preview
+    - aws-secrets-manager-prod

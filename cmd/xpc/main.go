@@ -1074,7 +1074,7 @@ func runExplain(args []string) int {
 	explanation, ok := errorExplanations[code]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown error code: %s\n", code)
-		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
+		fmt.Fprintln(os.Stderr, "\nKnown error codes: XPC001-XPC011, XPC.A.resource-field-valid, XPC.B.providerconfig-resolves, XPC.D.kind-whitelisted, XPC.E.appset-finalizer-without-preserve, XPC.E.fargate-claim-env-label, XPC.E.prod-appset-autosync, XPC.E.selector-needs-ignore-diff, XPC.H.composition-renders, XPC.H.helm-renders, XPC.H.values-well-typed, XPC.K.externalsecret-store, XPC.P.cascade-risk, XPC.P.destructive-delete, XPC.P.immutable-change, XPC.S.crossplane-state-needs-orphan")
 		return 1
 	}
 
@@ -1247,6 +1247,60 @@ func mergeSnapshotIntoWorld(w *types.World, snap *snapshot.Snapshot) {
 }
 
 var errorExplanations = map[string]string{
+	"XPC.K.externalsecret-store": `XPC.K.externalsecret-store: ExternalSecret references a non-allowed secret store
+
+An ExternalSecret's spec.secretStoreRef.name is not in the configured allowlist
+(external-secret-stores.allowed-names in xpc.yaml).
+
+An ExternalSecret binds to a (Cluster)SecretStore by name. A typo'd or wrong
+store name names a store that does not exist, so the external-secrets operator
+fails to sync with SecretSyncedError — the target Secret is never created and
+every workload mounting it fails to start.
+
+Opt-in: the rule is silent until external-secret-stores.allowed-names is set
+(e.g. the three fg stores aws-secrets-manager-{cluster,preview,prod}).
+
+Fix: reference an allowed (Cluster)SecretStore, or add the name to
+external-secret-stores.allowed-names if it is legitimate.`,
+
+	"XPC.E.fargate-claim-env-label": `XPC.E.fargate-claim-env-label: Crossplane claim missing/invalid environment label
+
+A Crossplane claim of a policed kind (FargateApp / FargateWorker /
+FargateService by default) either lacks the app.facilitygrid.io/environment
+label or carries a value outside the allowed enum (prod / preview / ops).
+
+The environment label drives blast-radius reasoning, monitoring escalation, and
+account scoping. A missing label makes the claim invisible to that tooling; a
+typo'd or non-existent value silently misroutes it.
+
+This is a forward-looking rule: claims live in Helm values files, so coverage
+depends on the scan scope including deploy/facilitygrid/{prod,preview}/ (whose
+values parse as claim docs) or on Helm rendering being enabled.
+
+Fix: add or correct app.facilitygrid.io/environment to one of {prod, preview,
+ops}. The key, claim kinds, and allowed values are configurable via the
+env-label block in xpc.yaml.`,
+
+	"XPC.B.providerconfig-resolves": `XPC.B.providerconfig-resolves: providerConfigRef names no declared ProviderConfig
+
+A resource's spec.providerConfigRef.name does not resolve to any declared
+ProviderConfig or ClusterProviderConfig in the checked set, and is not listed
+in xpc.yaml's allowed-provider-configs.
+
+A Crossplane managed resource binds to its credentials/account via
+spec.providerConfigRef.name. A misspelled name (e.g. "ops-accout") names
+nothing: Crossplane cannot resolve the reference, the resource never
+reconciles, and the deploy looks healthy while the external object is silently
+never created.
+
+Matching is by name only (a forgiving first pass) — it catches the dominant
+failure mode, a typo that resolves to nothing, without modeling per-provider-
+family scoping.
+
+Fix: correct providerConfigRef.name to match a declared ProviderConfig. If the
+ProviderConfig is created out-of-band (e.g. a separate bootstrap app), add its
+name to allowed-provider-configs in xpc.yaml.`,
+
 	"XPC001": `XPC001: CRD/XRD version coherence
 
 Every CRD must have exactly one storage version. Every declared version must

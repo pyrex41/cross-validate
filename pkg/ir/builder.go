@@ -101,6 +101,9 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	}
 	b.world.ImmutableFields = config.ResolveImmutableFields(cfg, ImmutableFieldRegistry())
 	b.world.StateBearingKinds = config.ResolveStateBearingKinds(cfg, StateBearingKindsRegistry())
+	b.world.AllowedProviderConfigs = config.ResolveAllowedProviderConfigs(cfg)
+	b.world.EnvLabelKey, b.world.EnvLabelClaimKinds, b.world.EnvLabelAllowedValues = config.ResolveEnvLabel(cfg)
+	b.world.ESOAllowedStoreNames = config.ResolveExternalSecretStoreNames(cfg)
 	for _, doc := range docs {
 		category := loader.ClassifyDocument(doc)
 		var err error
@@ -150,6 +153,12 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// only pass that catches template syntax errors in repos where the
 	// composite XR is synthesized at runtime rather than committed.
 	b.checkCompositionTemplates()
+	// Inject virtual Secrets for ExternalSecret targets BEFORE trajectory
+	// enrichment so R12 (XPC012) treats operator-materialized Secrets as
+	// present in cluster state instead of false-firing on every ESO mount.
+	// Runs after enrichOwningApp + rendering so the synthesized Secrets
+	// inherit the ExternalSecret's owning app and cover rendered ESOs too.
+	synthesizeExternalSecretTargets(b.world)
 	// Enrichment runs AFTER composition rendering so every downstream
 	// extractor (mount refs, SA refs, RBAC bindings, field-validation
 	// facts, late-init usages, CP deletion-policy facts, SSA/MP

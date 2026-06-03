@@ -349,6 +349,65 @@ func TestR6c_ProviderWave(t *testing.T) {
 	}
 }
 
+func TestR30_ExternalSecretStore(t *testing.T) {
+	// With external-secret-stores.allowed-names configured (fixture xpc.yaml),
+	// an ExternalSecret naming an allowed store is silent; one naming a typo'd
+	// store fires XPC.K.externalsecret-store exactly once.
+	world := loadFixture(t, "../../testdata/fixtures/externalsecret-store")
+	diags := checkFixture(t, world, Config{})
+
+	d := findDiagByCode(diags, "XPC.K.externalsecret-store")
+	if len(d) != 1 {
+		t.Fatalf("expected exactly 1 XPC.K.externalsecret-store, got %d: %+v", len(d), d)
+	}
+	if d[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", d[0].Severity)
+	}
+}
+
+func TestR29_FargateClaimEnvLabel(t *testing.T) {
+	// A claim with a valid env label is silent; a claim missing the label and
+	// a claim with an out-of-enum value each fire XPC.E.fargate-claim-env-label.
+	world := loadFixture(t, "../../testdata/fixtures/fargate-env-label")
+	diags := checkFixture(t, world, Config{})
+
+	d := findDiagByCode(diags, "XPC.E.fargate-claim-env-label")
+	if len(d) != 2 {
+		t.Fatalf("expected 2 XPC.E.fargate-claim-env-label (missing + invalid), got %d: %+v", len(d), d)
+	}
+}
+
+func TestR28_ProviderConfigRefResolves(t *testing.T) {
+	// A providerConfigRef.name that names a declared ProviderConfig is silent;
+	// a typo'd name that resolves to nothing fires XPC.B.providerconfig-resolves
+	// exactly once, on the offending resource.
+	world := loadFixture(t, "../../testdata/fixtures/providerconfig-ref")
+	diags := checkFixture(t, world, Config{})
+
+	d := findDiagByCode(diags, "XPC.B.providerconfig-resolves")
+	if len(d) != 1 {
+		t.Fatalf("expected exactly 1 XPC.B.providerconfig-resolves, got %d: %+v", len(d), d)
+	}
+	if d[0].Severity != types.SeverityError {
+		t.Errorf("expected error severity, got %s", d[0].Severity)
+	}
+}
+
+func TestR12_ExternalSecretTargetNotDangling(t *testing.T) {
+	// A workload mounting a Secret produced by an ExternalSecret must NOT
+	// fire XPC012, even when the consumer's sync-wave precedes the
+	// ExternalSecret's: the external-secrets operator materializes the
+	// target Secret asynchronously, so synthesizeExternalSecretTargets
+	// models it as present from the start of the trajectory.
+	world := loadFixture(t, "../../testdata/fixtures/externalsecret-mount")
+	diags := checkFixture(t, world, Config{})
+
+	if xpc012 := findDiagByCode(diags, "XPC012"); len(xpc012) != 0 {
+		t.Fatalf("expected no XPC012 for ESO-produced secret mount, got %d: %+v",
+			len(xpc012), xpc012)
+	}
+}
+
 func TestR12_DanglingMount(t *testing.T) {
 	world := loadFixture(t, "../../testdata/fixtures/dangling-mount")
 	diags := checkFixture(t, world, Config{})
