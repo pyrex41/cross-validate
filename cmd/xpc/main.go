@@ -19,6 +19,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/audit"
 	"github.com/pyrex41/cross-validate-/pkg/bisect"
 	"github.com/pyrex41/cross-validate-/pkg/checker"
+	"github.com/pyrex41/cross-validate-/pkg/clustersrc"
 	"github.com/pyrex41/cross-validate-/pkg/config"
 	"github.com/pyrex41/cross-validate-/pkg/ir"
 	"github.com/pyrex41/cross-validate-/pkg/loader"
@@ -128,9 +129,16 @@ Check flags:
 
 Snapshot flags:
   --output=<path>      Output snapshot to file (default: stdout digest)
-  --cluster=<name>     Name of the cluster context (default: current)
+  --cluster=<name>     Name recorded in the snapshot (default: local)
+  --from-cluster       Capture from a live cluster via kubectl (instead of
+                       manifests); implies live resources. Requires kubectl.
+  --context=<name>     kube-context for --from-cluster (default: current-context)
+  --kubectl-bin=<path> Path to kubectl (default: first 'kubectl' on PATH)
   --diff=<a>,<b>       Diff two snapshot files
   --include-resources  Include resource instances and Argo objects in the snapshot
+
+  A snapshot captured with --from-cluster is a valid --base/--head for
+  'xpc plan' — diff it against a git ref for git-vs-cluster drift.
 
 Proof subcommands:
   xpc proof show <proof-file>              Show proof summary
@@ -534,6 +542,9 @@ func runSnapshot(args []string) int {
 	clusterName := "local"
 	diffPaths := ""
 	var includeResources bool
+	var fromCluster bool
+	kubeContext := ""
+	kubectlBin := ""
 	var paths []string
 
 	for _, arg := range args {
@@ -544,6 +555,12 @@ func runSnapshot(args []string) int {
 			clusterName = arg[10:]
 		case len(arg) > 7 && arg[:7] == "--diff=":
 			diffPaths = arg[7:]
+		case arg == "--from-cluster":
+			fromCluster = true
+		case len(arg) > 10 && arg[:10] == "--context=":
+			kubeContext = arg[10:]
+		case len(arg) > 14 && arg[:14] == "--kubectl-bin=":
+			kubectlBin = arg[14:]
 		case arg == "--include-resources":
 			includeResources = true
 		case arg == "--help" || arg == "-h":
@@ -578,40 +595,63 @@ func runSnapshot(args []string) int {
 		return 0
 	}
 
-	// Snapshot from manifests (filesystem mode)
-	if len(paths) == 0 {
-		paths = append(paths, ".")
-	}
+	var snap *snapshot.Snapshot
 
-	var allDocs []loader.LoadedDocument
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if fromCluster {
+		// Live-cluster mode: capture via kubectl. No silent fallback to the
+		// filesystem — a snapshot that quietly came from disk would corrupt
+		// every downstream git-vs-reality comparison.
+		if len(paths) > 0 {
+			fmt.Fprintln(os.Stderr, "error: --from-cluster does not take path arguments")
 			return 1
 		}
-		var docs []loader.LoadedDocument
-		if info.IsDir() {
-			docs, err = loader.LoadDirectory(path)
-		} else {
-			docs, err = loader.LoadFile(path)
-		}
+		capturer := &clustersrc.Capturer{KubectlBin: kubectlBin, Context: kubeContext}
+		captured, err := capturer.Capture(clusterName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading %s: %v\n", path, err)
+			if clustersrc.IsKubectlAbsent(err) {
+				fmt.Fprintln(os.Stderr, "error: --from-cluster requires kubectl on PATH (or --kubectl-bin=)")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error capturing cluster: %v\n", err)
 			return 1
 		}
-		allDocs = append(allDocs, docs...)
-	}
+		snap = captured
+	} else {
+		// Snapshot from manifests (filesystem mode)
+		if len(paths) == 0 {
+			paths = append(paths, ".")
+		}
 
-	builder := ir.NewBuilder()
-	world, err := builder.Build(allDocs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
-		return 1
-	}
+		var allDocs []loader.LoadedDocument
+		for _, path := range paths {
+			info, err := os.Stat(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			var docs []loader.LoadedDocument
+			if info.IsDir() {
+				docs, err = loader.LoadDirectory(path)
+			} else {
+				docs, err = loader.LoadFile(path)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error loading %s: %v\n", path, err)
+				return 1
+			}
+			allDocs = append(allDocs, docs...)
+		}
 
-	snap := snapshot.FromWorldWithOptions(world, clusterName,
-		snapshot.FromWorldOptions{IncludeResources: includeResources})
+		builder := ir.NewBuilder()
+		world, err := builder.Build(allDocs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error building IR: %v\n", err)
+			return 1
+		}
+
+		snap = snapshot.FromWorldWithOptions(world, clusterName,
+			snapshot.FromWorldOptions{IncludeResources: includeResources})
+	}
 
 	if outputPath != "" {
 		if err := snap.Save(outputPath); err != nil {
