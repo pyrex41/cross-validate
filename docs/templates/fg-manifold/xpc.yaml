@@ -76,13 +76,20 @@ external-secret-stores:
 # Cluster+ClusterInstance, mysql.sql Database/User/Grant, kms Key, s3 Bucket,
 # ec2 VPC — do NOT re-list those.
 #
-# Missing-from-registry, verified present as committed managed resources that
-# carry deletionPolicy: Orphan in the tree (khoj, oneuptime, usertour, signoz,
-# crossplane-platform-aws-sustain-preview):
-#   postgresql.sql.crossplane.io  Database  (6 occurrences)
-#   postgresql.sql.crossplane.io  Grant     (11 occurrences)
-#   postgresql.sql.crossplane.io  Role      (12 occurrences; the postgres
-#                                            provider's analogue of mysql User)
+# Missing-from-registry and genuinely state-bearing (Postgres holds user data,
+# exactly like the mysql.sql kinds the registry already covers). Verified
+# present as committed managed resources in khoj, oneuptime, usertour, signoz,
+# and crossplane-platform-aws-sustain-preview:
+#   postgresql.sql.crossplane.io  Database
+#   postgresql.sql.crossplane.io  Grant
+#   postgresql.sql.crossplane.io  Role   (the postgres provider's analogue of
+#                                         mysql User)
+#
+# IMPORTANT (verified by running v0.1.0 against the tree): these resources
+# currently declare NO deletionPolicy, so they default to Delete. Adding them
+# here is not cosmetic — it surfaces ~29 real INC-6-class findings (a Postgres
+# Database an Argo cascade would DROP). Those are fixes to make (set
+# deletionPolicy: Orphan), not noise to silence.
 #
 # NOTE: postgresql Extension and ProviderConfig are intentionally NOT listed —
 # dropping an Extension/ProviderConfig does not destroy user data.
