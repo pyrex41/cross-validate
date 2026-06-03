@@ -1,0 +1,148 @@
+# xpc.yaml — fg-manifold tuning for the xpc static analyzer.
+#
+# Schema/knobs: github.com/pyrex41/cross-validate-/pkg/config/config.go
+# Discovery: xpc walks upward from cwd for this file, or pass --config=<path>
+# / XPC_CONFIG_PATH (pkg/config/resolve.go, cmd/xpc/main.go:199,272).
+#
+# Every section below is OPTIONAL; omitting one falls back to the built-in
+# default. We only override where fg-manifold genuinely diverges from the
+# defaults, and we leave a comment explaining why each entry exists.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# D5 / XPC.K.externalsecret-store (external-secret-stores.allowed-names)
+# ---------------------------------------------------------------------------
+# Rule is OPT-IN: an empty allow-names list DISABLES it (ResolveExternalSecret
+# StoreNames returns nil -> disabled). Listing the real, declared stores turns
+# on the typo-catcher: an ExternalSecret whose secretStoreRef.name is not one
+# of these is flagged (would otherwise silently fail with SecretSyncedError).
+#
+# These four stores are all DECLARED in the tree (verified):
+#   - aws-secrets-manager          SecretStore (namespaced, external-secrets-system)
+#                                    deploy/.../external-secrets/.../values.yaml L17
+#   - aws-secrets-manager-cluster  ClusterSecretStore  values.yaml L34
+#   - aws-secrets-manager-preview  ClusterSecretStore  eso-preview-account.yaml L138
+#   - aws-secrets-manager-prod     ClusterSecretStore  eso-prod-account.yaml L138
+#
+# DECISION FOR REUBEN: the task brief said "the 3 real stores (cluster/preview/
+# prod)". There are actually FOUR — the bare `aws-secrets-manager` namespaced
+# SecretStore is also real and referenced. If you want to forbid the bare store
+# (e.g. drive everyone onto the ClusterSecretStores), DROP that line and the
+# rule will flag any remaining bare references. As listed below, all four are
+# allowed (no false positives).
+external-secret-stores:
+  allowed-names:
+    - aws-secrets-manager
+    - aws-secrets-manager-cluster
+    - aws-secrets-manager-preview
+    - aws-secrets-manager-prod
+
+# ---------------------------------------------------------------------------
+# D3 / XPC.E.fargate-claim-env-label (env-label)
+# ---------------------------------------------------------------------------
+# Built-in defaults (pkg/config/resolve.go:42-45) ALREADY match fg reality, so
+# this whole section is intentionally OMITTED — overriding it would just
+# restate the defaults and create a second source of truth.
+#
+# Verified against the tree:
+#   key:            app.facilitygrid.io/environment   (default)
+#   claim-kinds:    FargateApp, FargateWorker, FargateService  (default)
+#   allowed-values: prod, preview, ops                (default)
+#     -> grep of app.facilitygrid.io/environment values: 208 prod, 236 preview,
+#        24 ops, plus 34 Helm-templated `{{ $env }}` (rendered at deploy time).
+#
+# DECISIONS FOR REUBEN (only if you want to widen coverage — leave OMITTED otherwise):
+#   - FargateExternalService and FargateTask claim kinds also exist in the tree
+#     (xrd-fargatetask.xrd, ecs-cluster-preview.yaml). They are NOT in the
+#     default claim-kinds list, so the env-label rule does not police them. If
+#     you want them policed, uncomment the block below (note: setting claim-kinds
+#     REPLACES the default list, so you must re-list the three defaults too):
+#
+# env-label:
+#   claim-kinds:
+#     - FargateApp
+#     - FargateWorker
+#     - FargateService
+#     - FargateExternalService
+#     - FargateTask
+
+# ---------------------------------------------------------------------------
+# R23 / R26 state-bearing kinds (state-bearing-kinds.append)
+# ---------------------------------------------------------------------------
+# Append-semantics over the built-in registry (pkg/ir/state_bearing_registry.go).
+# We append ONLY kinds that (a) are genuinely state-bearing in fg's tree and
+# (b) are NOT already in the registry. The registry already covers rds/docdb
+# Cluster+ClusterInstance, mysql.sql Database/User/Grant, kms Key, s3 Bucket,
+# ec2 VPC — do NOT re-list those.
+#
+# Missing-from-registry, verified present as committed managed resources that
+# carry deletionPolicy: Orphan in the tree (khoj, oneuptime, usertour, signoz,
+# crossplane-platform-aws-sustain-preview):
+#   postgresql.sql.crossplane.io  Database  (6 occurrences)
+#   postgresql.sql.crossplane.io  Grant     (11 occurrences)
+#   postgresql.sql.crossplane.io  Role      (12 occurrences; the postgres
+#                                            provider's analogue of mysql User)
+#
+# NOTE: postgresql Extension and ProviderConfig are intentionally NOT listed —
+# dropping an Extension/ProviderConfig does not destroy user data.
+state-bearing-kinds:
+  append:
+    - group: postgresql.sql.crossplane.io
+      kind: Database
+    - group: postgresql.sql.crossplane.io
+      kind: Grant
+    - group: postgresql.sql.crossplane.io
+      kind: Role
+
+# ---------------------------------------------------------------------------
+# R23 name carve-outs (name-carveouts.crossplane-state-needs-orphan)
+# ---------------------------------------------------------------------------
+# Additive over the built-in default {"alb-logs"} (resolver dedups, so listing
+# it again is harmless and self-documenting). Verified load-bearing: the
+# fg-prod-alb-logs S3 Bucket (a registry state-bearing kind) carries NO
+# deletionPolicy at all, so R23 would fire without this carve-out. ALB access-
+# log buckets are intentionally destroyable / separately managed.
+#
+# DECISION FOR REUBEN: add other genuinely-safe, intentionally-destroyable
+# bucket/state names here (e.g. ephemeral preview buckets) ONLY if you confirm
+# they hold no data you'd cry over. Keep this list tight.
+name-carveouts:
+  crossplane-state-needs-orphan:
+    - alb-logs
+
+# ---------------------------------------------------------------------------
+# Bypass annotations (bypass-annotations)
+# ---------------------------------------------------------------------------
+# Primary REPLACES the built-in xpc.io/* key; aliases are ADDITIVE. We keep the
+# xpc.io/* primaries (do NOT set `primary:`) and register fg-branded aliases so
+# operators can annotate with the fg domain.
+#
+# DECISION FOR REUBEN: NO allow-delete / allow-immutable-change / xpc.io
+# annotations exist anywhere in the tree today (grep returned zero). These
+# aliases are registered PROACTIVELY so that when someone needs to intentionally
+# bypass R23/R26/R27 they can use the fg domain. If you'd rather force the
+# xpc.io/* keys (one obvious source), delete this whole section.
+bypass-annotations:
+  allow-delete:
+    aliases:
+      - policy.facilitygrid.io/allow-delete
+  allow-immutable-change:
+    aliases:
+      - policy.facilitygrid.io/allow-immutable-change
+
+# ---------------------------------------------------------------------------
+# D1 / XPC.B.providerconfig-resolves (allowed-provider-configs)
+# ---------------------------------------------------------------------------
+# OPTIONAL supplement. When empty (default), D1 checks pure reference integrity:
+# every providerConfigRef.name must resolve to a ProviderConfig/ClusterProvider
+# Config DECLARED in the checked set. List here ONLY names known to exist at
+# runtime but NOT committed as manifests in scope (e.g. bootstrap-created).
+#
+# DECISION FOR REUBEN: leave EMPTY first. Run report-only, then read the
+# XPC.B.providerconfig-resolves findings: any name that is real-but-not-in-set
+# (created by bootstrap/terraform, not committed) gets added here; anything else
+# is a genuine typo to fix. The plan notes ~11 distinct names (prod-account,
+# ops-account, preview-account, default, aurora-prod-mysql, ...). Populate this
+# list from the report rather than guessing.
+allowed-provider-configs: []

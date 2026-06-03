@@ -1,0 +1,21 @@
+# yamllint config for fg-manifold's Layer-1 (valid-YAML) CI gate.
+#
+# Relaxed base ruleset, plus: ignore the Helm *-values.yaml files and any
+# template/ directories. Those carry Go-template `{{ }}` syntax that is not
+# valid YAML until Helm renders it, so linting them raw produces noise, not
+# signal (the workflow review flagged this — 34+ templated docs in the tree).
+extends: relaxed
+
+ignore: |
+  *-values.yaml
+  **/values.yaml
+  **/templates/
+  deploy/facilitygrid/ops/bootstrap/
+
+rules:
+  # Argo/Helm manifests are routinely long; don't fail on line length.
+  line-length: disable
+  # Document-start markers are inconsistent across the tree; not worth gating.
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
