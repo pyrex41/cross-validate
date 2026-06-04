@@ -1,0 +1,37 @@
+# Shape A hidden in a conditional — the blind spot this change closes. The
+# bare-family literal is reachable through {{ if $createService }}, but there is
+# NO canonical guard ($taskDefArn / atProvider / | default): whenever the branch
+# renders it emits a bare family, which AWS normalises to family:revision → a
+# permanent diff. Pre-fix this was invisible (the scan bailed on any leading
+# {{). R31 must now fire (warn).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateservice-unguarded
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateService
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $family := $xr.spec.name -}}
+            {{- $createService := $xr.spec.createService -}}
+            apiVersion: ecs.aws.upbound.io/v1beta1
+            kind: Service
+            metadata:
+              name: {{ $family }}
+            spec:
+              forProvider:
+                region: us-east-2
+                taskDefinition: {{ if $createService }}arn:aws:ecs:us-east-2:660035875768:task-definition/{{ $family }}{{ end }}
+                launchType: FARGATE
