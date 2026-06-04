@@ -61,13 +61,39 @@ func TestR31_CompositionTemplate(t *testing.T) {
 		t.Errorf("expected composition name in message, got %q", got[0].Message)
 	}
 
-	t.Run("fixed", func(t *testing.T) {
-		world := loadFixture(t, "../../testdata/fixtures/canonical-form-template/fixed")
+	// Unguarded bare-family literal reachable through a conditional on an
+	// unrelated var (no $taskDefArn/atProvider/default guard) — Shape A hidden
+	// in a {{ if }}. Closing the "any {{ RHS is canonical" blind spot means this
+	// now fires.
+	t.Run("unguarded-conditional", func(t *testing.T) {
+		world := loadFixture(t, "../../testdata/fixtures/canonical-form-template/unguarded-conditional")
 		diags := checkFixture(t, world, Config{})
-		if got := findDiagByCode(diags, code); len(got) != 0 {
-			t.Fatalf("fixed: expected 0 %s, got %d: %+v", code, len(got), got)
+		got := findDiagByCode(diags, code)
+		if len(got) != 1 {
+			t.Fatalf("unguarded-conditional: expected 1 %s, got %d: %+v", code, len(got), got)
+		}
+		if got[0].Severity != types.SeverityWarning {
+			t.Errorf("template finding should be warn, got %s", got[0].Severity)
 		}
 	})
+
+	// Negative cases — Shape B/C must NOT fire. Pins Option 1: a guarded
+	// one-shot seed converges (transient blip, not a permanent storm), so M
+	// stays silent and the validated MR !2232 fix is not regressed.
+	for _, tc := range []struct{ name, fixture string }{
+		// $taskDefArn | default (printf bare) — the !2232 worker/service fix.
+		{"fixed-default-pipe", "../../testdata/fixtures/canonical-form-template/fixed"},
+		// {{ if $taskDefArn }}…{{ else }}bare{{ end }} — the app-prod shape.
+		{"guarded-ifelse", "../../testdata/fixtures/canonical-form-template/guarded-ifelse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			world := loadFixture(t, tc.fixture)
+			diags := checkFixture(t, world, Config{})
+			if got := findDiagByCode(diags, code); len(got) != 0 {
+				t.Fatalf("%s: expected 0 %s, got %d: %+v", tc.name, code, len(got), got)
+			}
+		})
+	}
 }
 
 // TestR32_ObservedDesiredFixedPoint exercises category M Tier-3 (dynamic): a

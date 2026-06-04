@@ -118,36 +118,94 @@ func (b *Builder) checkCompositionCanonicalForm() {
 }
 
 // templateRHSNonCanonical reports whether a Composition template's right-hand
-// side for a registered field is a hardcoded non-canonical literal.
+// side for a registered field carries an *unguarded* non-canonical literal —
+// one that drives a permanent reconcile storm (category M).
 //
-// For "arn-requires-revision" the discriminator that separates the MR !2232 bug
-// from its fix:
-//   - BAD  taskDefinition: arn:aws:ecs:{{ $region }}:...:task-definition/{{ $familyName }}
-//     a hardcoded ARN literal — the segment after the last "/" carries no
-//     ":revision".
-//   - GOOD taskDefinition: {{ $taskDefArn | default (printf "...") }}
-//     a value computed entirely by a template action (the fix resolves the
-//     versioned ARN from the observed TaskDefinition). A pure "{{ ... }}" RHS,
-//     or any RHS that mentions atProvider, is assumed resolved and not flagged.
+// For "arn-requires-revision" the scan descends INTO the template actions so a
+// bare-family literal reachable only through a conditional branch is not missed
+// (the earlier "any {{...}} RHS is canonical" short-circuit was the blind spot).
+// Three runtime shapes, and what M does with each:
 //
-// Consequence: a composition that computes an unversioned value entirely inside
-// "{{ ... }}" is a miss here (Tier-1/Tier-3 catch the rendered/live form). That
-// is the intended trade — Tier-2 only flags what it can see with confidence.
+//   - Shape A — unconditional bare family. Renders bare on EVERY reconcile;
+//     AWS normalises the read-back to family:revision, so desired never equals
+//     observed → permanent storm. FLAG.
+//       taskDefinition: arn:aws:ecs:{{ $region }}:...:task-definition/{{ $familyName }}
+//       taskDefinition: {{ if $env }}arn:...:task-definition/{{ $familyName }}{{ end }}  (conditional on an unrelated var)
+//
+//   - Shape B — guarded one-shot seed. The versioned ARN is resolved first
+//     ($taskDefArn / atProvider) and the bare literal is only the empty /
+//     first-create fallback (an `{{ if $taskDefArn }}…{{ else }}<seed>` or a
+//     `| default <seed>`). It emits bare for ~1 reconcile then converges — a
+//     transient blip, NOT a permanent storm. This is the validated MR !2232
+//     fix shape. PASS.
+//       taskDefinition: {{ if $taskDefArn }}{{ $taskDefArn }}{{ else }}arn:...:task-definition/{{ $family }}{{ end }}
+//       taskDefinition: {{ $taskDefArn | default (printf "...:task-definition/%s" $id) }}
+//
+//   - Shape C — never bare. No literal at all. PASS.
+//       taskDefinition: {{ $taskDefArn }}
+//
+// The Shape-B blip (avoidable by never emitting a bare family) is a real but
+// lower-stakes concern; it belongs in a future advisory hint, not in the
+// permanent-storm rule. Keeping M = permanent storms keeps every M finding a
+// true must-fix.
 func templateRHSNonCanonical(detector, rhs string) bool {
 	rhs = strings.TrimSpace(rhs)
 	switch detector {
 	case "arn-requires-revision":
-		if strings.HasPrefix(rhs, "{{") || strings.Contains(rhs, "atProvider") {
+		if !hasUnversionedTaskDefLiteral(rhs) {
 			return false
 		}
-		i := strings.LastIndex(rhs, "/")
-		if i < 0 {
-			return false
-		}
-		return !strings.Contains(rhs[i+1:], ":")
+		// A bare-family literal is reachable. Pass it only if it is a guarded
+		// one-shot seed (Shape B); flag an unguarded literal (Shape A).
+		return !rhsHasCanonicalGuard(rhs)
 	default:
 		return false
 	}
+}
+
+// templateActionRe matches a single Go-template action `{{ ... }}`. Go templates
+// do not nest actions, so a non-greedy body is sufficient.
+var templateActionRe = regexp.MustCompile(`\{\{.*?\}\}`)
+
+// defaultPipeRe matches the sprig `| default` pipe — the idiom that makes a
+// trailing literal a fallback of an already-resolved value.
+var defaultPipeRe = regexp.MustCompile(`\|\s*default\b`)
+
+// hasUnversionedTaskDefLiteral reports whether any LITERAL segment of the RHS
+// (text outside `{{ ... }}` actions) contains a "task-definition/<family>" whose
+// family component carries no ":revision". Template actions are blanked to a
+// neutral space first so an interpolated family ({{ $family }}) reads as
+// unversioned while a literal revision (…:42, or {{ $family }}:{{ $rev }}) does
+// not. Mirrors the original after-the-last-slash check, generalised to descend
+// through actions and to match a literal anywhere in the RHS (e.g. an else arm).
+func hasUnversionedTaskDefLiteral(rhs string) bool {
+	skeleton := templateActionRe.ReplaceAllString(rhs, " ")
+	const marker = "task-definition/"
+	for rest := skeleton; ; {
+		i := strings.Index(rest, marker)
+		if i < 0 {
+			return false
+		}
+		after := rest[i+len(marker):]
+		if !strings.Contains(after, ":") {
+			return true
+		}
+		rest = after
+	}
+}
+
+// rhsHasCanonicalGuard reports whether the RHS resolves the canonical versioned
+// ARN first, making any trailing bare literal a one-shot seed (Shape B). The
+// established idioms: a reference to the resolved-ARN variable ($taskDefArn), a
+// reference to observed state (atProvider), or a `| default` fallback pipe.
+func rhsHasCanonicalGuard(rhs string) bool {
+	if strings.Contains(strings.ToLower(rhs), "taskdefarn") {
+		return true
+	}
+	if strings.Contains(rhs, "atProvider") {
+		return true
+	}
+	return defaultPipeRe.MatchString(rhs)
 }
 
 var undefinedFuncRe = regexp.MustCompile(`function "([^"]+)" not defined`)

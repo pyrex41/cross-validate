@@ -1,0 +1,39 @@
+# Shape B — guarded one-shot seed (the composition-fargateapp-prod / MR !2232
+# shape). The versioned ARN is resolved first into $taskDefArn; the bare-family
+# literal is only the {{ else }} fallback for the first-create window, so it
+# converges after one reconcile. NOT a permanent storm → R31 must stay silent.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateapp-guarded
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $family := $xr.spec.name -}}
+            {{- $taskDefArn := "" -}}
+            {{- if .observed.resources -}}
+              {{- $td := index .observed.resources "task-definition" -}}
+              {{- if $td -}}{{- $taskDefArn = $td.resource.status.atProvider.arn | default "" -}}{{- end -}}
+            {{- end -}}
+            apiVersion: ecs.aws.upbound.io/v1beta1
+            kind: Service
+            metadata:
+              name: {{ $family }}
+            spec:
+              forProvider:
+                region: us-east-2
+                taskDefinition: {{ if $taskDefArn }}{{ $taskDefArn }}{{ else }}arn:aws:ecs:us-east-2:660035875768:task-definition/{{ $family }}{{ end }}
+                launchType: FARGATE
