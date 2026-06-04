@@ -1,0 +1,49 @@
+# The turnover-worker shape: a global env list sets OTEL_PHP_AUTOLOAD_ENABLED
+# once, then a conditional override block appends it again (relying on ECS
+# last-wins). AWS dedupes the env array on registration → the desired
+# containerDefinitions never matches the stored task def → permanent diff on the
+# immutable container_definitions → ReconcileError. R33 must fire (warn).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateworker-turnover
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateWorker
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $workerType := $xr.spec.workerType -}}
+            {{- $workerEnv := list -}}
+            {{- if eq $workerType "worker-turnover" -}}
+              {{- $workerEnv = concat $workerEnv (list
+                (dict "name" "OTEL_SDK_DISABLED" "value" "true")
+                (dict "name" "OTEL_PHP_AUTOLOAD_ENABLED" "value" "false")
+              ) -}}
+            {{- end -}}
+            apiVersion: ecs.aws.upbound.io/v1beta2
+            kind: TaskDefinition
+            spec:
+              forProvider:
+                family: {{ $xr.spec.name }}
+                containerDefinitions: {{ toJson (list (dict
+                  "name" "worker"
+                  "image" $xr.spec.image
+                  "environment" (concat (list
+                    (dict "name" "APP_ENV" "value" "production")
+                    (dict "name" "OTEL_PHP_AUTOLOAD_ENABLED" "value" "true")
+                  ) $workerEnv)
+                  "secrets" (list
+                    (dict "name" "DB_PASSWORD" "valueFrom" $xr.spec.dbSecretArn)
+                  )
+                )) }}

@@ -158,6 +158,10 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// (the MR !2232 shape, invisible to the resource-walk and live-snapshot
 	// tiers). Runs unconditionally like checkCompositionTemplates.
 	b.checkCompositionCanonicalForm()
+	// Category M Tier-2: flag ECS env vars emitted more than once in a
+	// composition body (AWS dedupes the env array → permanent immutable-diff
+	// ReconcileError). Runs unconditionally like checkCompositionTemplates.
+	b.checkCompositionDuplicateEnv()
 	// Inject virtual Secrets for ExternalSecret targets BEFORE trajectory
 	// enrichment so R12 (XPC012) treats operator-materialized Secrets as
 	// present in cluster state instead of false-firing on every ESO mount.

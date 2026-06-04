@@ -61,6 +61,82 @@ func (b *Builder) checkCompositionTemplates() {
 	}
 }
 
+// envDictRe matches a literal ECS environment-variable entry built with sprig
+// `dict`: `(dict "name" "<X>" "value" …)`. The `"value"` key (with its closing
+// quote) distinguishes an env var from a secret (`"valueFrom"`) and from the
+// container's own `(dict "name" "worker" "image" …)`.
+var envDictRe = regexp.MustCompile(`\(dict\s+"name"\s+"([^"]+)"\s+"value"`)
+
+// checkCompositionDuplicateEnv scans every go-templating Composition body for an
+// ECS environment variable name emitted more than once (category M Tier-2,
+// heuristic → R33 / XPC.M.duplicate-env-key). AWS dedupes the env array on
+// registration, so a desired containerDefinitions with a duplicate name never
+// matches the stored task def → a permanent diff on the immutable
+// container_definitions field → upjet hard-fails (ReconcileError). The two
+// copies routinely live in different parts of the template (a global list and a
+// conditionally-appended override), so the scan is whole-template, not scoped to
+// one `environment` construction.
+//
+// Scope: to avoid false positives, the scan runs ONLY on a composition that
+// builds a single container — detected as exactly one `"environment"` key in
+// the template. A whole-template env count cannot tell whether two same-named
+// entries feed the SAME container (the bug) or different containers of a
+// multi-container task (legitimate, and common — every container sets APP_ENV,
+// OTEL_*, etc.). Restricting to single-container compositions keeps the check
+// precise: verified against fg-manifold, this fires on exactly the two real
+// turnover-worker duplicates and zero of the ~60 cross-container coincidences in
+// the multi-container app/service/sustain compositions. A real same-container
+// duplicate in a multi-container composition is a known miss (Tier-1 rendered /
+// Tier-3 live would catch it).
+//
+// Warn severity: still a template-text heuristic.
+func (b *Builder) checkCompositionDuplicateEnv() {
+	for _, comp := range b.world.Compositions {
+		for _, step := range comp.Pipeline {
+			if step.InputKind != "GoTemplate" {
+				continue
+			}
+			sc, ok := b.world.Schemas[step.InputDigest]
+			if !ok {
+				continue
+			}
+			inline, ok := sc.Schema["inline"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tmplText, ok := inline["template"].(string)
+			if !ok || tmplText == "" {
+				continue
+			}
+			// Single-container only — see scope note above.
+			if strings.Count(tmplText, `"environment"`) != 1 {
+				continue
+			}
+			counts := map[string]int{}
+			var order []string
+			for _, m := range envDictRe.FindAllStringSubmatch(tmplText, -1) {
+				name := m[1]
+				if counts[name] == 0 {
+					order = append(order, name)
+				}
+				counts[name]++
+			}
+			for _, name := range order {
+				if counts[name] < 2 {
+					continue
+				}
+				b.world.DuplicateEnvFindings = append(b.world.DuplicateEnvFindings,
+					types.DuplicateEnvFinding{
+						Composition: comp.Name,
+						EnvName:     name,
+						Count:       counts[name],
+						Source:      comp.Source,
+					})
+			}
+		}
+	}
+}
+
 // checkCompositionCanonicalForm scans every go-templating Composition body for
 // registered canonical-form fields (CanonicalFormRegistry) assigned to a
 // hardcoded, non-canonical ARN literal — the MR !2232 reconcile-storm shape.
@@ -129,8 +205,8 @@ func (b *Builder) checkCompositionCanonicalForm() {
 //   - Shape A — unconditional bare family. Renders bare on EVERY reconcile;
 //     AWS normalises the read-back to family:revision, so desired never equals
 //     observed → permanent storm. FLAG.
-//       taskDefinition: arn:aws:ecs:{{ $region }}:...:task-definition/{{ $familyName }}
-//       taskDefinition: {{ if $env }}arn:...:task-definition/{{ $familyName }}{{ end }}  (conditional on an unrelated var)
+//     taskDefinition: arn:aws:ecs:{{ $region }}:...:task-definition/{{ $familyName }}
+//     taskDefinition: {{ if $env }}arn:...:task-definition/{{ $familyName }}{{ end }}  (conditional on an unrelated var)
 //
 //   - Shape B — guarded one-shot seed. The versioned ARN is resolved first
 //     ($taskDefArn / atProvider) and the bare literal is only the empty /
@@ -138,11 +214,11 @@ func (b *Builder) checkCompositionCanonicalForm() {
 //     `| default <seed>`). It emits bare for ~1 reconcile then converges — a
 //     transient blip, NOT a permanent storm. This is the validated MR !2232
 //     fix shape. PASS.
-//       taskDefinition: {{ if $taskDefArn }}{{ $taskDefArn }}{{ else }}arn:...:task-definition/{{ $family }}{{ end }}
-//       taskDefinition: {{ $taskDefArn | default (printf "...:task-definition/%s" $id) }}
+//     taskDefinition: {{ if $taskDefArn }}{{ $taskDefArn }}{{ else }}arn:...:task-definition/{{ $family }}{{ end }}
+//     taskDefinition: {{ $taskDefArn | default (printf "...:task-definition/%s" $id) }}
 //
 //   - Shape C — never bare. No literal at all. PASS.
-//       taskDefinition: {{ $taskDefArn }}
+//     taskDefinition: {{ $taskDefArn }}
 //
 // The Shape-B blip (avoidable by never emitting a bare family) is a real but
 // lower-stakes concern; it belongs in a future advisory hint, not in the

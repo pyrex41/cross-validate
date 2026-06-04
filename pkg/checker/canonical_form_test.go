@@ -133,3 +133,31 @@ func TestR32_ObservedDesiredFixedPoint(t *testing.T) {
 		}
 	})
 }
+
+// TestR33_DuplicateEnvKey exercises category M Tier-2: a composition that emits
+// the same ECS env var twice (global + conditional override) fires; the
+// single-entry form, with a like-named container and a secret, does not.
+func TestR33_DuplicateEnvKey(t *testing.T) {
+	const code = "XPC.M.duplicate-env-key"
+
+	world := loadFixture(t, "../../testdata/fixtures/duplicate-env/positive")
+	diags := checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, code)
+	if len(got) != 1 {
+		t.Fatalf("positive: expected 1 %s, got %d: %+v", code, len(got), got)
+	}
+	if got[0].Severity != types.SeverityWarning {
+		t.Errorf("duplicate-env finding should be warn, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "OTEL_PHP_AUTOLOAD_ENABLED") {
+		t.Errorf("expected env name in message, got %q", got[0].Message)
+	}
+
+	t.Run("clean", func(t *testing.T) {
+		world := loadFixture(t, "../../testdata/fixtures/duplicate-env/clean")
+		diags := checkFixture(t, world, Config{})
+		if got := findDiagByCode(diags, code); len(got) != 0 {
+			t.Fatalf("clean: expected 0 %s, got %d: %+v", code, len(got), got)
+		}
+	})
+}
