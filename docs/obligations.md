@@ -261,6 +261,13 @@ family, so coverage degrades gracefully with how much context is available:
   `status.atProvider` counterpart (**implemented** — R32 /
   `XPC.M.observed-desired-fixed-point`; Tier-3, registry-aware severity; only
   fires on status-bearing resources from a `--from-cluster` snapshot)
+- `duplicate-env-key` -- a go-templating Composition emits the same ECS
+  `containerDefinitions` environment variable name more than once. AWS dedupes
+  the env array on registration, so the desired task def never matches the stored
+  one → a permanent diff on the *immutable* `container_definitions` → upjet
+  hard-fails with `ReconcileError`. (**implemented** — R33 /
+  `XPC.M.duplicate-env-key`, Tier-2 heuristic at warn; scoped to single-container
+  compositions to avoid cross-container false positives; fg-manifold MR !2246)
 
 **Absorbs**: (new — static + dynamic floor for the Crossplane reconcile-storm
 failure mode; fg-manifold MR !2232)

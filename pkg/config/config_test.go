@@ -100,6 +100,90 @@ func TestParse_Empty(t *testing.T) {
 	}
 }
 
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns what
+// was written. Used to assert the forward-compat "unknown top-level key"
+// warning fires (or doesn't) for a given config.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				b.Write(buf[:n])
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		done <- b.String()
+	}()
+	fn()
+	_ = w.Close()
+	os.Stderr = orig
+	return <-done
+}
+
+// TestParse_KnownTopLevelKeys_NoFalseWarning is the regression guard for the
+// stale-known-keys bug: a config that exercises EVERY top-level key the struct
+// understands must not emit a single "unknown top-level key" warning. Because
+// knownTopLevelKeys() now derives the set by reflection over Config, adding a
+// new top-level field can never again leave a literal behind that false-warns
+// on a key the decoder honors. The positive control confirms a genuinely
+// unknown key still warns.
+func TestParse_KnownTopLevelKeys_NoFalseWarning(t *testing.T) {
+	// Every top-level key in the Config schema, with a minimal valid value.
+	allKeys := `
+version: 1
+prod-patterns:
+  appset-name-substrings: ["-prod-"]
+immutable-fields:
+  - gvk: "ec2.aws.upbound.io/v1beta1/Instance"
+    paths: ["spec.forProvider.region"]
+    reason: "test"
+state-bearing-kinds:
+  append:
+    - group: "rds.aws.upbound.io"
+      kind: "Instance"
+bypass-annotations:
+  allow-delete:
+    primary: "policy.facilitygrid.io/allow-delete"
+name-carveouts:
+  crossplane-state-needs-orphan: ["alb-logs"]
+external-secret-stores:
+  allowed-names: ["my-store"]
+env-label:
+  key: "app.facilitygrid.io/environment"
+allowed-provider-configs: ["prod-account"]
+`
+	out := captureStderr(t, func() {
+		if _, err := config.Parse([]byte(allKeys)); err != nil {
+			t.Fatalf("parse all-keys config: %v", err)
+		}
+	})
+	if strings.Contains(out, "unknown top-level key") {
+		t.Errorf("valid top-level key spuriously warned; stderr:\n%s", out)
+	}
+
+	// Positive control: a genuinely-unknown top-level key must still warn.
+	out = captureStderr(t, func() {
+		if _, err := config.Parse([]byte("version: 1\nbogus-key: true\n")); err != nil {
+			t.Fatalf("parse bogus-key config: %v", err)
+		}
+	})
+	if !strings.Contains(out, `unknown top-level key "bogus-key"`) {
+		t.Errorf("genuinely-unknown key should warn; stderr:\n%s", out)
+	}
+}
+
 func TestParse_VersionMismatch(t *testing.T) {
 	_, err := config.Parse([]byte("version: 99\n"))
 	if err == nil {

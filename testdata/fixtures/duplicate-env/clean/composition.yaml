@@ -1,0 +1,47 @@
+# The fixed shape: OTEL_PHP_AUTOLOAD_ENABLED emitted exactly once (value
+# conditional), no override duplicate. The container's own "name" "worker" and a
+# secret's "name" "DB_PASSWORD" "valueFrom" must NOT be mistaken for env-var
+# duplicates. R33 must stay silent.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateworker-clean
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateWorker
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $workerType := $xr.spec.workerType -}}
+            {{- $workerEnv := list -}}
+            {{- if eq $workerType "worker-turnover" -}}
+              {{- $workerEnv = concat $workerEnv (list
+                (dict "name" "OTEL_SDK_DISABLED" "value" "true")
+              ) -}}
+            {{- end -}}
+            apiVersion: ecs.aws.upbound.io/v1beta2
+            kind: TaskDefinition
+            spec:
+              forProvider:
+                family: {{ $xr.spec.name }}
+                containerDefinitions: {{ toJson (list (dict
+                  "name" "worker"
+                  "image" $xr.spec.image
+                  "environment" (concat (list
+                    (dict "name" "APP_ENV" "value" "production")
+                    (dict "name" "OTEL_PHP_AUTOLOAD_ENABLED" "value" (ternary "false" "true" (eq $workerType "worker-turnover")))
+                  ) $workerEnv)
+                  "secrets" (list
+                    (dict "name" "DB_PASSWORD" "valueFrom" $xr.spec.dbSecretArn)
+                  )
+                )) }}

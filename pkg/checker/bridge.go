@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -388,6 +389,7 @@ func allRuleGroups() []ruleGroup {
 		{Name: "R25", Codes: []string{"XPC.E.prod-appset-autosync"}},
 		{Name: "R31", Codes: []string{"XPC.M.forprovider-canonical-form"}},
 		{Name: "R32", Codes: []string{"XPC.M.observed-desired-fixed-point"}},
+		{Name: "R33", Codes: []string{"XPC.M.duplicate-env-key"}},
 	}
 }
 
@@ -649,6 +651,7 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 	canonicalFormViolations = append(canonicalFormViolations,
 		buildCanonicalFormTemplateViolations(w.CanonicalFormTemplateFindings)...)
 	fixedPointViolations := buildFixedPointViolations(w.FixedPointUsages)
+	duplicateEnvViolations := buildDuplicateEnvViolations(w.DuplicateEnvFindings)
 	providerConfigRefViolations := buildProviderConfigRefViolations(w)
 	fargateEnvLabelViolations := buildFargateEnvLabelViolations(w)
 	esoStoreViolations := buildESOStoreViolations(w)
@@ -744,6 +747,7 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		sortedSection("r21-violations", r21Violations, r21ViolationCmp, r21ViolationToObj),
 		sortedSection("canonical-form-violations", canonicalFormViolations, r31ViolationCmp, r31ViolationToObj),
 		sortedSection("fixed-point-violations", fixedPointViolations, r32ViolationCmp, r32ViolationToObj),
+		sortedSection("duplicate-env-violations", duplicateEnvViolations, r33ViolationCmp, r33ViolationToObj),
 		sortedSection("providerconfig-ref-violations", providerConfigRefViolations, providerConfigRefViolationCmp, providerConfigRefViolationToObj),
 		sortedSection("fargate-env-label-violations", fargateEnvLabelViolations, fargateEnvLabelViolationCmp, fargateEnvLabelViolationToObj),
 		sortedSection("eso-store-violations", esoStoreViolations, esoStoreViolationCmp, esoStoreViolationToObj),
@@ -1599,6 +1603,43 @@ func r32ViolationToObj(v r32Violation) kl.Obj {
 		sym("r32-violation"),
 		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
 		str(v.FieldPath), str(v.Desired), str(v.Observed), sym(regSym),
+		sourceToObj(v.Source),
+	})
+}
+
+// ── R33 / XPC.M.duplicate-env-key (Tier-2, heuristic) ────────────────────────
+
+type r33Violation struct {
+	Composition string
+	EnvName     string
+	Count       string
+	Source      types.SourceLocation
+}
+
+func buildDuplicateEnvViolations(findings []types.DuplicateEnvFinding) []r33Violation {
+	var out []r33Violation
+	for _, f := range findings {
+		out = append(out, r33Violation{
+			Composition: f.Composition,
+			EnvName:     f.EnvName,
+			Count:       strconv.Itoa(f.Count),
+			Source:      f.Source,
+		})
+	}
+	return out
+}
+
+func r33ViolationCmp(a, b r33Violation) int {
+	if c := cmp.Compare(a.Composition, b.Composition); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.EnvName, b.EnvName)
+}
+
+func r33ViolationToObj(v r33Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r33-violation"),
+		str(v.Composition), str(v.EnvName), str(v.Count),
 		sourceToObj(v.Source),
 	})
 }

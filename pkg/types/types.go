@@ -929,6 +929,23 @@ type CanonicalFormTemplateFinding struct {
 	Source      SourceLocation `json:"source"`
 }
 
+// DuplicateEnvFinding records a go-templating Composition that builds an ECS
+// containerDefinitions environment array with the same variable name more than
+// once (category M, R33 / XPC.M.duplicate-env-key). AWS dedupes the env array
+// on registration, so the stored task def (one entry) never matches the desired
+// containerDefinitions (N entries) → a permanent diff on the *immutable*
+// container_definitions field → upjet hard-fails with ReconcileError. Populated
+// by Builder.checkCompositionDuplicateEnv (Tier-2, heuristic). Warn severity:
+// the scan is template-text-based and cannot tell whether two same-named
+// entries land in the SAME container (the bug) or in different containers of a
+// multi-container task (legitimate).
+type DuplicateEnvFinding struct {
+	Composition string         `json:"composition"`
+	EnvName     string         `json:"envName"`
+	Count       int            `json:"count"`
+	Source      SourceLocation `json:"source"`
+}
+
 // FixedPointUsage records, for one managed resource captured from a live
 // cluster, a forProvider leaf whose value diverges from the corresponding
 // status.atProvider leaf. This is the Tier-3 (dynamic) storm fingerprint:
@@ -1067,6 +1084,12 @@ type World struct {
 	// Composition bodies (Tier-2, heuristic). Populated by
 	// Builder.checkCompositionCanonicalForm; folded into R31 at warn severity.
 	CanonicalFormTemplateFindings []CanonicalFormTemplateFinding `json:"-"`
+
+	// DuplicateEnvFindings records go-templating Compositions that emit the same
+	// ECS environment variable name more than once (Tier-2, heuristic).
+	// Populated by Builder.checkCompositionDuplicateEnv; consumed by Shen rule
+	// R33 (XPC.M.duplicate-env-key).
+	DuplicateEnvFindings []DuplicateEnvFinding `json:"-"`
 
 	// FixedPointUsages records forProvider/atProvider divergences observed on
 	// live (status-bearing) resources (Tier-3, dynamic). Populated by

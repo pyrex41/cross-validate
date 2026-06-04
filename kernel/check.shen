@@ -44,6 +44,7 @@
 (load "r30-externalsecret-store.shen")
 (load "r31-forprovider-canonical-form.shen")
 (load "r32-observed-desired-fixed-point.shen")
+(load "r33-duplicate-env-key.shen")
 
 \* ===== IR reading ===== *\
 
@@ -130,6 +131,7 @@
          R30Violations (extract-section eso-store-violations Sections)
          R31Violations (extract-section canonical-form-violations Sections)
          R32Violations (extract-section fixed-point-violations Sections)
+         R33Violations (extract-section duplicate-env-violations Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -173,10 +175,11 @@
          R30 (if (rule-allowed? "XPC.K.externalsecret-store" Allowlist) (mark-rule "XPC.K.externalsecret-store" (check-r30 R30Violations)) [])
          R31 (if (rule-allowed? "XPC.M.forprovider-canonical-form" Allowlist) (mark-rule "XPC.M.forprovider-canonical-form" (check-r31 R31Violations)) [])
          R32 (if (rule-allowed? "XPC.M.observed-desired-fixed-point" Allowlist) (mark-rule "XPC.M.observed-desired-fixed-point" (check-r32 R32Violations)) [])
+         R33 (if (rule-allowed? "XPC.M.duplicate-env-key" Allowlist) (mark-rule "XPC.M.duplicate-env-key" (check-r33 R33Violations)) [])
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 (append R30 (append R31 R32)))))))))))))))))))))))))))))))
+          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 (append R30 (append R31 (append R32 R33))))))))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

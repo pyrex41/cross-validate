@@ -5,10 +5,36 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// knownTopLevelKeys returns the set of top-level yaml keys the Config struct
+// understands, derived by reflection over its field tags. Deriving it (rather
+// than hand-maintaining a list) keeps the forward-compat warning in lock-step
+// with the struct: adding a new top-level config field can never again leave a
+// stale literal that false-warns "unknown top-level key ... ignoring" on a key
+// the decoder actually honors.
+func knownTopLevelKeys() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf(Config{})
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("yaml")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		// Strip yaml tag options like ",omitempty".
+		if comma := strings.IndexByte(tag, ','); comma >= 0 {
+			tag = tag[:comma]
+		}
+		if tag != "" {
+			out[tag] = true
+		}
+	}
+	return out
+}
 
 // CurrentVersion is the schema version this binary understands. The loader
 // rejects xpc.yaml files whose top-level `version:` key disagrees so that
@@ -50,33 +76,37 @@ func Parse(data []byte) (*Config, error) {
 		return out, nil
 	}
 
-	// Decode in two passes:
-	//   1. Strict-decode into Config so unknown nested keys surface as
-	//      yaml.v3 KnownFields errors.
-	//   2. Loose-decode into a map[string]interface{} so we can spot
-	//      unknown TOP-LEVEL keys and demote them to a warning instead of
-	//      an error (forward-compat across binary versions).
+	// Decode in two passes to split the two error classes the design wants:
+	//   - unknown TOP-LEVEL key  → warning, ignored (forward-compat: an older
+	//     binary must still read a config carrying a newer top-level key).
+	//   - unknown NESTED key     → error (catches typos inside a known section).
+	//
+	// 1. Loose-decode into a map so we can spot — and then strip — unknown
+	//    top-level keys, emitting the forward-compat warning for each.
+	// 2. Re-marshal the stripped map and strict-decode it into Config with
+	//    KnownFields(true). Because the unknown top-level keys are already
+	//    gone, they don't trip the strict decoder; any unknown key that
+	//    remains is nested and correctly surfaces as an error.
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
 
-	knownTopLevel := map[string]bool{
-		"version":             true,
-		"prod-patterns":       true,
-		"immutable-fields":    true,
-		"state-bearing-kinds": true,
-		"bypass-annotations":  true,
-		"name-carveouts":      true,
-	}
+	knownTopLevel := knownTopLevelKeys()
 	for k := range raw {
 		if !knownTopLevel[k] {
 			fmt.Fprintf(os.Stderr,
 				"warning: unknown top-level key %q in xpc.yaml; ignoring (forward-compat)\n", k)
+			delete(raw, k)
 		}
 	}
 
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	stripped, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	dec := yaml.NewDecoder(strings.NewReader(string(stripped)))
 	dec.KnownFields(true)
 	cfg := &Config{}
 	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
