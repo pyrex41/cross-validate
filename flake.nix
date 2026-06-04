@@ -21,7 +21,7 @@
       packages = forAll (pkgs: rec {
         xpc = pkgs.buildGoModule {
           pname = "xpc";
-          version = "0.2.3";
+          version = "0.2.4";
           src = ./.;
           # Covers the replaced shen-go fork + yaml.v3 (see go.mod/go.sum).
           # nix prints the correct value on the first build; fill it in.
