@@ -433,6 +433,114 @@ apply to prod without a manual sync gate.
 **Usual fix**: remove `automated` from the template for prod-named AppSets, or
 split automation into a non-prod pattern if that is truly intended.
 
+### R28: ProviderConfig Reference Resolves
+
+**Code**: `XPC.B.providerconfig-resolves`
+
+**Inputs**: managed-resource `spec.providerConfigRef.name`, the set of declared
+ProviderConfig / ClusterProviderConfig names, and the allowed-provider-configs
+allowlist.
+
+**Invariant**: every managed resource's `providerConfigRef.name` resolves to a
+declared (Cluster)ProviderConfig or an allowlisted name.
+
+**Failure mode**: a typo names nothing, Crossplane cannot resolve the credential
+binding, and the resource silently never reconciles while the deploy looks
+healthy.
+
+**Usual fix**: correct the reference to a declared ProviderConfig, or add the
+intended name to the allowlist.
+
+### R29: Fargate Claim Environment Label
+
+**Code**: `XPC.E.fargate-claim-env-label`
+
+**Inputs**: claims of policed kinds (FargateApp / FargateWorker / FargateService
+by default), the required environment-label key, and the allowed value enum
+(prod / preview / ops by default).
+
+**Invariant**: every policed claim carries the environment label with a value in
+the allowed enum.
+
+**Failure mode**: a missing label hides the claim from blast-radius reasoning,
+monitoring escalation, and account scoping; an invalid value silently misroutes
+it.
+
+**Usual fix**: add the environment label with a valid value to the claim
+(usually in its Helm values file). Forward-looking: coverage depends on the scan
+scope including the `deploy/facilitygrid/{prod,preview}/` values files.
+
+### R30: ExternalSecret Store Resolves
+
+**Code**: `XPC.K.externalsecret-store`
+
+**Inputs**: ExternalSecret `spec.secretStoreRef.name` and the configured store
+allowlist (`external-secret-stores.allowed-names` in `xpc.yaml`).
+
+**Invariant**: every ExternalSecret references an allowlisted (Cluster)SecretStore.
+
+**Failure mode**: a wrong or typo'd store name names a store that does not exist,
+so external-secrets fails to sync (`SecretSyncedError`); the target Secret is
+never created and every workload mounting it fails.
+
+**Usual fix**: point `secretStoreRef.name` at a real store, or add it to the
+allowlist.
+
+### R31: forProvider Canonical Form
+
+**Code**: `XPC.M.forprovider-canonical-form` (Category M, Tier-1 static)
+
+**Inputs**: managed-resource `forProvider` fields registered as
+provider-canonicalized, and their literal values.
+
+**Invariant**: a registered provider-canonicalized field is written in canonical
+form (e.g. ECS `spec.forProvider.taskDefinition` as `family:revision`, not a
+bare family name).
+
+**Failure mode**: a non-canonical literal makes desired `!=` observed forever;
+upjet re-issues the external Update on every reconcile and the status write
+conflicts with the poll loop — a self-sustaining reconcile storm (fg-manifold
+MR !2232).
+
+**Usual fix**: write the field in the canonical form the provider echoes back,
+or omit it and let the provider populate it.
+
+### R32: Observed/Desired Fixed Point
+
+**Code**: `XPC.M.observed-desired-fixed-point` (Category M, Tier-3 dynamic)
+
+**Inputs**: `spec.forProvider` leaves and the matching `status.atProvider` leaves
+on status-bearing (live) managed resources.
+
+**Invariant**: every `forProvider` leaf on a live resource converges to its
+`status.atProvider` value.
+
+**Failure mode**: a persistent desired `!=` observed divergence is the
+reconcile-storm fingerprint captured from reality — the provider keeps
+reconciling a value the cloud will never echo back.
+
+**Usual fix**: align the desired value with what the provider reports (often the
+canonical-form fix from R31). Only fires when status is present — i.e. a
+`--from-cluster` snapshot merged into the World; silent on plain disk manifests.
+
+### R33: Duplicate Env Key
+
+**Code**: `XPC.M.duplicate-env-key` (Category M, Tier-2 heuristic)
+
+**Inputs**: go-templating Compositions that build an ECS `containerDefinitions`
+environment array.
+
+**Invariant**: a container's environment array must not declare the same variable
+name more than once.
+
+**Failure mode**: AWS dedupes the env array on registration, so the desired
+`containerDefinitions` never matches the stored (deduped) task def — a permanent
+diff on the IMMUTABLE `container_definitions` field, so upjet hard-fails with
+`ReconcileError`. The convergence-failure sibling of R31.
+
+**Usual fix**: remove the duplicate environment entry from the Composition
+template.
+
 ## Plan Rules
 
 `xpc plan` compares two worlds. These rules cannot be expressed by a single

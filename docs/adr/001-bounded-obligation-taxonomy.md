@@ -4,6 +4,12 @@
 **Date**: 2026-04-12
 **Author**: xpc team
 
+> **Amendment (2026-06-03)**: the taxonomy has since been extended from the
+> original 12 categories to **14** — **S: Safety** (the INC-6 floor, added
+> 2026-04-23) and **M: Convergence** (the reconcile-storm rules, added
+> 2026-06-03). The "12" figures below are the as-decided record; see
+> [`docs/obligations.md`](../obligations.md) for the current category set.
+
 ## Context
 
 xpc v0.1 ships with 11 hand-written rules (R1-R11). Each rule is a standalone

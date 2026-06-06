@@ -1,6 +1,6 @@
 # Obligation Taxonomy
 
-This document defines the 12 obligation categories that xpc checks against.
+This document defines the 14 obligation categories that xpc checks against.
 Every diagnostic xpc produces traces back to a generator in one of these
 categories. See [ADR-001](adr/001-bounded-obligation-taxonomy.md) for the
 rationale.

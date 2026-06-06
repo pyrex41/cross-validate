@@ -8,7 +8,7 @@ with file/line, fix recipes, and stable diagnostic codes.
 
 The single binary covers four jobs:
 
-- **`xpc check`** — lint manifests against 25 rules across 12 obligation
+- **`xpc check`** — lint manifests against 30 rules across 14 obligation
   categories.
 - **`xpc plan`** — diff two refs (or `.xpcsnap` files), flag destructive
   changes, post the result as a GitLab MR or GitHub PR comment.
@@ -35,11 +35,25 @@ ad-hoc grab bag.
 
 ## Install
 
+Build from source:
+
 ```sh
-git clone https://github.com/pyrex41/cross-validate.git
+git clone https://lab.facilitygrid.net/facility-grid/cross-validate.git
 cd cross-validate
 go build -o xpc ./cmd/xpc
 ```
+
+Or grab a prebuilt binary from a release (linux/amd64, linux/arm64,
+darwin/arm64) — these are what CI consumes:
+
+```sh
+# inside the lab.facilitygrid.net network (Internal project — needs a token)
+curl -fsSL --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  https://lab.facilitygrid.net/facility-grid/cross-validate/-/releases/v0.2.4/downloads/xpc-linux-amd64 \
+  -o xpc && chmod +x xpc
+```
+
+Releases are cut with `make release-gitlab` (see [Development](#development)).
 
 Go 1.25+. No runtime deps for `xpc check` on already-rendered manifests.
 Optional binaries on `$PATH` enable extra passes:
@@ -125,7 +139,7 @@ failure. CI consumers should read the SARIF report to distinguish the two.
 
 ## What it checks
 
-25 rules, grouped by the 12-category obligation taxonomy (see
+30 rules, grouped by the 14-category obligation taxonomy (see
 [`docs/obligations.md`](docs/obligations.md) for the full mapping; ADRs
 [001](docs/adr/001-bounded-obligation-taxonomy.md) and
 [002](docs/adr/002-shen-as-canonical-spec-and-trajectory-simulator.md) for
@@ -134,13 +148,14 @@ why it's structured this way). Highlights:
 - **Schema** (A) — CRD field validity, patch source/target compatibility,
   v1/v2 machinery placement.
 - **References** (B) — Composition → XRD, Pipeline step → Function, patch
-  source → field resolve correctly.
+  source → field, and `providerConfigRef` (R28) all resolve.
 - **Versions** (C) — exactly one storage version, all served, XRD
   referenceable.
 - **AppProject constraints** (D) — managed kinds pass the project
   whitelist (R15), source repo + destination allowed, sync windows.
-- **Patches & state-bearing resources** (R10–R13) — secret taint
-  propagation, API deprecation, dangling mounts, immutable-field changes.
+- **Patches & secret flow** (R10–R12, R30) — secret taint propagation, API
+  deprecation, dangling mounts, ExternalSecret store resolution.
+  (Immutable-field enforcement moved to the plan-side R27; R13 is retired.)
 - **RBAC drift** (R14) — managed RBAC roles don't lose permissions
   silently across waves.
 - **Argo↔Crossplane drift** (R16, R21) — selectors / late-init fields
@@ -153,6 +168,13 @@ why it's structured this way). Highlights:
 - **INC-6 floor** (R23–R25) — `crossplane-state-needs-orphan`,
   `appset-finalizer-without-preserve`, `prod-appset-autosync`. Run alone
   with `--focus=inc6-floor`.
+- **Env/label wiring** (E) — `fargate-claim-env-label` (R29) keeps Fargate
+  claim env labels consistent.
+- **Convergence** (M) — the reconcile-storm rules
+  `forprovider-canonical-form` (R31), `observed-desired-fixed-point` (R32),
+  and `duplicate-env-key` (R33): they catch non-canonical `forProvider`
+  spec that upjet rewrites on every reconcile, driving an endless update
+  loop.
 
 ## CI integration
 
@@ -171,7 +193,7 @@ operator for CI use.
 ```
 manifests/  →  loader  →  IR  →  bridge (Go)  →  kernel (Shen)  →  diagnostics
                                      ↓                ↓
-                              precomputed       25 rule modules
+                              precomputed       30 rule modules
                               fact tables       (kernel/r*.shen)
 ```
 
@@ -201,7 +223,7 @@ identical diagnostics. Profile any run with `--profile-rules
 
 ```
 cmd/xpc/            CLI entry + per-command dispatch
-kernel/             Shen rule modules (r1–r25) + prelude + check
+kernel/             Shen rule modules (r1–r33) + prelude + check
 pkg/
   loader/           YAML + Helm/Kustomize/Composition rendering
   ir/               World construction, AppSet generator expansion
@@ -235,7 +257,14 @@ self-verifies via `showboat verify`):
 make test       # go test ./... -count=1
 make lint       # go vet + gofmt
 make build      # go build ./...
+make release-gitlab  # build binaries + publish a GitLab release (tag must be pushed)
 ```
+
+`make release-gitlab` reads the version from `cmd/xpc/main.go`, cross-compiles
+linux/amd64, linux/arm64, and darwin/arm64, uploads them to the project's
+generic Package Registry, and creates the matching GitLab release. Auth via
+`GITLAB_TOKEN` or the `glab` CLI token; see
+[`scripts/release-gitlab.sh`](scripts/release-gitlab.sh).
 
 Run a single rule's tests:
 
@@ -243,11 +272,12 @@ Run a single rule's tests:
 go test ./pkg/checker/ -run TestR16 -count=1
 ```
 
-The `replace` directive in `go.mod` pins
-[`tiancaiamao/shen-go`](https://github.com/tiancaiamao/shen-go) to a fork
-that ships kernel 41.1 + a Go-native Shen reader + load cache. That fork
-drops cold-check from ~2.5s to ~0.7s. We'll revert to upstream once the
-patch lands there.
+The `replace` directive in `go.mod` points
+[`tiancaiamao/shen-go`](https://github.com/tiancaiamao/shen-go) at the
+[`pyrex41/shen-go`](https://github.com/pyrex41/shen-go) fork (v1.1.1), which
+ships kernel 41.1 + a Go-native Shen reader + load cache. That fork drops
+cold-check from ~2.5s to ~0.7s. We'll revert to upstream once the patch
+lands there.
 
 ## License
 
