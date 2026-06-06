@@ -25,10 +25,10 @@ its own controllers run. Without explicit `ignoreDifferences` coverage the
 two fight each other forever. Without `deletionPolicy: Orphan` on
 state-bearing resources, an Argo cascade delete runs a real destructive
 call against AWS/Aurora/KMS/etc. — the [INC-6 failure
-shape](docs/adr/001-bounded-obligation-taxonomy.md).
+shape](docs/inc-6.md).
 
 The other half of the project is bounded obligation accounting: every
-diagnostic traces to one of 12 categories defined in
+diagnostic traces to one of 14 categories defined in
 [`docs/obligations.md`](docs/obligations.md), so the tool can make a
 defensible "everything in category X is checked" claim instead of being an
 ad-hoc grab bag.
@@ -165,9 +165,9 @@ why it's structured this way). Highlights:
   cleanly and deterministically.
 - **Server-side apply safety** (R22) — managementPolicies × SSA
   combinations that don't corrupt field ownership.
-- **INC-6 floor** (R23–R25) — `crossplane-state-needs-orphan`,
-  `appset-finalizer-without-preserve`, `prod-appset-autosync`. Run alone
-  with `--focus=inc6-floor`.
+- **[INC-6](docs/inc-6.md) floor** (R23–R25) —
+  `crossplane-state-needs-orphan`, `appset-finalizer-without-preserve`,
+  `prod-appset-autosync`. Run alone with `--focus=inc6-floor`.
 - **Env/label wiring** (E) — `fargate-claim-env-label` (R29) keeps Fargate
   claim env labels consistent.
 - **Convergence** (M) — the reconcile-storm rules
