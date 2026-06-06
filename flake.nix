@@ -16,16 +16,22 @@
         "aarch64-darwin"
       ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+
+      # Single source of truth for the release version. Keep in lockstep with
+      # cmd/xpc/main.go's `const version` (the release-gitlab.sh check reads it
+      # from there).
+      version = "0.2.5";
     in
     {
       packages = forAll (pkgs: rec {
         xpc = pkgs.buildGoModule {
           pname = "xpc";
-          version = "0.2.4";
+          inherit version;
           src = ./.;
-          # Covers the replaced shen-go fork + yaml.v3 (see go.mod/go.sum).
-          # nix prints the correct value on the first build; fill it in.
-          vendorHash = "sha256-fNgbwKEUTS3mKe1BzrgNkuHyA3o4iu5TNc5JTEgHcOo=";
+          # Covers the replaced shen-go fork (pyrex41/shen-go v1.2.0) + yaml.v3
+          # (see go.mod/go.sum). nix prints the correct value on the first build
+          # after a dependency change; fill it in.
+          vendorHash = "sha256-Hkt1szctweyhjptjQHXfHzlNNO0bKiHOMqEgtg3cW2U=";
           subPackages = [ "cmd/xpc" ];
           ldflags = [
             "-s"
@@ -41,6 +47,24 @@
           };
         };
         default = xpc;
+
+        # Reproducible, content-addressed OCI image wrapping the nix-built xpc.
+        # Linux-only (CI gate + presync hook run on linux/amd64); building the
+        # x86_64-linux output requires a linux builder. Consumers retag + push
+        # to their own registry (ECR, ghcr). ca-certificates is included so the
+        # binary can fetch CRDs/snapshots over TLS when run with --render.
+        xpcImage = pkgs.dockerTools.buildLayeredImage {
+          name = "xpc";
+          tag = "v${version}";
+          contents = [
+            xpc
+            pkgs.cacert
+          ];
+          config = {
+            Entrypoint = [ "${xpc}/bin/xpc" ];
+            Env = [ "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+          };
+        };
       });
 
       devShells = forAll (pkgs: {
