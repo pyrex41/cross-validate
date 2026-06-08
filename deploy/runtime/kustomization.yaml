@@ -1,0 +1,31 @@
+# Base kustomization for the xpcd runtime policy daemon.
+#
+#   kubectl apply -k deploy/runtime
+#
+# This base deploys xpcd in `audit` mode (log-only, never blocks) — the safe
+# rollout default. To deny non-compliant objects, apply the enforce overlay:
+#
+#   kubectl apply -k deploy/runtime/overlays/enforce
+#
+# Requires cert-manager for the serving cert + caBundle injection. For the
+# manual-cert path, see certificate.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: xpc-system
+
+commonLabels:
+  app.kubernetes.io/name: xpcd
+  app.kubernetes.io/part-of: xpc
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - certificate.yaml
+  - deployment.yaml
+  - service.yaml
+  - validatingwebhook.yaml
+
+images:
+  - name: ghcr.io/pyrex41/xpcd
+    newTag: latest # pin to a digest/tag in production

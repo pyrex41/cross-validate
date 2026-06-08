@@ -1,0 +1,65 @@
+# ValidatingWebhookConfiguration for xpcd.
+#
+# Design choices that follow xpcd's audit-first philosophy:
+#   - failurePolicy: Ignore — if xpcd is down, slow, or errors, the apiserver
+#     admits the object anyway. The daemon must NEVER wedge the cluster. (In
+#     audit mode it would not deny regardless; Ignore also protects enforce.)
+#   - sideEffects: None — xpcd performs no out-of-band mutations; dry-run safe.
+#   - admissionReviewVersions: [v1] — xpcd speaks AdmissionReview v1 JSON only.
+#   - namespaceSelector excludes kube-system and xpc-system so the daemon never
+#     gates control-plane or its own namespace.
+#
+# The caBundle is injected by cert-manager's ca-injector via the
+# inject-ca-from annotation (see certificate.yaml). For the manual cert path,
+# replace the placeholder caBundle and drop the annotation.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: xpcd
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+  annotations:
+    cert-manager.io/inject-ca-from: xpc-system/xpcd-serving-cert
+webhooks:
+  - name: xpcd.xpc-system.svc
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    matchPolicy: Equivalent
+    clientConfig:
+      service:
+        name: xpcd
+        namespace: xpc-system
+        path: /admit
+        port: 443
+      # Placeholder — populated by cert-manager ca-injector (or manually; see
+      # certificate.yaml MANUAL FALLBACK). Must be the base64 PEM CA bundle.
+      caBundle: Cg==
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - xpc-system
+    rules:
+      # Crossplane managed resources — the INC-6 state-preservation floor (R23)
+      # and the convergence rules (R31/R33) act on these.
+      - apiGroups:
+          - "*.aws.upbound.io" # upjet AWS providers (rds, kms, s3, ec2, ...)
+          - "*.gcp.upbound.io"
+          - "*.azure.upbound.io"
+          - "apiextensions.crossplane.io" # composite resources / claims
+        apiVersions: ["*"]
+        resources: ["*"]
+        scope: Namespaced
+        operations: ["CREATE", "UPDATE", "DELETE"]
+      # Argo CD Applications + ApplicationSets — the INC-6 cascade floor
+      # (R24 appset-finalizer-without-preserve, R25 prod-appset-autosync).
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        resources: ["applications", "applicationsets"]
+        scope: Namespaced
+        operations: ["CREATE", "UPDATE", "DELETE"]

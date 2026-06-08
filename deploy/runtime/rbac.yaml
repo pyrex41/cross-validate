@@ -1,0 +1,57 @@
+# ServiceAccount + least-privilege ClusterRole for xpcd.
+#
+# xpcd evaluates the runtime-decidable subset of the Shen kernel. The default
+# subset (the INC-6 safety floor plus the self-contained rules) is *single-
+# object* sound: it decides on the AdmissionReview payload alone and needs no
+# cluster reads. The read-only grants below exist only for the "ambient-with-
+# cache" tier (CRD/XRD/Composition/Provider context for rules that benefit from
+# schema lookups). Nothing here grants write or secret access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: xpcd
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: xpcd
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+rules:
+  # CRDs — resolve the schema for an admitted managed resource.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # XRDs + Compositions — ambient Crossplane type context.
+  - apiGroups: ["apiextensions.crossplane.io"]
+    resources: ["compositeresourcedefinitions", "compositions"]
+    verbs: ["get", "list", "watch"]
+  # Providers / Functions / Configurations — provider-capability context.
+  - apiGroups: ["pkg.crossplane.io"]
+    resources: ["providers", "functions", "configurations"]
+    verbs: ["get", "list", "watch"]
+  # Applications / ApplicationSets — ambient Argo context for the INC-6 rules.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications", "applicationsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: xpcd
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: xpcd
+subjects:
+  - kind: ServiceAccount
+    name: xpcd
+    namespace: xpc-system

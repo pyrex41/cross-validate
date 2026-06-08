@@ -1,0 +1,71 @@
+# TLS for the xpcd admission webhook.
+#
+# PREFERRED: cert-manager. The Certificate below issues into the `xpcd-tls`
+# Secret (mounted by the Deployment at --cert-dir). cert-manager's ca-injector
+# fills the ValidatingWebhookConfiguration caBundle automatically because the
+# webhook carries the
+#   cert-manager.io/inject-ca-from: xpc-system/xpcd-serving-cert
+# annotation (see validatingwebhook.yaml).
+#
+# This file is gated on cert-manager being installed. If you do NOT run
+# cert-manager, comment out the two resources below and use the MANUAL
+# FALLBACK described at the bottom of this file.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: xpcd-selfsigned
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: xpcd-serving-cert
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+spec:
+  # Must match the volume.secret.secretName in deployment.yaml and produce
+  # tls.crt + tls.key under --cert-dir.
+  secretName: xpcd-tls
+  duration: 8760h # 1y
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: xpcd-selfsigned
+    kind: Issuer
+  # SANs must cover the in-cluster Service DNS the apiserver dials.
+  dnsNames:
+    - xpcd.xpc-system.svc
+    - xpcd.xpc-system.svc.cluster.local
+#
+# ---------------------------------------------------------------------------
+# MANUAL FALLBACK (no cert-manager)
+# ---------------------------------------------------------------------------
+# 1. Generate a self-signed serving cert for the Service DNS name:
+#
+#      openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+#        -keyout tls.key -out tls.crt \
+#        -subj "/CN=xpcd.xpc-system.svc" \
+#        -addext "subjectAltName=DNS:xpcd.xpc-system.svc,DNS:xpcd.xpc-system.svc.cluster.local"
+#
+# 2. Create the Secret xpcd expects at --cert-dir:
+#
+#      kubectl -n xpc-system create secret tls xpcd-tls \
+#        --cert=tls.crt --key=tls.key
+#
+# 3. Patch the webhook caBundle with the same cert (base64, single line):
+#
+#      kubectl patch validatingwebhookconfiguration xpcd --type=json -p \
+#        "[{'op':'replace','path':'/webhooks/0/clientConfig/caBundle',
+#           'value':'$(base64 -w0 tls.crt)'}]"
+#
+#    and remove the cert-manager.io/inject-ca-from annotation so it is not
+#    overwritten.
