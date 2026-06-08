@@ -169,14 +169,21 @@ cluster. Three reasons:
 - **It stays read-only at the RBAC layer.** The ServiceAccount grants only
   `get`/`list` (`deploy/runtime/rbac.yaml`); there is no write path to abuse.
 
-**R32 (live observed-vs-desired fixed-point) is the next tier to unlock here.**
-It needs the live `status` subresource — the observed state — which only exists
-on a running object, so it is meaningless at admission (the object has no status
-yet) and unavailable to `xpc`-in-CI (no cluster). The controller's whole-cluster
-capture is the first context in which R32 *could* be evaluated soundly. It is
-**not** included in the current subset; promoting it is a future tier expansion,
-gated by the same single-object-soundness-within-the-captured-world reasoning
-the tiers in §2 use.
+**R32 (live observed-vs-desired fixed-point) is the live tier (`TierLive`) the
+controller unlocks.** It needs the live `status` subresource — the observed
+state — which only exists on a running object, so it is meaningless at admission
+(the object has no status yet) and unavailable to `xpc`-in-CI (no cluster). The
+controller's whole-cluster capture (`kubectl get -o yaml` carries `status`) is
+the first and only context in which R32 can be evaluated soundly, so it is
+classified `TierLive` and included in `ControllerSubset()` but excluded from the
+admission-facing `DecidableSubset()`/`AmbientSubset()`. The kernel rule and its
+Go fact-builder (`buildFixedPointViolations`, registry-aware severity, the
+`managementPolicies`-disables-Update pre-filter) already existed for
+`xpc check --from-cluster`; the controller reuses them unchanged — the unlock is
+purely a subset (allowlist) decision, consistent with the rest of §2. R32 is the
+one rule no static or admission path can reach; a single-snapshot divergence on
+a registry-known field is conclusive (`error`), an unknown-field divergence is a
+`warn` to be confirmed against a later sweep.
 
 ## Consequences
 

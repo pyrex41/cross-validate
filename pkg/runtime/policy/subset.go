@@ -26,9 +26,15 @@ const (
 	// Sound only when an ambient World snapshot is supplied.
 	TierAmbient
 
-	// TierExcluded rules are NOT runtime-safe for single-object admission:
-	// they require trajectory simulation (apply-order state evolution),
-	// live observed/desired diffs, or unbounded cross-repo reference joins.
+	// TierLive rules need live observed cluster state (a resource's
+	// status, e.g. status.atProvider) that no admission request carries.
+	// They are sound only in the controller sweep, which captures the whole
+	// live cluster including status. This is the Tier-3 / dynamic class.
+	TierLive
+
+	// TierExcluded rules are NOT runtime-safe in any mode here: they require
+	// trajectory simulation (apply-order state evolution) or unbounded
+	// cross-repo reference joins, neither of which the runtime reconstructs.
 	TierExcluded
 )
 
@@ -44,8 +50,10 @@ type RuleClass struct {
 // Codes are quoted exactly as the kernel emits them.
 //
 // Be honest: the reference-resolution rules (R3/R4/R6/R7/R28) and the
-// trajectory/live-diff rules (R12/R14/R32) are TierExcluded for single-object
-// admission — they fundamentally need other objects or a simulated apply.
+// trajectory rules (R12/R14) are TierExcluded — they fundamentally need other
+// objects or a simulated apply. R32 (live observed/desired diff) is TierLive:
+// excluded from admission, but sound in the controller sweep that captures
+// observed status.
 func Registry() []RuleClass {
 	return []RuleClass{
 		// ---- TierSingleObject: sound on one object's bytes ----
@@ -139,7 +147,17 @@ func Registry() []RuleClass {
 		{Code: "XPC.K.externalsecret-store", Tier: TierAmbient,
 			Why: "object's secretStoreRef.name checked against the ambient allowed-store set"},
 
-		// ---- TierExcluded: trajectory / live-diff / unbounded ref joins ----
+		// ---- TierLive: needs live observed status (controller sweep only) ----
+
+		// R32: observed/desired fixed point diffs spec.forProvider against the
+		// live status.atProvider to fingerprint a reconcile storm. No admission
+		// request carries observed state, but the controller's whole-cluster
+		// capture does (kubectl get -o yaml includes status), so EnrichTrajectory
+		// populates the facts and this lights up under ControllerSubset.
+		{Code: "XPC.M.observed-desired-fixed-point", Tier: TierLive,
+			Why: "diffs forProvider against live status.atProvider; needs observed cluster state, available only in the controller sweep"},
+
+		// ---- TierExcluded: trajectory / unbounded ref joins ----
 
 		// R3: composition must resolve to an XRD that may live anywhere in
 		// the repo — unbounded reference join, not single-object.
@@ -183,10 +201,6 @@ func Registry() []RuleClass {
 		// elsewhere — unbounded reference join.
 		{Code: "XPC.B.providerconfig-resolves", Tier: TierExcluded,
 			Why: "providerConfigRef->ProviderConfig reference resolution across the repo"},
-		// R32: observed/desired fixed point requires LIVE status (atProvider)
-		// — a runtime admission request carries no observed state.
-		{Code: "XPC.M.observed-desired-fixed-point", Tier: TierExcluded,
-			Why: "requires live observed (atProvider) status diff against desired; not available at admission"},
 	}
 }
 
@@ -203,6 +217,14 @@ func DecidableSubset() []string {
 // resolve their references soundly.
 func AmbientSubset() []string {
 	return codesForTiers(TierSingleObject, TierAmbient)
+}
+
+// ControllerSubset returns AmbientSubset plus the TierLive rules. It is the
+// subset for the controller sweep, which captures the whole live cluster
+// (type environment + observed status), making the live-diff rules (R32)
+// sound in addition to everything the ambient subset already covers.
+func ControllerSubset() []string {
+	return codesForTiers(TierSingleObject, TierAmbient, TierLive)
 }
 
 func codesForTiers(tiers ...Tier) []string {

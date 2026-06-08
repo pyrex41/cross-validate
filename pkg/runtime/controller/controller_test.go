@@ -117,6 +117,50 @@ func TestReconcileEmitsViolationEvents(t *testing.T) {
 	mustContain(t, out, "xpcd_controller_violations 1")
 }
 
+// divergeYAML is a live managed resource whose spec.forProvider.taskDefinition
+// (a registered canonical field) diverges from its observed status.atProvider —
+// the reconcile-storm fingerprint R32 catches. R32 needs observed status, which
+// only the controller sweep has, so this exercises the TierLive unlock.
+const divergeYAML = `
+apiVersion: ecs.aws.upbound.io/v1beta1
+kind: Service
+metadata: {name: app-svc, namespace: crossplane-system}
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    taskDefinition: "arn:aws:ecs:us-east-1:1:task-definition/app:42"
+status:
+  atProvider:
+    taskDefinition: "arn:aws:ecs:us-east-1:1:task-definition/app:43"
+`
+
+func TestReconcileUnlocksR32OnLiveStatus(t *testing.T) {
+	rec := &recordingSink{}
+	r := &Reconciler{
+		Capturer:    &fakeCapturer{snap: snapshotFromYAML(t, divergeYAML)},
+		ClusterName: "prod",
+		Sink:        rec,
+		Metrics:     obs.NewMetrics(),
+	}
+	s, err := r.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if s.Violations != 1 || len(rec.events) != 1 {
+		t.Fatalf("want 1 R32 violation, got violations=%d events=%d", s.Violations, len(rec.events))
+	}
+	ev := rec.events[0]
+	if !containsCode(ev.RuleCodes, "XPC.M.observed-desired-fixed-point") {
+		t.Errorf("ruleCodes = %v, want R32", ev.RuleCodes)
+	}
+	if ev.Cluster != "prod" {
+		t.Errorf("cluster label = %q, want prod", ev.Cluster)
+	}
+	if ev.Source != "controller" {
+		t.Errorf("source = %q, want controller", ev.Source)
+	}
+}
+
 func TestReconcileCaptureErrorPropagates(t *testing.T) {
 	r := &Reconciler{
 		Capturer:    &fakeCapturer{err: errFake},

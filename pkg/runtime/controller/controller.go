@@ -41,9 +41,9 @@ type Reconciler struct {
 	Capturer    Capturer
 	ClusterName string
 	KernelPath  string
-	// Subset is the rule allowlist. Defaults to policy.AmbientSubset() — the
-	// single-object subset plus the ambient rules the whole-cluster capture
-	// makes sound.
+	// Subset is the rule allowlist. Defaults to policy.ControllerSubset() —
+	// the single-object and ambient rules plus the live-diff rules (R32) the
+	// whole-cluster capture (with observed status) makes sound.
 	Subset []string
 	// Mode labels emitted events (events are observe-only regardless). Defaults
 	// to obs.ModeAudit.
@@ -76,7 +76,7 @@ func (r *Reconciler) subset() []string {
 	if len(r.Subset) > 0 {
 		return r.Subset
 	}
-	return policy.AmbientSubset()
+	return policy.ControllerSubset()
 }
 
 func (r *Reconciler) checkFn() CheckFunc {

@@ -136,17 +136,21 @@ reports on how Argo CD / Crossplane resources are actually configured at runtime
 
 The webhook runs the **single-object** subset: rules whose verdict depends only
 on the object under review (R23/R24/R25 + R22/R29/R31/R33). The controller runs
-that **same single-object subset PLUS the ambient-tier rules** — selector /
-late-init ignore-diff rules that need the cluster type-environment to resolve.
-Those ambient rules could **not** run at admission time on a single object
-(their referents are not in the AdmissionReview payload), so the controller is
-where they light up. See
+that **same single-object subset, PLUS the ambient-tier rules, PLUS the live
+tier (R32)** — `ControllerSubset()`. The ambient rules (selector / late-init
+ignore-diff) need the cluster type-environment to resolve, and could **not** run
+at admission time on a single object (their referents are not in the
+AdmissionReview payload). See
 [ADR-005 §"Controller sweep (ambient tier)"](adr/005-runtime-decidable-subset.md#5-controller-sweep-ambient-tier)
 for why the whole-cluster capture is what makes them sound.
 
-R32 (observed-desired fixed-point, which needs live `status`) is a **future
-unlock** for the controller — noted in ADR-005 as the next tier — but is **not**
-yet included.
+**R32 (observed-desired fixed-point) is the live tier the controller unlocks.**
+It diffs `spec.forProvider` against the live `status.atProvider` to fingerprint a
+reconcile storm — desired values the provider never echoes back. That needs the
+observed `status`, which the admission payload lacks and CI has no cluster for,
+so only the controller's capture can evaluate it. A divergence on a
+registry-known field is an `error` (a single snapshot is conclusive); an
+unknown-field divergence is a `warn` to confirm against a later sweep.
 
 ### Flags
 
@@ -495,7 +499,8 @@ changes every tool with no second edit. Both xpcd modes deliberately run a
 **subset** of the kernel: the reference-resolution (B), trajectory (F),
 cross-Application (G), rendering (H), and plan-mode (`XPC.P.*`) rules stay in
 `xpc`-in-CI, where the two-Worlds and cross-repo context they need actually
-exists. The controller widens the runtime subset to the **ambient tier** —
-sound because it captures the whole world before evaluating — but R32
-(observed-vs-desired) remains a future unlock. See
+exists. The controller widens the runtime subset to the **ambient tier** and the
+**live tier** — sound because it captures the whole world (including observed
+`status`) before evaluating — so R32 (observed-vs-desired), which no static or
+admission path can reach, runs there. See
 [ADR-005](adr/005-runtime-decidable-subset.md).

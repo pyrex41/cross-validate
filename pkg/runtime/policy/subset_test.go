@@ -68,6 +68,33 @@ func TestAmbientSubsetSupersetOfDecidable(t *testing.T) {
 	}
 }
 
+func TestControllerSubsetAddsLiveTier(t *testing.T) {
+	ambient := AmbientSubset()
+	controller := ControllerSubset()
+
+	// ControllerSubset is a superset of AmbientSubset.
+	for _, code := range ambient {
+		if !slices.Contains(controller, code) {
+			t.Errorf("ControllerSubset missing ambient code %q", code)
+		}
+	}
+	// R32 is the live-tier rule the controller unlocks; it must be present
+	// here but absent from the admission-facing subsets.
+	if !slices.Contains(controller, "XPC.M.observed-desired-fixed-point") {
+		t.Error("ControllerSubset must include R32 (live observed/desired diff)")
+	}
+	if slices.Contains(ambient, "XPC.M.observed-desired-fixed-point") {
+		t.Error("AmbientSubset must not include R32")
+	}
+	if slices.Contains(DecidableSubset(), "XPC.M.observed-desired-fixed-point") {
+		t.Error("DecidableSubset must not include R32")
+	}
+	// Still excludes pure-trajectory rules.
+	if slices.Contains(controller, "XPC012") || slices.Contains(controller, "XPC014") {
+		t.Error("ControllerSubset must still exclude trajectory rules R12/R14")
+	}
+}
+
 func TestRegistryNoDuplicateCodes(t *testing.T) {
 	seen := map[string]bool{}
 	for _, rc := range Registry() {
