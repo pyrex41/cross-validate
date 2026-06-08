@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // evalBuckets are the fixed upper bounds (in seconds) for the eval latency
@@ -42,6 +43,13 @@ type Metrics struct {
 	evalSum     float64   // seconds
 	evalBuckets []uint64  // cumulative-ready per-bucket counts (le ordering)
 	bounds      []float64 // copy of evalBuckets bounds
+
+	// Controller-sweep stats (set by xpcd watch each reconcile). Zero values
+	// render as a no-op set of series until the first run.
+	controllerRuns      uint64
+	controllerResources float64
+	controllerViolation float64
+	controllerLastRun   float64 // unix seconds
 }
 
 // NewMetrics returns an empty, ready-to-use Metrics registry.
@@ -76,6 +84,18 @@ func (m *Metrics) Observe(e Event) {
 func (m *Metrics) AddDropped(n uint64) {
 	m.mu.Lock()
 	m.dropped += n
+	m.mu.Unlock()
+}
+
+// RecordControllerRun records the outcome of one controller reconcile sweep:
+// how many live resources were scanned, how many violations fired, and when.
+// It increments the run counter and replaces the gauge values.
+func (m *Metrics) RecordControllerRun(resources, violations int, when time.Time) {
+	m.mu.Lock()
+	m.controllerRuns++
+	m.controllerResources = float64(resources)
+	m.controllerViolation = float64(violations)
+	m.controllerLastRun = float64(when.Unix())
 	m.mu.Unlock()
 }
 
@@ -138,6 +158,20 @@ func (m *Metrics) Render() []byte {
 	fmt.Fprintf(&b, "xpcd_eval_seconds_sum %s\n", formatFloat(m.evalSum))
 	fmt.Fprintf(&b, "xpcd_eval_seconds_count %d\n", m.evalCount)
 
+	// Controller sweep gauges (xpcd watch).
+	b.WriteString("# HELP xpcd_controller_runs_total Total controller reconcile sweeps completed.\n")
+	b.WriteString("# TYPE xpcd_controller_runs_total counter\n")
+	fmt.Fprintf(&b, "xpcd_controller_runs_total %d\n", m.controllerRuns)
+	b.WriteString("# HELP xpcd_controller_resources_scanned Live resources scanned in the last sweep.\n")
+	b.WriteString("# TYPE xpcd_controller_resources_scanned gauge\n")
+	fmt.Fprintf(&b, "xpcd_controller_resources_scanned %s\n", formatGauge(m.controllerResources))
+	b.WriteString("# HELP xpcd_controller_violations Violations found in the last sweep.\n")
+	b.WriteString("# TYPE xpcd_controller_violations gauge\n")
+	fmt.Fprintf(&b, "xpcd_controller_violations %s\n", formatGauge(m.controllerViolation))
+	b.WriteString("# HELP xpcd_controller_last_run_unixtime Unix timestamp of the last completed sweep.\n")
+	b.WriteString("# TYPE xpcd_controller_last_run_unixtime gauge\n")
+	fmt.Fprintf(&b, "xpcd_controller_last_run_unixtime %s\n", formatGauge(m.controllerLastRun))
+
 	return []byte(b.String())
 }
 
@@ -149,4 +183,10 @@ func quote(s string) string {
 
 func formatFloat(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// formatGauge renders whole-number gauge values without scientific notation
+// (e.g. unix timestamps), which the 'g' verb would switch to.
+func formatGauge(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }

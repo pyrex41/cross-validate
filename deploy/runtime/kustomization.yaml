@@ -23,6 +23,7 @@ resources:
   - rbac.yaml
   - certificate.yaml
   - deployment.yaml
+  - controller-deployment.yaml
   - service.yaml
   - validatingwebhook.yaml
 

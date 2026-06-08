@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pyrex41/cross-validate-/pkg/clustersrc"
+	"github.com/pyrex41/cross-validate-/pkg/runtime/controller"
 	"github.com/pyrex41/cross-validate-/pkg/runtime/obs"
 	"github.com/pyrex41/cross-validate-/pkg/runtime/policy"
 )
@@ -34,6 +36,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(os.Args[2:]))
+	case "watch":
+		os.Exit(runWatch(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("xpcd", version)
 	case "help", "-h", "--help":
@@ -50,9 +54,10 @@ func usage() {
 
 Usage:
   xpcd serve [flags]   Start the admission webhook + metrics servers
+  xpcd watch [flags]   Run the periodic cluster-sweep controller (observe-only)
   xpcd version         Print version
 
-Run "xpcd serve --help" for flags.
+Run "xpcd serve --help" or "xpcd watch --help" for flags.
 `)
 }
 
@@ -157,6 +162,99 @@ func runServe(args []string) int {
 	_ = webhookServer.Shutdown(ctx)
 	_ = metricsServer.Shutdown(ctx)
 	return 0
+}
+
+func runWatch(args []string) int {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	interval := fs.Duration("interval", 60*time.Second, "reconcile sweep interval")
+	cluster := fs.String("cluster", "default", "cluster name label applied to emitted events")
+	kubeContext := fs.String("kube-context", "", "kubectl --context to use (empty: current-context)")
+	metricsAddr := fs.String("metrics-addr", ":9090", "address for the metrics + health server")
+	kernelPath := fs.String("kernel-path", "", "path to the Shen kernel directory (default: embedded)")
+	clickhouseURL := fs.String("clickhouse-url", os.Getenv("XPCD_CLICKHOUSE_URL"), "optional event sink endpoint (ClickHouse HTTP / collector)")
+	once := fs.Bool("once", false, "run a single sweep and exit (for CronJob / debugging)")
+	mode := fs.String("mode", obs.ModeAudit, "mode label applied to events (the controller is always observe-only)")
+	_ = fs.Parse(args)
+
+	metrics := obs.NewMetrics()
+	sinks := []obs.Sink{obs.NewStdoutSink(os.Stdout)}
+	if *clickhouseURL != "" {
+		sinks = append(sinks, obs.NewHTTPSink(*clickhouseURL))
+	}
+	sink := obs.NewMultiSink(sinks...)
+	defer sink.Close()
+
+	reconciler := &controller.Reconciler{
+		Capturer:    &clustersrc.Capturer{Context: *kubeContext},
+		ClusterName: *cluster,
+		KernelPath:  *kernelPath,
+		Mode:        *mode,
+		Sink:        sink,
+		Metrics:     metrics,
+	}
+
+	// --once: a single synchronous sweep, no servers (CronJob / debug path).
+	if *once {
+		s, err := reconciler.ReconcileOnce(context.Background())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xpcd watch: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "xpcd watch: swept %d resources, %d with violations\n", s.Resources, s.Violations)
+		return 0
+	}
+
+	fmt.Fprintf(os.Stderr, "xpcd %s watching cluster=%s every %s, metrics=%s, subset=%d rules\n",
+		version, *cluster, *interval, *metricsAddr, len(reconciler.Subset))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Metrics + health server. Readiness flips after the first sweep completes.
+	var ready atomic.Bool
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if ready.Load() {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	ms := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := ms.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "xpcd watch: metrics server: %v\n", err)
+		}
+	}()
+
+	sweep := func() {
+		s, err := reconciler.ReconcileOnce(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xpcd watch: sweep failed: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "xpcd watch: swept %d resources, %d with violations (%v)\n",
+				s.Resources, s.Violations, s.Duration.Round(time.Millisecond))
+		}
+		ready.Store(true)
+	}
+
+	sweep() // immediate first sweep
+	t := time.NewTicker(*interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "xpcd watch: shutting down")
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = ms.Shutdown(sctx)
+			cancel()
+			return 0
+		case <-t.C:
+			sweep()
+		}
+	}
 }
 
 // warmKernel triggers the one-time Shen runtime initialisation by evaluating a

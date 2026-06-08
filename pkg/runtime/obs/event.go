@@ -45,8 +45,12 @@ const (
 // event, JSONEachRow style). Timestamp marshals as RFC3339Nano.
 type Event struct {
 	Timestamp time.Time `json:"ts"`
-	Decision  string    `json:"decision"` // allow / deny / warn
+	Decision  string    `json:"decision"` // allow / deny / would-deny / warn
 	Mode      string    `json:"mode"`     // enforce / audit
+
+	// Cluster is the cluster-name label; set by the controller sweep
+	// (xpcd watch --cluster). Empty for admission events on the local cluster.
+	Cluster string `json:"cluster,omitempty"`
 
 	Group     string `json:"group"`
 	Version   string `json:"version"`

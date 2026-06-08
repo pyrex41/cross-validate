@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMetricsObserveAndRender(t *testing.T) {
@@ -73,6 +74,20 @@ func mustContain(t *testing.T, out, want string) {
 	if !strings.Contains(out, want) {
 		t.Errorf("exposition missing %q\n---\n%s", want, out)
 	}
+}
+
+func TestMetricsControllerRun(t *testing.T) {
+	m := NewMetrics()
+	m.RecordControllerRun(42, 3, time.Unix(1717800000, 0))
+	m.RecordControllerRun(40, 1, time.Unix(1717800060, 0))
+	out := string(m.Render())
+
+	mustContain(t, out, "# TYPE xpcd_controller_runs_total counter")
+	mustContain(t, out, "xpcd_controller_runs_total 2")
+	mustContain(t, out, "# TYPE xpcd_controller_resources_scanned gauge")
+	mustContain(t, out, "xpcd_controller_resources_scanned 40") // last sweep replaces
+	mustContain(t, out, "xpcd_controller_violations 1")
+	mustContain(t, out, "xpcd_controller_last_run_unixtime 1717800060")
 }
 
 func TestMetricsHandler(t *testing.T) {

@@ -1,0 +1,136 @@
+# xpcd controller Deployment — the periodic whole-cluster sweeper.
+#
+# Runs `xpcd watch`: a reconcile loop that, every --interval, captures the live
+# cluster (the same kubectl path as `xpc snapshot` / pkg/clustersrc) and runs
+# the SAME Shen kernel over the captured world, restricted to the AMBIENT
+# decidable subset. The ambient tier (selector / late-init ignore-diff rules
+# that need the cluster type-environment to resolve) could NOT run at admission
+# time on a single object — the controller is where those rules light up. It is
+# observe-only: it never mutates the cluster; it only reports how Argo CD /
+# Crossplane resources are actually configured at runtime.
+#
+# This is the runtime counterpart to `xpcd serve` (admission, gates one object
+# as it arrives). The controller continuously sweeps everything already live.
+# See docs/runtime-policy.md and docs/adr/005-runtime-decidable-subset.md.
+#
+# IMPORTANT: the container image MUST have a `kubectl` binary on PATH. Unlike
+# the admission `serve` path (which reads the AdmissionReview payload and needs
+# no cluster reads), `xpcd watch` captures the cluster by shelling out to
+# `kubectl get ... -o yaml` (pkg/clustersrc). The simplest approach is a single
+# image variant that bundles kubectl alongside xpcd — add a kubectl COPY stage
+# to cmd/xpcd/Dockerfile so `ghcr.io/pyrex41/xpcd:latest` already contains it.
+# (If you prefer to keep the serve image minimal, an initContainer that copies
+# a kubectl binary into a shared emptyDir on PATH also works; bundling is
+# simpler and is the documented default.)
+#
+# Image is built from cmd/xpcd in this repo:
+#   docker build -t ghcr.io/pyrex41/xpcd:latest -f cmd/xpcd/Dockerfile .
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xpcd-controller
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/part-of: xpc
+spec:
+  # Singleton sweeper: exactly one replica. A second replica would double-scan
+  # the whole cluster every interval and emit duplicate violation events. This
+  # is NOT the webhook (which runs 2 for admission availability); the controller
+  # is observe-only and has no availability requirement on the admission path.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: xpcd
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: xpcd
+        app.kubernetes.io/component: controller
+        app.kubernetes.io/part-of: xpc
+      annotations:
+        # Scrape the pod directly for the controller metrics (runs counter,
+        # resources-scanned / violations gauges, last-run unixtime).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: xpcd
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: xpcd-controller
+          image: ghcr.io/pyrex41/xpcd:latest # built from cmd/xpcd; MUST include kubectl on PATH (see header)
+          imagePullPolicy: IfNotPresent
+          args:
+            - watch
+            - --interval=60s # one reconcile sweep per minute
+            - --cluster=$(CLUSTER_NAME) # cluster-name label stamped on every event
+            - --metrics-addr=:9090 # Prometheus /metrics + /healthz + /readyz
+            # --kube-context defaults to empty (in-cluster current-context).
+            # --kernel-path defaults to the embedded kernel.
+            # --once is unset here (continuous loop); see the CronJob note in
+            # docs/runtime-policy.md for the run-once alternative.
+          env:
+            # Cluster-name label stamped on every controller event (the `cluster`
+            # field). Set per environment, e.g. "prod", "staging".
+            - name: CLUSTER_NAME
+              value: "prod"
+            # Optional ClickHouse sink for JSONL events — the SAME Secret/key the
+            # base (serve) deployment uses. If unset, xpcd watch logs events to
+            # stdout (JSONL) for cluster log shipping.
+            - name: XPCD_CLICKHOUSE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: xpcd-clickhouse
+                  key: url
+                  optional: true
+          ports:
+            # No webhook port: the controller has no admission server and no TLS.
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              # A whole-cluster sweep parses every captured object; give it more
+              # headroom than the single-object admission path.
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # No TLS mount (no webhook server). kubectl writes nothing to disk on
+            # the capture path, but give it a writable /tmp under the read-only
+            # root filesystem for any incidental scratch.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

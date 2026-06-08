@@ -132,6 +132,52 @@ shape and metrics are specified in [docs/runtime-policy.md](../runtime-policy.md
 and are part of this decision: a runtime floor you cannot observe is one you
 cannot trust enough to enforce.
 
+### 5. Controller sweep (ambient tier).
+
+`xpcd serve` (admission) decides on a single object, so it can only run the
+**single-object** tier soundly: the ambient-tier rules in §2 need the cluster
+type-environment (selector resolution, late-init ignore-diff context) that is
+*not* present in one `AdmissionReview` payload. Running them at admission would
+mean resolving a reference to an object the webhook cannot see — the exact
+false-positive-denial failure §2 forbids.
+
+`xpcd watch` (the controller) removes that constraint by changing the unit of
+evaluation. Each interval it **captures the whole cluster** — the same kubectl
+path `xpc snapshot` uses (`pkg/clustersrc`): it lists the fixed Crossplane/Argo
+kinds, discovers managed-resource CRDs dynamically, and lists each one
+cluster-wide — and runs the kernel over that complete captured world. Because
+**every referenced object is present in the capture**, the ambient-tier rules
+are sound at runtime: there is no unresolved reference that could flip a verdict
+the instant an unseen referent changes. The controller therefore runs the
+single-object subset **plus** the ambient tier, lighting up rules admission
+structurally cannot.
+
+The controller is **observe-only** by deliberate design — it never mutates the
+cluster. Three reasons:
+
+- **Soundness is about reading the whole world, not gating one write.** The
+  value the controller adds is whole-cluster coverage of state that is *already
+  live* (applied before xpcd existed, written out-of-band, or admitted while the
+  webhook was fail-open). Gating is admission's job; sweeping is the
+  controller's.
+- **No false-positive blast radius.** A mutating or blocking sweep over the
+  whole cluster could act on hundreds of objects per interval; an observe-only
+  loop has no destructive failure mode. It emits only violations
+  (`would-deny`/`warn`) to a signal-rich stream and updates metrics — the same
+  observability-first posture as §4, applied to the standing population rather
+  than the admission flow.
+- **It stays read-only at the RBAC layer.** The ServiceAccount grants only
+  `get`/`list` (`deploy/runtime/rbac.yaml`); there is no write path to abuse.
+
+**R32 (live observed-vs-desired fixed-point) is the next tier to unlock here.**
+It needs the live `status` subresource — the observed state — which only exists
+on a running object, so it is meaningless at admission (the object has no status
+yet) and unavailable to `xpc`-in-CI (no cluster). The controller's whole-cluster
+capture is the first context in which R32 *could* be evaluated soundly. It is
+**not** included in the current subset; promoting it is a future tier expansion,
+gated by the same single-object-soundness-within-the-captured-world reasoning
+the tiers in §2 use.
+
 ## Consequences
 
 - **Single source of truth holds across the static/runtime boundary.** A change
@@ -145,6 +191,12 @@ cannot trust enough to enforce.
 - **Two-layer defense, matching [INC-6](../inc-6.md).** CI catches violations
   pre-merge (static floor); `xpcd` catches whatever reaches the cluster by any
   path (runtime floor). `xpcd` complements, and does not replace, `xpc`-in-CI.
+- **Admission and the controller are complementary, not redundant.** `xpcd
+  serve` gates one object as it arrives (single-object tier); `xpcd watch`
+  sweeps the standing population every interval and, because it captures the
+  whole world first, soundly runs the wider ambient tier (§5). Admission cannot
+  see state that is already live; the controller cannot block a write. Together
+  they cover both the inflow and the standing set with one kernel.
 - **Relationship to fg-manifold's VAP.** fg-manifold ships a
   `crossplane-state-require-orphan` ValidatingAdmissionPolicy whose kind
   allowlist R23 already mirrors ([obligations.md](../obligations.md) category
