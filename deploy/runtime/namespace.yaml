@@ -1,0 +1,14 @@
+# Namespace for the xpcd runtime policy daemon — the always-on cluster
+# companion to the static `xpc` analyzer. xpcd is a ValidatingWebhook that
+# evaluates the runtime-decidable subset of the Shen kernel at admission time.
+# See docs/runtime-policy.md and docs/adr/005-runtime-decidable-subset.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+    # Excluded from xpcd's own webhook via namespaceSelector (see
+    # validatingwebhook.yaml) so the daemon can never wedge its own namespace.
+    xpc.io/admission-webhook: ignore

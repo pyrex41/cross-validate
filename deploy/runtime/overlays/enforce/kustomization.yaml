@@ -1,0 +1,29 @@
+# Enforce overlay for xpcd.
+#
+#   kubectl apply -k deploy/runtime/overlays/enforce
+#
+# This overlay flips the daemon from the audit-first default (`--mode=audit`,
+# log-only, never blocks) to `--mode=enforce` (deny non-compliant objects at
+# admission). Only promote to enforce once the audit-mode decision stream is
+# clean — see the rollout path in docs/runtime-policy.md.
+#
+# Nothing else changes: same image, ports, RBAC, webhook, and serving cert as
+# the base. The webhook's failurePolicy stays Ignore, so even in enforce mode a
+# down/slow/erroring xpcd lets the apiserver admit the object rather than wedge
+# the cluster.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../
+
+# Flip the one flag. The base sets args[1] to "--mode=audit"; this patch
+# replaces that exact element. If you reorder the base args, update the path.
+patches:
+  - target:
+      kind: Deployment
+      name: xpcd
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/args/1
+        value: --mode=enforce

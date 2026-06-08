@@ -1,0 +1,108 @@
+# xpcd Deployment — the runtime policy daemon.
+#
+# Runs `xpcd serve`: a plain net/http ValidatingWebhook server (AdmissionReview
+# JSON, no client-go in the admission path). Default mode is `audit` (log-only,
+# never blocks) — the safe rollout default. Flip to `enforce` via the overlay in
+# overlays/enforce/ once audit metrics are clean. See docs/runtime-policy.md.
+#
+# Image is built from cmd/xpcd in this repo:
+#   docker build -t ghcr.io/pyrex41/xpcd:latest -f cmd/xpcd/Dockerfile .
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xpcd
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: xpcd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: xpcd
+        app.kubernetes.io/part-of: xpc
+      annotations:
+        # Scrape the pod directly; a headless metrics path is also exposed via
+        # the metrics Service in service.yaml.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: xpcd
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: xpcd
+          image: ghcr.io/pyrex41/xpcd:latest # built from cmd/xpcd
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --mode=audit # audit-first rollout; enforce via overlays/enforce
+            - --addr=:8443 # TLS admission listener
+            - --metrics-addr=:9090 # Prometheus /metrics + /healthz + /readyz
+            - --cert-dir=/etc/xpcd/tls # tls.crt + tls.key mounted below
+          env:
+            # Optional ClickHouse sink for JSONL decision events. If unset,
+            # xpcd still logs events to stdout (JSONL) for cluster log shipping.
+            - name: XPCD_CLICKHOUSE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: xpcd-clickhouse
+                  key: url
+                  optional: true
+          ports:
+            - name: webhook
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/xpcd/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            # Populated by cert-manager (see certificate.yaml) or manually
+            # (see the manual fallback note in certificate.yaml).
+            secretName: xpcd-tls
+        - name: tmp
+          emptyDir: {}

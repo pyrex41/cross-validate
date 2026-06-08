@@ -1,0 +1,43 @@
+# Services for xpcd.
+#
+# - `xpcd` fronts the admission webhook (443 -> 8443). The
+#   ValidatingWebhookConfiguration's clientConfig.service points here.
+# - `xpcd-metrics` exposes Prometheus /metrics (9090) with scrape annotations,
+#   kept separate so the webhook Service stays a clean TLS endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: xpcd
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+spec:
+  selector:
+    app.kubernetes.io/name: xpcd
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: webhook # -> containerPort 8443
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xpcd-metrics
+  namespace: xpc-system
+  labels:
+    app.kubernetes.io/name: xpcd
+    app.kubernetes.io/part-of: xpc
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app.kubernetes.io/name: xpcd
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics # -> containerPort 9090
+      protocol: TCP
