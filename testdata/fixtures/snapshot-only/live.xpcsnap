@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "digest": "",
+  "timestamp": "2099-01-01T00:00:00Z",
+  "clusterName": "fg-preview",
+  "kubernetesVersion": "1.29",
+  "crds": [],
+  "xrds": [],
+  "providers": [],
+  "functions": [],
+  "configurations": [],
+  "compositions": [],
+  "resources": [
+    {
+      "apiVersion": "ecs.aws.upbound.io/v1beta1",
+      "kind": "Service",
+      "name": "fg-preview-chart-service",
+      "namespace": "crossplane-system",
+      "source": {
+        "file": "live-cluster://ecs.aws.upbound.io/Service/crossplane-system/fg-preview-chart-service",
+        "line": 1
+      },
+      "raw": {
+        "apiVersion": "ecs.aws.upbound.io/v1beta1",
+        "kind": "Service",
+        "metadata": {
+          "name": "fg-preview-chart-service",
+          "namespace": "crossplane-system"
+        },
+        "spec": {
+          "forProvider": {
+            "region": "us-east-2",
+            "taskDefinition": "arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service",
+            "launchType": "FARGATE"
+          }
+        },
+        "status": {
+          "atProvider": {
+            "taskDefinition": "arn:aws:ecs:us-east-2:362836553677:task-definition/fg-preview-chart-service:42"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "rds.aws.upbound.io/v1beta1",
+      "kind": "Cluster",
+      "name": "aurora-prod-cluster",
+      "namespace": "crossplane-system",
+      "source": {
+        "file": "live-cluster://rds.aws.upbound.io/Cluster/crossplane-system/aurora-prod-cluster",
+        "line": 1
+      },
+      "raw": {
+        "apiVersion": "rds.aws.upbound.io/v1beta1",
+        "kind": "Cluster",
+        "metadata": {
+          "name": "aurora-prod-cluster",
+          "namespace": "crossplane-system"
+        },
+        "spec": {
+          "forProvider": {
+            "region": "us-east-1",
+            "engine": "aurora-postgresql",
+            "databaseName": "app"
+          }
+        }
+      }
+    }
+  ]
+}

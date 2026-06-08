@@ -114,6 +114,36 @@ func extractExternalNameAdoptFindings(w *types.World) {
 	}
 }
 
+// ReEnrich recomputes every resource-derived fact over the current
+// w.Resources. It exists for callers that mutate w.Resources AFTER Builder.Build
+// has already run enrichment — notably a snapshot merge, where the snapshot's
+// live resources arrive after the IR is built (so R32's fixed-point usages, R17
+// field facts, mount/SA/RBAC refs, etc. would otherwise miss them). The
+// per-resource fact slices are zeroed first so re-running the extractors does
+// not duplicate facts already computed at Build time. The registry/knob fields
+// are reassigned idempotently by EnrichTrajectoryData itself.
+func ReEnrich(w *types.World) {
+	if w == nil {
+		return
+	}
+	// Zero the append-derived fact slices so the extractors below start clean.
+	w.MountRefs = nil
+	w.SARefs = nil
+	w.RBACBindings = nil
+	w.RBACRules = nil
+	w.SelectorUsages = nil
+	w.LateInitUsages = nil
+	w.CanonicalFormUsages = nil
+	w.FixedPointUsages = nil
+	w.SSAMPConflicts = nil
+	w.CPDeletionPolicyFacts = nil
+	w.ResourceFieldFacts = nil
+	w.ExternalNameAdoptFindings = nil // R35: re-derived by EnrichTrajectoryData below
+
+	EnrichTrajectoryData(w)
+	EnrichFieldValidation(w)
+}
+
 // ensureKnobDefaults populates the user-extensible knob fields on w if a
 // caller (typically a test) constructed the World without going through
 // Builder.Build. Idempotent: nil-checks each slice individually.

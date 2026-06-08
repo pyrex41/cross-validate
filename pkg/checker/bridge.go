@@ -396,6 +396,44 @@ func allRuleGroups() []ruleGroup {
 	}
 }
 
+// KnownRuleCodes returns the full set of diagnostic codes the kernel
+// dispatches in check-world. It is the source of truth for translating a
+// --category letter (the <X> in XPC.<X>.<slug>) into the concrete RuleAllowlist
+// entries that gate evaluation. The legacy numeric codes (XPC001..XPC014)
+// carry no category letter and so never match a --category filter.
+//
+// Keep this in lockstep with the rule-allowed? dispatch table in
+// kernel/check.shen — every code passed to rule-allowed? there must appear
+// here so category filtering can reach it.
+func KnownRuleCodes() []string {
+	return []string{
+		// Legacy numeric rules (no category letter).
+		"XPC001", "XPC002", "XPC003", "XPC004", "XPC005",
+		"XPC006", "XPC007", "XPC008", "XPC009", "XPC010",
+		"XPC011", "XPC012", "XPC014",
+		// Categorized rules: XPC.<X>.<slug>.
+		"XPC.A.resource-field-valid",
+		"XPC.B.providerconfig-resolves",
+		"XPC.D.kind-whitelisted",
+		"XPC.E.selector-needs-ignore-diff",
+		"XPC.E.late-init-needs-ignore-diff",
+		"XPC.E.ssa-managementpolicies-observe",
+		"XPC.E.ssa-managementpolicies-partial",
+		"XPC.E.ssa-managementpolicies-nondefault",
+		"XPC.E.appset-finalizer-without-preserve",
+		"XPC.E.prod-appset-autosync",
+		"XPC.E.fargate-claim-env-label",
+		"XPC.H.helm-renders",
+		"XPC.H.values-well-typed",
+		"XPC.H.render-deterministic",
+		"XPC.K.externalsecret-store",
+		"XPC.M.forprovider-canonical-form",
+		"XPC.M.observed-desired-fixed-point",
+		"XPC.M.duplicate-env-key",
+		"XPC.S.crossplane-state-needs-orphan",
+	}
+}
+
 func selectedRuleGroups(allowlist []string) []ruleGroup {
 	groups := allRuleGroups()
 	if len(allowlist) == 0 {
