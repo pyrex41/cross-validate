@@ -1003,6 +1003,107 @@ type ComputedBlockAliasFinding struct {
 	Source         SourceLocation `json:"source"`
 }
 
+// ExternalNameAdoptMapping is a registry row in category I (Provider-capability
+// obligations). It names a (Group, Kind) whose provider Create path is broken /
+// non-idempotent — or which targets a singleton external object that already
+// exists — so a managed resource of that kind MUST carry a
+// `crossplane.io/external-name` annotation to ADOPT the existing external object
+// (the provider then observes/updates instead of attempting Create). Without it
+// the resource never reconciles cleanly: the external Create errors (e.g. the
+// SigNoz provider returns an HTML error page → `invalid character '<'`) or
+// duplicates the singleton.
+//
+// The seed case is provider-signoz `Alert` (alert.signoz.crossplane.io): its
+// create path is broken against the custom signoz build, so the ElastiCache
+// alert rules were created out-of-band via the SigNoz API and adopted by adding
+// `crossplane.io/external-name: <rule-id>` (fg-manifold commit abd5aa10ed,
+// INC-8).
+//
+// Distinct from category M: M is a steady-state convergence problem (the resource
+// reconciles but never reaches a fixed point); this is a create-path problem (the
+// resource never reconciles at all). Append-only; anchor each Reason to the MR
+// that adopted via external-name.
+type ExternalNameAdoptMapping struct {
+	Group  string `json:"group"`
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
+// ExternalNameAdoptFinding records a concrete managed resource of a
+// must-adopt-via-external-name kind (ExternalNameAdoptRegistry) that lacks a
+// non-empty `crossplane.io/external-name` annotation and is not bypassed
+// (category I → R35 / XPC.I.must-adopt-external-name). Populated by
+// EnrichExternalNameAdopt; rendered at error severity — the failure is definite
+// and registry-confirmed (the provider WILL fail or duplicate Create for this
+// kind), not a heuristic.
+type ExternalNameAdoptFinding struct {
+	Group     string         `json:"group"`
+	Kind      string         `json:"kind"`
+	Name      string         `json:"name"`
+	Namespace string         `json:"namespace"`
+	Reason    string         `json:"reason"`
+	Source    SourceLocation `json:"source"`
+}
+
+// OrphanSGRefMapping is a registry row in category S (Safety / state-preservation
+// obligations). It names the (Group, Kind) of a Crossplane managed rule resource
+// (e.g. ec2 SecurityGroupRule) whose RefFields point at another resource — and
+// the (Group, Kind) of the referenced resource (RefGroup/RefKind, e.g. ec2
+// SecurityGroup). The rule used to detect the orphan-on-teardown wedge: a rule
+// ATTACHED to a long-lived resource but REFERENCING a short-lived (deletionPolicy:
+// Delete) resource leaves a dangling reference when the short-lived resource is
+// torn down — pinning it so its own Delete fails (DependencyViolation) and wedging
+// re-creation (InvalidGroup.Duplicate).
+//
+// See OrphanSGRefMapping field comments and pkg/ir/orphan_sgref_check.go for the
+// exact attach-vs-reference asymmetry the detector keys on.
+type OrphanSGRefMapping struct {
+	// Group/Kind of the rule resource itself (e.g. ec2 SecurityGroupRule).
+	Group string `json:"group"`
+	Kind  string `json:"kind"`
+	// RefGroup/RefKind of the resource the rule REFERENCES (e.g. ec2
+	// SecurityGroup). When the referenced resource is short-lived but the rule is
+	// attached to a long-lived resource, the reference dangles on teardown.
+	RefGroup string `json:"refGroup"`
+	RefKind  string `json:"refKind"`
+	// AttachFieldPattern matches the action-level key that names the resource the
+	// rule is ATTACHED to / lives on (e.g. `securityGroupId{,Ref,Selector}` on an
+	// ec2 SecurityGroupRule — the SG that physically holds the rule).
+	AttachFieldPattern string `json:"attachFieldPattern"`
+	// RefFieldPattern matches the action-level key that names the resource the
+	// rule REFERENCES as a peer (e.g. `sourceSecurityGroupId{,Ref,Selector}` /
+	// `referencedSecurityGroupId{,Ref,Selector}` — the SG on the other end of the
+	// rule). The dangling-reference risk is on this end.
+	RefFieldPattern string `json:"refFieldPattern"`
+	Reason          string `json:"reason"`
+}
+
+// OrphanSGRefFinding records a go-templating Composition that emits a rule
+// resource whose peer reference targets a short-lived resource (deletionPolicy:
+// Delete, or composition default) while the rule itself is attached to a
+// long-lived / shared resource (matched by a different lifecycle / a cross-scope
+// selector). On teardown the short-lived resource is deleted but the rule on the
+// long-lived resource is not, so the reference dangles and pins the short-lived
+// resource — the preview SG-orphan wedge (fg-manifold commit d144aa739b).
+//
+// Tier-2 heuristic (warn): inferring the asymmetric lifecycle from a template
+// scan cannot be as certain as observing two concrete resources with their
+// deletionPolicies — see pkg/ir/orphan_sgref_check.go for the precision limits.
+type OrphanSGRefFinding struct {
+	Composition string `json:"composition"`
+	Group       string `json:"group"`
+	Kind        string `json:"kind"`
+	// RuleName is the metadata.name of the rule resource in the template (may
+	// contain `{{ ... }}` actions).
+	RuleName string `json:"ruleName"`
+	// AttachField / RefField are the concrete keys found (e.g.
+	// "securityGroupIdSelector" / "sourceSecurityGroupIdSelector").
+	AttachField string         `json:"attachField"`
+	RefField    string         `json:"refField"`
+	Reason      string         `json:"reason"`
+	Source      SourceLocation `json:"source"`
+}
+
 // FixedPointUsage records, for one managed resource captured from a live
 // cluster, a forProvider leaf whose value diverges from the corresponding
 // status.atProvider leaf. This is the Tier-3 (dynamic) storm fingerprint:
@@ -1154,6 +1255,21 @@ type World struct {
 	// Populated by Builder.checkCompositionComputedBlockAlias; consumed by Shen
 	// rule R34 (XPC.M.computed-block-alias).
 	ComputedBlockAliasFindings []ComputedBlockAliasFinding `json:"-"`
+
+	// ExternalNameAdoptFindings records concrete managed resources of a
+	// must-adopt-via-external-name kind (ExternalNameAdoptRegistry) that lack a
+	// crossplane.io/external-name annotation and are not bypassed. Populated by
+	// EnrichExternalNameAdopt; consumed by Shen rule R35
+	// (XPC.I.must-adopt-external-name).
+	ExternalNameAdoptFindings []ExternalNameAdoptFinding `json:"-"`
+
+	// OrphanSGRefFindings records go-templating Compositions that emit a rule
+	// resource (e.g. ec2 SecurityGroupRule) whose peer reference dangles on
+	// teardown because it points at a short-lived resource while the rule is
+	// attached to a long-lived / shared one (Tier-2, heuristic). Populated by
+	// Builder.checkCompositionOrphanSGRef; consumed by Shen rule R36
+	// (XPC.S.orphaned-sgref).
+	OrphanSGRefFindings []OrphanSGRefFinding `json:"-"`
 
 	// FixedPointUsages records forProvider/atProvider divergences observed on
 	// live (status-bearing) resources (Tier-3, dynamic). Populated by

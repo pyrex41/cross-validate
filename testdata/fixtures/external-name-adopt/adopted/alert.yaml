@@ -1,0 +1,18 @@
+# MR abd5aa10ed fix: the Alert carries crossplane.io/external-name pointing at
+# the rule-id created out-of-band via the SigNoz API, so the provider observes
+# and updates the existing object instead of creating. R35 must NOT fire.
+apiVersion: alert.signoz.crossplane.io/v1alpha1
+kind: Alert
+metadata:
+  name: alert-elasticache-memory-warning
+  namespace: crossplane-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    crossplane.io/external-name: "019e94b5-ca94-7c1d-a3c8-d37c1d162598"
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    alertType: METRIC_BASED_ALERT
+    severity: warning

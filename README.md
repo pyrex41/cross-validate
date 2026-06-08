@@ -176,6 +176,14 @@ why it's structured this way). Highlights:
   `forProvider` spec that upjet rewrites on every reconcile (non-canonical
   scalar, duplicate env key, or a computed sub-block written in the simple
   scalar-alias form), driving an endless update loop.
+- **Provider capability** (I) — `must-adopt-external-name` (R35): a kind whose
+  provider Create path is broken / non-idempotent (e.g. provider-signoz `Alert`)
+  must carry `crossplane.io/external-name` to adopt the existing external object
+  instead of attempting a failing/duplicating Create.
+- **Teardown safety** (S) — `orphaned-sgref` (R36): a `SecurityGroupRule`
+  attached to a long-lived/shared SG but referencing a short-lived per-env SG
+  dangles on teardown, pinning the per-env SG (`DependencyViolation` → stuck
+  `Terminating` → `InvalidGroup.Duplicate` on recreate).
 
 ## CI integration
 

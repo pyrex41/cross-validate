@@ -52,8 +52,66 @@ func EnrichTrajectoryData(w *types.World) {
 	w.CanonicalFormMappings = CanonicalFormRegistry()
 	extractCanonicalFormUsages(w)
 	extractFixedPointUsages(w)
+	extractExternalNameAdoptFindings(w)
 	extractSSAMPConflicts(w)
 	extractCPDeletionPolicyFacts(w)
+}
+
+// externalNameAnnotation is the Crossplane annotation that adopts an existing
+// external object (the provider observes/updates it instead of creating).
+const externalNameAnnotation = "crossplane.io/external-name"
+
+// allowMissingExternalNameAnnotation is the explicit opt-out for R35: a resource
+// annotated with this key (truthy) is exempt from the must-adopt check — used
+// when a fresh external object really should be created (e.g. the provider create
+// path has been fixed but the registry row is not yet retired). Mirrors the
+// bypass-annotation pattern used by R23/R31.
+const allowMissingExternalNameAnnotation = "xpc.io/allow-missing-external-name"
+
+// extractExternalNameAdoptFindings populates w.ExternalNameAdoptFindings
+// (category I, Tier-1 resource walk) by joining ExternalNameAdoptRegistry against
+// every concrete managed resource in the World. A resource whose (group, kind) is
+// registered as must-adopt and which lacks a non-empty crossplane.io/external-name
+// annotation (and is not bypassed) is a finding: the provider's Create path is
+// broken / non-idempotent for this kind, so without the annotation it never
+// reconciles cleanly. Error severity — the failure is definite and
+// registry-confirmed, so the kernel does not soften it.
+func extractExternalNameAdoptFindings(w *types.World) {
+	type gk struct{ group, kind string }
+	index := make(map[gk]types.ExternalNameAdoptMapping)
+	for _, m := range ExternalNameAdoptRegistry() {
+		index[gk{m.Group, m.Kind}] = m
+	}
+	if len(index) == 0 {
+		return
+	}
+	for _, res := range w.Resources {
+		// A nameless doc (e.g. a flat claim shape inside a Helm values file) is
+		// not a real subject — only a committed/rendered manifest with a name.
+		if res.Name == "" {
+			continue
+		}
+		resGroup := groupFromAPIVersion(res.APIVersion)
+		m, ok := index[gk{resGroup, res.Kind}]
+		if !ok {
+			continue
+		}
+		if annotationTruthy(res.Annotations, allowMissingExternalNameAnnotation) {
+			continue
+		}
+		if strings.TrimSpace(res.Annotations[externalNameAnnotation]) != "" {
+			// Adopted — the provider observes the existing object. PASS.
+			continue
+		}
+		w.ExternalNameAdoptFindings = append(w.ExternalNameAdoptFindings, types.ExternalNameAdoptFinding{
+			Group:     resGroup,
+			Kind:      res.Kind,
+			Name:      res.Name,
+			Namespace: res.Namespace,
+			Reason:    m.Reason,
+			Source:    res.Source,
+		})
+	}
 }
 
 // ensureKnobDefaults populates the user-extensible knob fields on w if a

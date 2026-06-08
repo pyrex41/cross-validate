@@ -1,0 +1,17 @@
+# Explicit opt-out: the operator asserts a fresh external object really should be
+# created (e.g. the provider Create path was fixed) via
+# xpc.io/allow-missing-external-name. R35 must NOT fire even without an
+# external-name annotation.
+apiVersion: alert.signoz.crossplane.io/v1alpha1
+kind: Alert
+metadata:
+  name: alert-elasticache-memory-warning
+  namespace: crossplane-system
+  annotations:
+    xpc.io/allow-missing-external-name: "true"
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    alertType: METRIC_BASED_ALERT
+    severity: warning

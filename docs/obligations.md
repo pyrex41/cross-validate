@@ -156,6 +156,15 @@ running v0.38."
 - `field-available-in-version` -- MR field exists in provider CRD
 - `field-not-deprecated` -- MR field not deprecated in installed version
 - `controller-healthy` -- provider controller is healthy before MR creation
+- `must-adopt-external-name` -- a managed resource of a kind whose provider
+  Create path is broken / non-idempotent (or which targets an existing singleton
+  external object) must carry a `crossplane.io/external-name` annotation to ADOPT
+  the existing object rather than attempt a failing/duplicating Create. Without
+  it the resource never reconciles cleanly (create error / object-already-exists).
+  (**implemented** — R35 / `XPC.I.must-adopt-external-name`, Tier-1 resource walk
+  at error; registry `ExternalNameAdoptRegistry` seeded with provider-signoz
+  `Alert` from fg-manifold commit `abd5aa10ed` / INC-8; bypass
+  `xpc.io/allow-missing-external-name` plus `.xpc-waivers.yaml`)
 
 **Absorbs**: (new -- no legacy rule)
 
@@ -187,7 +196,8 @@ and pipelines, errors if tainted values reach untainted sinks.
 
 ### S: Safety / state-preservation obligations
 
-**Scope**: `(kind x deletionPolicy x bypass)` per Crossplane managed resource.
+**Scope**: `(kind x deletionPolicy x bypass)` per Crossplane managed resource,
+plus cross-resource teardown-lifecycle asymmetry (orphan-on-delete).
 
 Catch configuration that would allow Crossplane's default destructive behavior
 to reach "real" external state. State-bearing kinds (Aurora, DocDB, MySQL, KMS,
@@ -196,8 +206,27 @@ S3, VPC) default to `deletionPolicy: Delete` — the CR's deletion runs
 The invariant: every such resource declares `spec.deletionPolicy: Orphan`,
 unless an explicit bypass annotation opts it out.
 
+A second teardown-safety shape lives here: a managed *rule* resource (e.g. an
+ec2 `SecurityGroupRule`) attached to a long-lived/shared resource but referencing
+a short-lived, composition-scoped resource leaves a **dangling cross-scope
+reference** when the short-lived resource is torn down — pinning it so its own
+Delete fails (`DependencyViolation`) and wedging re-creation
+(`InvalidGroup.Duplicate`). This is an asymmetric-lifecycle / orphan obligation:
+the referenced resource will be deleted but the referencing rule will not.
+
 **Generators**:
 - `crossplane-state-needs-orphan` -- state-bearing Crossplane MR missing `deletionPolicy: Orphan` (**implemented** — R23 / `XPC.S.crossplane-state-needs-orphan`, kind allowlist mirrors fg-manifold's `crossplane-state-require-orphan` VAP; bypass `xpc.io/allow-delete` primary plus user-registered aliases via xpc.yaml `bypass-annotations.allow-delete.aliases`; default name carve-out `alb-logs`, extensible via xpc.yaml `name-carveouts.crossplane-state-needs-orphan`)
+- `orphaned-sgref` -- a go-templating Composition emits a rule resource (e.g. ec2
+  `SecurityGroupRule`) attached to a long-lived/shared SG (a selector that does
+  NOT match any SG built in the same template) but referencing a short-lived,
+  composition-scoped SG (a selector that DOES match a local SG). On teardown the
+  short-lived SG is deleted while the rule on the shared SG survives → the
+  reference dangles, pins the SG (`DeleteSecurityGroup` `DependencyViolation`
+  even at 0 ENIs → stuck `Terminating` → recreate `InvalidGroup.Duplicate`).
+  (**implemented** — R36 / `XPC.S.orphaned-sgref`, Tier-2 heuristic at warn;
+  block-scoped per rule, selector-style refs only; registry `OrphanSGRefRegistry`
+  seeded from fg-manifold commit `d144aa739b`; bypass `xpc.io/allow-orphan-sgref`
+  plus `.xpc-waivers.yaml`)
 
 **Absorbs**: (new — static floor for fg-synapse INC-6)
 

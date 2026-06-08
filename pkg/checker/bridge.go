@@ -391,6 +391,8 @@ func allRuleGroups() []ruleGroup {
 		{Name: "R32", Codes: []string{"XPC.M.observed-desired-fixed-point"}},
 		{Name: "R33", Codes: []string{"XPC.M.duplicate-env-key"}},
 		{Name: "R34", Codes: []string{"XPC.M.computed-block-alias"}},
+		{Name: "R35", Codes: []string{"XPC.I.must-adopt-external-name"}},
+		{Name: "R36", Codes: []string{"XPC.S.orphaned-sgref"}},
 	}
 }
 
@@ -654,6 +656,8 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 	fixedPointViolations := buildFixedPointViolations(w.FixedPointUsages)
 	duplicateEnvViolations := buildDuplicateEnvViolations(w.DuplicateEnvFindings)
 	computedBlockAliasViolations := buildComputedBlockAliasViolations(w.ComputedBlockAliasFindings)
+	externalNameAdoptViolations := buildExternalNameAdoptViolations(w.ExternalNameAdoptFindings)
+	orphanSGRefViolations := buildOrphanSGRefViolations(w.OrphanSGRefFindings)
 	providerConfigRefViolations := buildProviderConfigRefViolations(w)
 	fargateEnvLabelViolations := buildFargateEnvLabelViolations(w)
 	esoStoreViolations := buildESOStoreViolations(w)
@@ -751,6 +755,8 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		sortedSection("fixed-point-violations", fixedPointViolations, r32ViolationCmp, r32ViolationToObj),
 		sortedSection("duplicate-env-violations", duplicateEnvViolations, r33ViolationCmp, r33ViolationToObj),
 		sortedSection("computed-block-alias-violations", computedBlockAliasViolations, r34ViolationCmp, r34ViolationToObj),
+		sortedSection("external-name-adopt-violations", externalNameAdoptViolations, r35ViolationCmp, r35ViolationToObj),
+		sortedSection("orphan-sgref-violations", orphanSGRefViolations, r36ViolationCmp, r36ViolationToObj),
 		sortedSection("providerconfig-ref-violations", providerConfigRefViolations, providerConfigRefViolationCmp, providerConfigRefViolationToObj),
 		sortedSection("fargate-env-label-violations", fargateEnvLabelViolations, fargateEnvLabelViolationCmp, fargateEnvLabelViolationToObj),
 		sortedSection("eso-store-violations", esoStoreViolations, esoStoreViolationCmp, esoStoreViolationToObj),
@@ -1692,6 +1698,100 @@ func r34ViolationToObj(v r34Violation) kl.Obj {
 		sym("r34-violation"),
 		str(v.Composition), str(v.Group), str(v.Kind), str(v.ActionType),
 		str(v.AliasField), str(v.CanonicalBlock), str(v.Reason),
+		sourceToObj(v.Source),
+	})
+}
+
+// ── R35 / XPC.I.must-adopt-external-name (Tier-1, definite) ──────────────────
+
+type r35Violation struct {
+	Group     string
+	Kind      string
+	Name      string
+	Namespace string
+	Reason    string
+	Source    types.SourceLocation
+}
+
+func buildExternalNameAdoptViolations(findings []types.ExternalNameAdoptFinding) []r35Violation {
+	var out []r35Violation
+	for _, f := range findings {
+		out = append(out, r35Violation{
+			Group:     f.Group,
+			Kind:      f.Kind,
+			Name:      f.Name,
+			Namespace: f.Namespace,
+			Reason:    f.Reason,
+			Source:    f.Source,
+		})
+	}
+	return out
+}
+
+func r35ViolationCmp(a, b r35Violation) int {
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Namespace, b.Namespace)
+}
+
+func r35ViolationToObj(v r35Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r35-violation"),
+		str(v.Group), str(v.Kind), str(v.Name), str(v.Namespace),
+		str(v.Reason),
+		sourceToObj(v.Source),
+	})
+}
+
+// ── R36 / XPC.S.orphaned-sgref (Tier-2, heuristic) ───────────────────────────
+
+type r36Violation struct {
+	Composition string
+	Group       string
+	Kind        string
+	RuleName    string
+	AttachField string
+	RefField    string
+	Reason      string
+	Source      types.SourceLocation
+}
+
+func buildOrphanSGRefViolations(findings []types.OrphanSGRefFinding) []r36Violation {
+	var out []r36Violation
+	for _, f := range findings {
+		out = append(out, r36Violation{
+			Composition: f.Composition,
+			Group:       f.Group,
+			Kind:        f.Kind,
+			RuleName:    f.RuleName,
+			AttachField: f.AttachField,
+			RefField:    f.RefField,
+			Reason:      f.Reason,
+			Source:      f.Source,
+		})
+	}
+	return out
+}
+
+func r36ViolationCmp(a, b r36Violation) int {
+	if c := cmp.Compare(a.Composition, b.Composition); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.RuleName, b.RuleName)
+}
+
+func r36ViolationToObj(v r36Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r36-violation"),
+		str(v.Composition), str(v.Group), str(v.Kind), str(v.RuleName),
+		str(v.AttachField), str(v.RefField), str(v.Reason),
 		sourceToObj(v.Source),
 	})
 }

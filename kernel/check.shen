@@ -46,6 +46,8 @@
 (load "r32-observed-desired-fixed-point.shen")
 (load "r33-duplicate-env-key.shen")
 (load "r34-computed-block-alias.shen")
+(load "r35-must-adopt-external-name.shen")
+(load "r36-orphaned-sgref.shen")
 
 \* ===== IR reading ===== *\
 
@@ -134,6 +136,8 @@
          R32Violations (extract-section fixed-point-violations Sections)
          R33Violations (extract-section duplicate-env-violations Sections)
          R34Violations (extract-section computed-block-alias-violations Sections)
+         R35Violations (extract-section external-name-adopt-violations Sections)
+         R36Violations (extract-section orphan-sgref-violations Sections)
          Trajectory   (extract-section trajectory Sections)
 
          \* Run all rules — each result is passed through mark-rule so that
@@ -179,10 +183,12 @@
          R32 (if (rule-allowed? "XPC.M.observed-desired-fixed-point" Allowlist) (mark-rule "XPC.M.observed-desired-fixed-point" (check-r32 R32Violations)) [])
          R33 (if (rule-allowed? "XPC.M.duplicate-env-key" Allowlist) (mark-rule "XPC.M.duplicate-env-key" (check-r33 R33Violations)) [])
          R34 (if (rule-allowed? "XPC.M.computed-block-alias" Allowlist) (mark-rule "XPC.M.computed-block-alias" (check-r34 R34Violations)) [])
+         R35 (if (rule-allowed? "XPC.I.must-adopt-external-name" Allowlist) (mark-rule "XPC.I.must-adopt-external-name" (check-r35 R35Violations)) [])
+         R36 (if (rule-allowed? "XPC.S.orphaned-sgref" Allowlist) (mark-rule "XPC.S.orphaned-sgref" (check-r36 R36Violations)) [])
 
       (append R1 (append R2 (append R3 (append R4 (append R5
         (append R6 (append R6c (append R7 (append R8 (append R9 (append R10
-          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 (append R30 (append R31 (append R32 (append R33 R34)))))))))))))))))))))))))))))))))
+          (append R11 (append R12 (append R14 (append R15 (append R16 (append R17 (append R18 (append R19 (append R20 (append R21 (append R22 (append R23 (append R24 (append R25 (append R28 (append R29 (append R30 (append R31 (append R32 (append R33 (append R34 (append R35 R36)))))))))))))))))))))))))))))))))))
 
 \* ===== Stdin/stdout protocol ===== *\
 

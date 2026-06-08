@@ -1,0 +1,64 @@
+# Pre-fix (commit d144aa739b) shape: the preview fargateapp composition creates a
+# per-env SecurityGroup and an egress SecurityGroupRule that is ATTACHED to the
+# SHARED, foreign fg-preview-alb-sg (via securityGroupIdSelector, whose labels do
+# NOT match any SG built here) but REFERENCES the per-env SG (via
+# sourceSecurityGroupIdSelector, whose labels DO match the local SG). On teardown
+# the per-env SG is deleted while the rule on the shared SG survives → the
+# reference dangles and pins the per-env SG (DependencyViolation at 0 ENIs → stuck
+# Terminating → recreate InvalidGroup.Duplicate). R36 (category S, Tier-2) must
+# fire (warn).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateapp-preview
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $env := $xr.spec.env -}}
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: SecurityGroup
+            metadata:
+              name: {{ $xr.metadata.name }}-sg
+              labels:
+                app.facilitygrid.io/environment: preview
+                app.facilitygrid.io/claim-sg: {{ $env }}
+            spec:
+              providerConfigRef:
+                name: preview-account
+              forProvider:
+                region: us-east-2
+                vpcId: vpc-0ff7acc323a348a2e
+            ---
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: SecurityGroupRule
+            metadata:
+              name: {{ $xr.metadata.name }}-sg-alb-eg-443
+            spec:
+              managementPolicies: ["*"]
+              providerConfigRef:
+                name: preview-account
+              forProvider:
+                region: us-east-2
+                type: egress
+                fromPort: 443
+                toPort: 443
+                protocol: tcp
+                sourceSecurityGroupIdSelector:
+                  matchLabels:
+                    app.facilitygrid.io/claim-sg: {{ $env }}
+                securityGroupIdSelector:
+                  matchLabels:
+                    app.facilitygrid.io/name: fg-preview-alb-sg

@@ -1,0 +1,61 @@
+# Clean form: both ends of the rule are LOCAL. The intra-env (self) ingress rule
+# is attached to the per-env SG and references the SAME per-env SG, so the rule
+# and the SG it references share a lifecycle — deleting the SG deletes its own
+# rules together, nothing dangles. R36 must NOT fire (symmetric: both selectors
+# resolve to a SecurityGroup built in this composition).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateapp-preview-clean
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $env := $xr.spec.env -}}
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: SecurityGroup
+            metadata:
+              name: {{ $xr.metadata.name }}-sg
+              labels:
+                app.facilitygrid.io/environment: preview
+                app.facilitygrid.io/claim-sg: {{ $env }}
+            spec:
+              providerConfigRef:
+                name: preview-account
+              forProvider:
+                region: us-east-2
+                vpcId: vpc-0ff7acc323a348a2e
+            ---
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: SecurityGroupRule
+            metadata:
+              name: {{ $xr.metadata.name }}-sg-in-self
+            spec:
+              managementPolicies: ["*"]
+              providerConfigRef:
+                name: preview-account
+              forProvider:
+                region: us-east-2
+                type: ingress
+                fromPort: 0
+                toPort: 0
+                protocol: "-1"
+                self: true
+                sourceSecurityGroupIdSelector:
+                  matchLabels:
+                    app.facilitygrid.io/claim-sg: {{ $env }}
+                securityGroupIdSelector:
+                  matchLabels:
+                    app.facilitygrid.io/claim-sg: {{ $env }}

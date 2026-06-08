@@ -1,0 +1,19 @@
+# provider-signoz Alert with NO crossplane.io/external-name annotation. The
+# provider's Create path is broken against the custom signoz build (returns HTML
+# → "invalid character '<'"), so Crossplane attempts a Create that fails and the
+# Alert never reconciles. R35 (Tier-1, category I) must fire at ERROR.
+# (fg-manifold commit abd5aa10ed / INC-8)
+apiVersion: alert.signoz.crossplane.io/v1alpha1
+kind: Alert
+metadata:
+  name: alert-elasticache-memory-warning
+  namespace: crossplane-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    alertType: METRIC_BASED_ALERT
+    severity: warning

@@ -167,6 +167,12 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// sub-block — the provider always reads back the full block, so the alias
 	// form perpetually diffs (MR !2336). Runs unconditionally.
 	b.checkCompositionComputedBlockAlias()
+	// Category S Tier-2: flag a SecurityGroupRule whose peer reference dangles on
+	// teardown — attached to a long-lived/shared SG but referencing a short-lived
+	// per-env SG, so deleting the per-env SG leaves a dangling rule that pins it
+	// (DependencyViolation → stuck Terminating → InvalidGroup.Duplicate on
+	// recreate; commit d144aa739b). Runs unconditionally.
+	b.checkCompositionOrphanSGRef()
 	// Inject virtual Secrets for ExternalSecret targets BEFORE trajectory
 	// enrichment so R12 (XPC012) treats operator-materialized Secrets as
 	// present in cluster state instead of false-firing on every ESO mount.

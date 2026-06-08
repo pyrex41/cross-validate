@@ -565,6 +565,98 @@ missing-computed-BLOCK sibling of R31 (non-canonical SCALAR).
 `stickiness` unset (Optional+Computed — adding a disabled stickiness with a
 non-zero duration re-introduces a new perpetual diff).
 
+### R35: Must Adopt Singleton / Broken-Create Kind via external-name
+
+**Code**: `XPC.I.must-adopt-external-name` (Category I, Tier-1 resource walk)
+
+**Inputs**: concrete managed resources whose `(group, kind)` is in the
+must-adopt-via-external-name registry (`ExternalNameAdoptRegistry`). Seeded with
+provider-signoz `Alert` (`alert.signoz.crossplane.io`).
+
+**Invariant**: a resource of a registered kind must carry a non-empty
+`crossplane.io/external-name` annotation (to adopt the existing external object),
+unless explicitly bypassed.
+
+**Failure mode**: the provider's external Create path for the kind is broken or
+non-idempotent — provider-signoz `Alert` Create returns an HTML error page
+against the custom signoz build, so the SDK unmarshal fails with
+`invalid character '<'` and the Alert never reconciles — or the kind targets a
+singleton external object that already exists, so Create duplicates it. Either
+way, without `crossplane.io/external-name` the resource is stuck on a failing /
+duplicating Create (fg-manifold commit `abd5aa10ed`, INC-8).
+
+**Usual fix**: adopt the existing external object — add
+`crossplane.io/external-name: <external-id>` so the provider observes/updates
+instead of creating. If a fresh object really should be created (e.g. the
+provider Create path is fixed), set `xpc.io/allow-missing-external-name: "true"`
+and retire the registry row. A `.xpc-waivers.yaml` entry works too.
+
+**Severity**: error — the failure is definite and registry-confirmed (the
+provider will fail or duplicate Create for this kind), not heuristic.
+
+**Static-detectability limits**: registry-driven, so it only fires on kinds the
+registry knows about (append-only; seed from each broken-create MR). It is a
+presence check on the annotation — it does NOT validate that the external-name
+value points at a real / correct external object (a typo'd id still passes the
+rule but fails at observe time). It fires on every committed/rendered concrete
+resource of the kind; a resource produced only at runtime by an unrendered
+Composition template is a miss (no Tier-2 template variant is implemented for
+this rule, since the seed case is committed manifests).
+
+### R36: Orphaned Cross-Scope Security-Group Reference
+
+**Code**: `XPC.S.orphaned-sgref` (Category S, Tier-2 heuristic)
+
+**Inputs**: go-templating Compositions that emit a rule resource whose
+`(group, kind)` is in the orphan-SG-ref registry (`OrphanSGRefRegistry`). Seeded
+with ec2 `SecurityGroupRule` referencing ec2 `SecurityGroup`.
+
+**Invariant**: a rule resource (e.g. a `SecurityGroupRule`) must not be attached
+to a long-lived/shared resource while referencing a short-lived,
+composition-scoped resource — i.e. the rule and the resource it references must
+share a teardown lifecycle.
+
+**Failure mode**: the preview SG-orphan wedge (fg-manifold commit `d144aa739b`).
+The preview fargateapp composition emits, per per-env `SecurityGroup`
+(`deletionPolicy: Delete` — short-lived), an egress `SecurityGroupRule` attached
+to the shared, long-lived `fg-preview-alb-sg` (via `securityGroupIdSelector`) but
+referencing the per-env SG (via `sourceSecurityGroupIdSelector`). On teardown the
+per-env SG's Delete runs, but the rule on the shared ALB SG is a separate managed
+resource that survives — so the reference dangles. AWS then refuses
+`DeleteSecurityGroup` on the per-env SG with `DependencyViolation` *even at zero
+ENIs*, the SG MR sits stuck `Terminating`, and a recreate of the same PR fails
+`InvalidGroup.Duplicate` → the whole web-app preview recycle wedges.
+
+**Usual fix**: tear the cross-scope rule down WITH the short-lived SG (own it in
+the same scope, or make the SG's deletion revoke the rule first), or reap the
+dangling rule on teardown (the actual `d144aa739b` fix added a reaper). To accept
+the risk, annotate the rule `xpc.io/allow-orphan-sgref: "true"` (or add a
+`.xpc-waivers.yaml` entry).
+
+**Severity**: warn — inferring the asymmetric lifecycle from an unrendered
+template scan cannot be as certain as observing two concrete resources with their
+`deletionPolicy`.
+
+**Static-detectability limits (honest)**:
+- Both the rule AND the referenced `SecurityGroup` must live in the SAME checked
+  composition template. A rule whose attach/reference SGs live in a different
+  file (or are committed as separate concrete manifests) is a miss — the locality
+  test cannot resolve a cross-file selector.
+- It only fires on **selector-style** references (`*Selector` with `matchLabels`),
+  because the "is this SG created locally?" test matches a selector's labels
+  against the `metadata.labels` of `SecurityGroup` blocks in the same template. A
+  reference by literal id (`sourceSecurityGroupId: sg-...`) or explicit
+  `*Ref.name` is NOT classified — the literal-id egress case in the same
+  composition is a known miss.
+- It does not read `deletionPolicy`: the referenced SG is ASSUMED short-lived
+  because it is composition-scoped (per-env). A composition-scoped SG with an
+  explicit `deletionPolicy: Orphan` would be a false positive — use the
+  `xpc.io/allow-orphan-sgref` escape hatch.
+- The asymmetry is inferred from "attach target is NOT built here (presumptively
+  foreign/long-lived) while reference target IS built here (short-lived)". Two
+  SGs that genuinely share a lifecycle but only one of which is defined in the
+  template would false-positive (escape-hatch / waiver applies).
+
 ## Plan Rules
 
 `xpc plan` compares two worlds. These rules cannot be expressed by a single
