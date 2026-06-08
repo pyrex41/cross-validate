@@ -1,0 +1,42 @@
+# A redirect rule (the HTTP→HTTPS rule that lives alongside the forward rules in
+# alb-preview.yaml). type: redirect has no provider-computed forward/target-group
+# block, so it never diffs on that axis. R34 must stay silent — the rule keys on
+# `type: forward`, not on the absence of a forward{} block alone.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateapp-redirect
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            apiVersion: elbv2.aws.upbound.io/v1beta1
+            kind: LBListenerRule
+            spec:
+              forProvider:
+                region: us-east-2
+                listenerArnSelector:
+                  matchLabels:
+                    app.facilitygrid.io/role: alb-listener-http
+                action:
+                  - type: redirect
+                    redirect:
+                      - port: "443"
+                        protocol: HTTPS
+                        statusCode: HTTP_301
+                condition:
+                  - pathPattern:
+                      values:
+                        - /*

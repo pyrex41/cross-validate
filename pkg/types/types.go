@@ -946,6 +946,63 @@ type DuplicateEnvFinding struct {
 	Source      SourceLocation `json:"source"`
 }
 
+// ComputedBlockAliasMapping is a registry row in category M (Convergence /
+// steady-state). It names a (Group, Kind) whose forProvider carries an action
+// that can be written EITHER as a simple scalar alias (AliasFieldPattern) OR as
+// a canonical sub-block (CanonicalBlockKey) — and where the provider ALWAYS
+// reads back the full canonical block. Writing the alias form therefore leaves
+// forProvider permanently unequal to the canonicalized read-back: upjet re-issues
+// the external Update every reconcile and the async status write 409-conflicts
+// with the poll loop — the same self-sustaining storm as R31, but driven by a
+// missing computed BLOCK rather than a non-canonical SCALAR.
+//
+// The seed case is elbv2 LBListenerRule (and LBListener): a `type: forward`
+// action written with `targetGroupArn{,Ref,Selector}` instead of the canonical
+// `forward{ targetGroup[] }` block + explicit `order:`. AWS always computes
+// `action.forward{ stickiness{}, targetGroup[]{} }` + `order: 1`, so the alias
+// form perpetually diffs and storms `provider-aws-elbv2` (fg-manifold MR !2336).
+//
+// This does not fit CanonicalFormMapping's leaf-scalar Detector dispatch: the
+// signal is the PRESENCE of a sibling block, not the value of a scalar RHS, so
+// it has its own registry + a whole-block (not leaf-regex) scan. Append-only;
+// anchor each Reason to the fixing MR.
+type ComputedBlockAliasMapping struct {
+	Group string `json:"group"`
+	Kind  string `json:"kind"`
+	// ActionType is the `type:` value that earns a provider-computed block
+	// (e.g. "forward"). Other action types ("redirect", "fixed-response",
+	// "authenticate-*") have no such block and must not fire.
+	ActionType string `json:"actionType"`
+	// AliasFieldPattern is a Go regexp (RE2) matching the simple-alias key(s) at
+	// the action level whose use (in place of the canonical block) drives the
+	// diff. Capture group 1, when present, is reported as the offending field.
+	AliasFieldPattern string `json:"aliasFieldPattern"`
+	// CanonicalBlockKey is the YAML key of the canonical sub-block whose presence
+	// means the resource is written correctly (PASS). Its ABSENCE, together with
+	// ActionType + an alias match, is the flag.
+	CanonicalBlockKey string `json:"canonicalBlockKey"`
+	Reason            string `json:"reason"`
+}
+
+// ComputedBlockAliasFinding records a go-templating Composition whose managed
+// resource writes a provider-computed-block action in the simple-alias form
+// instead of the canonical sub-block (Tier-2, heuristic → R34 /
+// XPC.M.computed-block-alias). Populated by
+// Builder.checkCompositionComputedBlockAlias; rendered at warn severity, since a
+// text scan of an unrendered block cannot be as certain as a concrete resource.
+type ComputedBlockAliasFinding struct {
+	Composition string `json:"composition"`
+	Group       string `json:"group"`
+	Kind        string `json:"kind"`
+	ActionType  string `json:"actionType"`
+	// AliasField is the concrete alias key found (e.g. "targetGroupArnSelector").
+	AliasField string `json:"aliasField"`
+	// CanonicalBlock is the canonical block key that was missing (e.g. "forward").
+	CanonicalBlock string         `json:"canonicalBlock"`
+	Reason         string         `json:"reason"`
+	Source         SourceLocation `json:"source"`
+}
+
 // FixedPointUsage records, for one managed resource captured from a live
 // cluster, a forProvider leaf whose value diverges from the corresponding
 // status.atProvider leaf. This is the Tier-3 (dynamic) storm fingerprint:
@@ -1090,6 +1147,13 @@ type World struct {
 	// Populated by Builder.checkCompositionDuplicateEnv; consumed by Shen rule
 	// R33 (XPC.M.duplicate-env-key).
 	DuplicateEnvFindings []DuplicateEnvFinding `json:"-"`
+
+	// ComputedBlockAliasFindings records go-templating Compositions that write a
+	// provider-computed-block action (e.g. an elbv2 forward action) in the simple
+	// scalar-alias form instead of the canonical sub-block (Tier-2, heuristic).
+	// Populated by Builder.checkCompositionComputedBlockAlias; consumed by Shen
+	// rule R34 (XPC.M.computed-block-alias).
+	ComputedBlockAliasFindings []ComputedBlockAliasFinding `json:"-"`
 
 	// FixedPointUsages records forProvider/atProvider divergences observed on
 	// live (status-bearing) resources (Tier-3, dynamic). Populated by

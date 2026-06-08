@@ -172,9 +172,10 @@ why it's structured this way). Highlights:
   claim env labels consistent.
 - **Convergence** (M) — the reconcile-storm rules
   `forprovider-canonical-form` (R31), `observed-desired-fixed-point` (R32),
-  and `duplicate-env-key` (R33): they catch non-canonical `forProvider`
-  spec that upjet rewrites on every reconcile, driving an endless update
-  loop.
+  `duplicate-env-key` (R33), and `computed-block-alias` (R34): they catch
+  `forProvider` spec that upjet rewrites on every reconcile (non-canonical
+  scalar, duplicate env key, or a computed sub-block written in the simple
+  scalar-alias form), driving an endless update loop.
 
 ## CI integration
 

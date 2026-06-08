@@ -162,6 +162,11 @@ func (b *Builder) Build(docs []loader.LoadedDocument) (*types.World, error) {
 	// composition body (AWS dedupes the env array → permanent immutable-diff
 	// ReconcileError). Runs unconditionally like checkCompositionTemplates.
 	b.checkCompositionDuplicateEnv()
+	// Category M Tier-2: flag computed-block actions (e.g. an elbv2 forward
+	// action) written in the simple scalar-alias form instead of the canonical
+	// sub-block — the provider always reads back the full block, so the alias
+	// form perpetually diffs (MR !2336). Runs unconditionally.
+	b.checkCompositionComputedBlockAlias()
 	// Inject virtual Secrets for ExternalSecret targets BEFORE trajectory
 	// enrichment so R12 (XPC012) treats operator-materialized Secrets as
 	// present in cluster state instead of false-firing on every ESO mount.

@@ -390,6 +390,7 @@ func allRuleGroups() []ruleGroup {
 		{Name: "R31", Codes: []string{"XPC.M.forprovider-canonical-form"}},
 		{Name: "R32", Codes: []string{"XPC.M.observed-desired-fixed-point"}},
 		{Name: "R33", Codes: []string{"XPC.M.duplicate-env-key"}},
+		{Name: "R34", Codes: []string{"XPC.M.computed-block-alias"}},
 	}
 }
 
@@ -652,6 +653,7 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		buildCanonicalFormTemplateViolations(w.CanonicalFormTemplateFindings)...)
 	fixedPointViolations := buildFixedPointViolations(w.FixedPointUsages)
 	duplicateEnvViolations := buildDuplicateEnvViolations(w.DuplicateEnvFindings)
+	computedBlockAliasViolations := buildComputedBlockAliasViolations(w.ComputedBlockAliasFindings)
 	providerConfigRefViolations := buildProviderConfigRefViolations(w)
 	fargateEnvLabelViolations := buildFargateEnvLabelViolations(w)
 	esoStoreViolations := buildESOStoreViolations(w)
@@ -748,6 +750,7 @@ func worldStaticSections(w *types.World, trajectories []trajectory.Step) []kl.Ob
 		sortedSection("canonical-form-violations", canonicalFormViolations, r31ViolationCmp, r31ViolationToObj),
 		sortedSection("fixed-point-violations", fixedPointViolations, r32ViolationCmp, r32ViolationToObj),
 		sortedSection("duplicate-env-violations", duplicateEnvViolations, r33ViolationCmp, r33ViolationToObj),
+		sortedSection("computed-block-alias-violations", computedBlockAliasViolations, r34ViolationCmp, r34ViolationToObj),
 		sortedSection("providerconfig-ref-violations", providerConfigRefViolations, providerConfigRefViolationCmp, providerConfigRefViolationToObj),
 		sortedSection("fargate-env-label-violations", fargateEnvLabelViolations, fargateEnvLabelViolationCmp, fargateEnvLabelViolationToObj),
 		sortedSection("eso-store-violations", esoStoreViolations, esoStoreViolationCmp, esoStoreViolationToObj),
@@ -1640,6 +1643,55 @@ func r33ViolationToObj(v r33Violation) kl.Obj {
 	return makeList([]kl.Obj{
 		sym("r33-violation"),
 		str(v.Composition), str(v.EnvName), str(v.Count),
+		sourceToObj(v.Source),
+	})
+}
+
+// ── R34 / XPC.M.computed-block-alias (Tier-2, heuristic) ─────────────────────
+
+type r34Violation struct {
+	Composition    string
+	Group          string
+	Kind           string
+	ActionType     string
+	AliasField     string
+	CanonicalBlock string
+	Reason         string
+	Source         types.SourceLocation
+}
+
+func buildComputedBlockAliasViolations(findings []types.ComputedBlockAliasFinding) []r34Violation {
+	var out []r34Violation
+	for _, f := range findings {
+		out = append(out, r34Violation{
+			Composition:    f.Composition,
+			Group:          f.Group,
+			Kind:           f.Kind,
+			ActionType:     f.ActionType,
+			AliasField:     f.AliasField,
+			CanonicalBlock: f.CanonicalBlock,
+			Reason:         f.Reason,
+			Source:         f.Source,
+		})
+	}
+	return out
+}
+
+func r34ViolationCmp(a, b r34Violation) int {
+	if c := cmp.Compare(a.Composition, b.Composition); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.AliasField, b.AliasField)
+}
+
+func r34ViolationToObj(v r34Violation) kl.Obj {
+	return makeList([]kl.Obj{
+		sym("r34-violation"),
+		str(v.Composition), str(v.Group), str(v.Kind), str(v.ActionType),
+		str(v.AliasField), str(v.CanonicalBlock), str(v.Reason),
 		sourceToObj(v.Source),
 	})
 }

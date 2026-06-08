@@ -1,0 +1,60 @@
+# Pre-fix (MR !2336) shape: an elbv2 LBListenerRule forward action written with
+# the simple targetGroupArnSelector alias and NO canonical forward{} block. AWS
+# always computes a full action.forward{ stickiness{}, targetGroup[]{} } block +
+# order:1, so forProvider.action never matches the read-back → upjet fires
+# UpdateRule every reconcile and the async status write 409-conflicts → permanent
+# reconcile storm on provider-aws-elbv2. R34 must fire (warn).
+#
+# The LBTargetGroup in the first `---` doc carries the alb-target-group role
+# label but no targetGroupArn alias and a different kind, so block-scoping must
+# not let it interfere with the LBListenerRule verdict.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfargateapp-preview
+spec:
+  compositeTypeRef:
+    apiVersion: platform.facilitygrid.io/v1alpha1
+    kind: XFargateApp
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $hostname := $xr.spec.hostname -}}
+            apiVersion: elbv2.aws.upbound.io/v1beta1
+            kind: LBTargetGroup
+            metadata:
+              labels:
+                app.facilitygrid.io/role: alb-target-group
+            spec:
+              forProvider:
+                port: 80
+                protocol: HTTP
+            ---
+            apiVersion: elbv2.aws.upbound.io/v1beta1
+            kind: LBListenerRule
+            spec:
+              forProvider:
+                region: us-east-2
+                listenerArnSelector:
+                  matchLabels:
+                    app.facilitygrid.io/role: alb-listener
+                action:
+                  - type: forward
+                    targetGroupArnSelector:
+                      matchLabels:
+                        app.facilitygrid.io/environment: preview
+                        app.facilitygrid.io/hostname: {{ $hostname }}
+                        app.facilitygrid.io/role: alb-target-group
+                condition:
+                  - hostHeader:
+                      values:
+                        - {{ $hostname }}

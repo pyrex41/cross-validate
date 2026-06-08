@@ -284,6 +284,105 @@ func rhsHasCanonicalGuard(rhs string) bool {
 	return defaultPipeRe.MatchString(rhs)
 }
 
+// checkCompositionComputedBlockAlias scans every go-templating Composition body
+// for a registered computed-block action (ComputedBlockAliasRegistry) written in
+// the simple scalar-alias form instead of the canonical sub-block — the
+// MR !2336 elbv2 reconcile-storm shape (category M, Tier-2 heuristic → R34 /
+// XPC.M.computed-block-alias). In a GitOps repo the LBListenerRule is produced
+// by this Composition at runtime, so it never reaches World.Resources (Tier-1)
+// and has no live status (Tier-3); only the template text is here.
+//
+// The scan is block-scoped, not whole-template: the decisive signal is "a
+// `type: forward` action carries a targetGroupArn* alias but NO sibling
+// `forward:` block", and that conjunction is only meaningful within one managed
+// resource. function-go-templating emits each resource as its own `---`-delimited
+// document, so we split on `---` and inspect each block whose `kind:` matches the
+// registry row. Warn severity — a text scan of an unrendered block cannot be as
+// certain as a concrete resource.
+//
+// False-positive guards (verified against fg-manifold, like R33):
+//   - Requiring the canonical block ABSENT means the MR !2336 fixed form (which
+//     HAS `forward:`) passes — its target group lives under
+//     forward.targetGroup[].arnSelector, which the alias regex does not match.
+//   - Requiring `type: forward` excludes redirect / fixed-response /
+//     authenticate-* actions, which have no forward/target-group diff.
+func (b *Builder) checkCompositionComputedBlockAlias() {
+	mappings := ComputedBlockAliasRegistry()
+	if len(mappings) == 0 {
+		return
+	}
+	for _, comp := range b.world.Compositions {
+		for _, step := range comp.Pipeline {
+			if step.InputKind != "GoTemplate" {
+				continue
+			}
+			sc, ok := b.world.Schemas[step.InputDigest]
+			if !ok {
+				continue
+			}
+			inline, ok := sc.Schema["inline"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tmplText, ok := inline["template"].(string)
+			if !ok || tmplText == "" {
+				continue
+			}
+			for _, m := range mappings {
+				aliasRe := regexp.MustCompile(m.AliasFieldPattern)
+				typeRe := regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*type:[ \t]*` +
+					regexp.QuoteMeta(m.ActionType) + `[ \t]*$`)
+				blockRe := regexp.MustCompile(`(?m)^[ \t]*` +
+					regexp.QuoteMeta(m.CanonicalBlockKey) + `:`)
+				for _, block := range resourceBlocksOfKind(tmplText, m.Kind) {
+					if !typeRe.MatchString(block) {
+						continue
+					}
+					if blockRe.MatchString(block) {
+						// Canonical sub-block present → correctly written. PASS.
+						continue
+					}
+					alias := aliasRe.FindStringSubmatch(block)
+					if alias == nil {
+						continue
+					}
+					aliasField := alias[0]
+					if len(alias) > 1 && alias[1] != "" {
+						aliasField = alias[1]
+					}
+					b.world.ComputedBlockAliasFindings = append(b.world.ComputedBlockAliasFindings,
+						types.ComputedBlockAliasFinding{
+							Composition:    comp.Name,
+							Group:          m.Group,
+							Kind:           m.Kind,
+							ActionType:     m.ActionType,
+							AliasField:     aliasField,
+							CanonicalBlock: m.CanonicalBlockKey,
+							Reason:         m.Reason,
+							Source:         comp.Source,
+						})
+				}
+			}
+		}
+	}
+}
+
+// resourceBlocksOfKind splits a go-templating body into its `---`-delimited
+// documents and returns those whose `kind:` line matches the given Kind. This
+// scopes a per-resource heuristic (e.g. "this LBListenerRule lacks a forward
+// block") to one resource at a time, so an alias key on resource A and a
+// canonical block on resource B in the same template do not cancel out.
+func resourceBlocksOfKind(tmplText, kind string) []string {
+	kindRe := regexp.MustCompile(`(?m)^[ \t]*kind:[ \t]*` + regexp.QuoteMeta(kind) + `[ \t]*$`)
+	var blocks []string
+	for _, doc := range strings.Split(tmplText, "\n---") {
+		if kindRe.MatchString(doc) {
+			blocks = append(blocks, doc)
+		}
+	}
+	return blocks
+}
+
 var undefinedFuncRe = regexp.MustCompile(`function "([^"]+)" not defined`)
 
 // parseGoTemplateText returns a non-nil error only for genuine Go-template

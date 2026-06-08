@@ -541,6 +541,30 @@ diff on the IMMUTABLE `container_definitions` field, so upjet hard-fails with
 **Usual fix**: remove the duplicate environment entry from the Composition
 template.
 
+### R34: Computed Block Alias
+
+**Code**: `XPC.M.computed-block-alias` (Category M, Tier-2 heuristic)
+
+**Inputs**: go-templating Compositions that build an action which the provider
+reads back as a full computed sub-block (registry:
+`ComputedBlockAliasRegistry`). Seeded with elbv2 `LBListenerRule` and
+`LBListener` forward actions.
+
+**Invariant**: a `forward` action must be written in the canonical sub-block form
+(`forward.targetGroup[].arn{,Ref,Selector}` + `weight` + explicit `order:`), not
+the simple `targetGroupArn{,Ref,Selector}` scalar alias.
+
+**Failure mode**: AWS always computes the full `action.forward{ stickiness{},
+targetGroup[]{} }` block + `order: 1`, so the alias form leaves
+`forProvider.action` permanently unequal to the read-back — upjet re-issues
+`UpdateRule` every reconcile and the async status write 409-conflicts with the
+poll loop → reconcile storm on `provider-aws-elbv2` (fg-manifold MR !2336). The
+missing-computed-BLOCK sibling of R31 (non-canonical SCALAR).
+
+**Usual fix**: emit the canonical `forward` block + explicit `order:`, and leave
+`stickiness` unset (Optional+Computed — adding a disabled stickiness with a
+non-zero duration re-introduces a new perpetual diff).
+
 ## Plan Rules
 
 `xpc plan` compares two worlds. These rules cannot be expressed by a single

@@ -161,3 +161,42 @@ func TestR33_DuplicateEnvKey(t *testing.T) {
 		}
 	})
 }
+
+// TestR34_ComputedBlockAlias exercises category M Tier-2: an elbv2
+// LBListenerRule forward action written with the simple targetGroupArnSelector
+// alias and no canonical forward{} block (the MR !2336 storm shape) fires; the
+// fixed form with a forward{} block, and a redirect rule, do not.
+func TestR34_ComputedBlockAlias(t *testing.T) {
+	const code = "XPC.M.computed-block-alias"
+
+	world := loadFixture(t, "../../testdata/fixtures/computed-block-alias/positive")
+	diags := checkFixture(t, world, Config{})
+	got := findDiagByCode(diags, code)
+	if len(got) != 1 {
+		t.Fatalf("positive: expected 1 %s, got %d: %+v", code, len(got), got)
+	}
+	if got[0].Severity != types.SeverityWarning {
+		t.Errorf("computed-block-alias finding should be warn, got %s", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "xfargateapp-preview") {
+		t.Errorf("expected composition name in message, got %q", got[0].Message)
+	}
+	if !strings.Contains(got[0].Message, "targetGroupArnSelector") {
+		t.Errorf("expected alias field in message, got %q", got[0].Message)
+	}
+
+	for _, tc := range []struct{ name, fixture string }{
+		// MR !2336 fix: canonical forward{} block present → converges.
+		{"fixed", "../../testdata/fixtures/computed-block-alias/fixed"},
+		// A redirect action has no computed forward block → not this storm.
+		{"redirect", "../../testdata/fixtures/computed-block-alias/redirect"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			world := loadFixture(t, tc.fixture)
+			diags := checkFixture(t, world, Config{})
+			if got := findDiagByCode(diags, code); len(got) != 0 {
+				t.Fatalf("%s: expected 0 %s, got %d: %+v", tc.name, code, len(got), got)
+			}
+		})
+	}
+}

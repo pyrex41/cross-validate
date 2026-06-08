@@ -268,6 +268,16 @@ family, so coverage degrades gracefully with how much context is available:
   hard-fails with `ReconcileError`. (**implemented** — R33 /
   `XPC.M.duplicate-env-key`, Tier-2 heuristic at warn; scoped to single-container
   compositions to avoid cross-container false positives; fg-manifold MR !2246)
+- `computed-block-alias` -- a go-templating Composition writes an action that the
+  provider reads back as a full computed sub-block (e.g. an elbv2 `LBListenerRule`
+  / `LBListener` `forward` action) in the simple `targetGroupArn{,Ref,Selector}`
+  scalar-alias form instead of the canonical `forward{ targetGroup[] }` block +
+  explicit `order:`. AWS always computes the full `action.forward{}` block +
+  `order: 1`, so `forProvider.action` never matches the read-back → upjet
+  re-issues `UpdateRule` every reconcile and the async status write 409-conflicts
+  → reconcile storm on `provider-aws-elbv2`. (**implemented** — R34 /
+  `XPC.M.computed-block-alias`, Tier-2 heuristic at warn; block-scoped per managed
+  resource; registry `ComputedBlockAliasRegistry` seeded from fg-manifold MR !2336)
 
 **Absorbs**: (new — static + dynamic floor for the Crossplane reconcile-storm
 failure mode; fg-manifold MR !2232)
