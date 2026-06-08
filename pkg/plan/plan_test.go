@@ -179,6 +179,97 @@ func TestPlan_WriteJSON(t *testing.T) {
 	}
 }
 
+// TestPlan_WriteSARIF covers Change 3: plan --format=sarif emits a SARIF 2.1.0
+// document where each XPC.P.* transition finding is a result with ruleId =
+// its code, level from severity, and a location from the base-side manifest.
+// GitLab artifacts.reports.sast ingests this shape to annotate the MR.
+func TestPlan_WriteSARIF(t *testing.T) {
+	p := runHermeticPlan(t,
+		"../../testdata/fixtures/plan-destructive/base",
+		"../../testdata/fixtures/plan-destructive/head",
+	)
+	var buf bytes.Buffer
+	if err := plan.WriteSARIF(&buf, p); err != nil {
+		t.Fatalf("WriteSARIF: %v", err)
+	}
+
+	var parsed struct {
+		Schema  string `json:"$schema"`
+		Version string `json:"version"`
+		Runs    []struct {
+			Tool struct {
+				Driver struct {
+					Name  string `json:"name"`
+					Rules []struct {
+						ID string `json:"id"`
+					} `json:"rules"`
+				} `json:"driver"`
+			} `json:"tool"`
+			Results []struct {
+				RuleID  string `json:"ruleId"`
+				Level   string `json:"level"`
+				Message struct {
+					Text string `json:"text"`
+				} `json:"message"`
+				Locations []struct {
+					PhysicalLocation struct {
+						ArtifactLocation struct {
+							URI string `json:"uri"`
+						} `json:"artifactLocation"`
+						Region struct {
+							StartLine int `json:"startLine"`
+						} `json:"region"`
+					} `json:"physicalLocation"`
+				} `json:"locations"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("produced invalid SARIF JSON: %v\n%s", err, buf.String())
+	}
+
+	if parsed.Version != "2.1.0" {
+		t.Errorf("expected SARIF version 2.1.0, got %q", parsed.Version)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(parsed.Runs))
+	}
+	run := parsed.Runs[0]
+	if run.Tool.Driver.Name != "xpc" {
+		t.Errorf("expected driver name xpc, got %q", run.Tool.Driver.Name)
+	}
+	if len(run.Results) != 1 {
+		t.Fatalf("expected one result (the destructive delete), got %d", len(run.Results))
+	}
+	res := run.Results[0]
+	if res.RuleID != "XPC.P.destructive-delete" {
+		t.Errorf("expected ruleId XPC.P.destructive-delete, got %q", res.RuleID)
+	}
+	if res.Level != "error" {
+		t.Errorf("expected level error, got %q", res.Level)
+	}
+	if !strings.Contains(res.Message.Text, "aurora-prod-cluster") {
+		t.Errorf("expected message to name the resource, got %q", res.Message.Text)
+	}
+	if len(res.Locations) != 1 {
+		t.Fatalf("expected one location, got %d", len(res.Locations))
+	}
+	uri := res.Locations[0].PhysicalLocation.ArtifactLocation.URI
+	if !strings.Contains(uri, "aurora.yaml") {
+		t.Errorf("expected base-side manifest URI, got %q", uri)
+	}
+	// The rule must appear in tool.driver.rules too.
+	foundRule := false
+	for _, r := range run.Tool.Driver.Rules {
+		if r.ID == "XPC.P.destructive-delete" {
+			foundRule = true
+		}
+	}
+	if !foundRule {
+		t.Errorf("expected XPC.P.destructive-delete in tool.driver.rules")
+	}
+}
+
 func TestPlan_WriteJSON_DoesNotJoinZeroSource(t *testing.T) {
 	p := &plan.Plan{
 		Base: plan.VariantResult{Ref: "base"},

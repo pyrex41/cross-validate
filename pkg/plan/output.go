@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/pyrex41/cross-validate-/pkg/report"
 	"github.com/pyrex41/cross-validate-/pkg/types"
 )
 
@@ -15,7 +16,21 @@ type Format string
 const (
 	FormatJSON     Format = "json"
 	FormatMarkdown Format = "markdown"
+	FormatSARIF    Format = "sarif"
 )
+
+// WriteSARIF emits the plan's transition findings as a SARIF 2.1.0 document so
+// a CI runner (GitLab artifacts.reports.sast) can surface them as MR
+// annotations. Each plan-time diagnostic in the XPC.P.* family
+// (destructive-delete R26, cascade-risk, immutable-change R27) becomes a SARIF
+// result: ruleId = its XPC.P.* code, level from severity, and locations from
+// the head-/base-side manifest SourceLocation where available. Per-variant
+// static diagnostics (p.Base/p.Head) are intentionally excluded — SARIF here is
+// the transition gate, not the per-tip check report. Reuses the SARIF shape in
+// pkg/report so the schema stays identical to `xpc check --format=sarif`.
+func WriteSARIF(w io.Writer, p *Plan) error {
+	return report.Report(w, filterPlanDiagnostics(p.Diagnostics, "XPC.P."), report.FormatSARIF)
+}
 
 // jsonPlan is the wire shape for the JSON envelope. Fields kept small and
 // regular so consumers (CI scripts, PR bot) can parse without a schema.
