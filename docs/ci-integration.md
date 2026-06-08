@@ -112,10 +112,31 @@ All flags below are parsed in `cmd/xpc/main.go:118-155`.
 | `--skip-render`             | Skip Helm/Kustomize rendering entirely. Emits one info diag per skipped Application. Use as a last resort when you cannot install helm/kustomize in CI — you will lose coverage of rendered-manifest rules. |
 | `--kernel-path=<dir>` / `XPC_KERNEL_PATH` | Pin the Shen kernel directory. Needed when the binary runs from a path where the default upward cwd search cannot find the kernel tree (e.g., scratch containers). |
 | `--appset-fixture=<file>`   | YAML fixture for ApplicationSet `pullRequest`/`scmProvider` generators. Required in CI where xpc cannot reach GitHub/GitLab APIs to expand PR generators.  |
+| `--category=<letters>`      | Restrict the run to rules in these category letters (comma-separated; the `<X>` in `XPC.<X>.<slug>`), e.g. `--category=M` or `--category=M,S`. Filters at **evaluation level** (the kernel skips the dispatch for non-listed rules) so an unrelated rule's setup cannot fail the run. |
+| `--rules=<codes>`           | Restrict the run to these full diagnostic codes (comma-separated), e.g. `--rules=XPC.M.observed-desired-fixed-point`. Unions with `--category`; both take priority over `--focus`. |
+| `--snapshot=<file>`         | Merge a captured `.xpcsnap` type environment into the world. May be the **sole input** (no path arg) for an in-cluster audit — see below. |
 
-`--proof` and `--snapshot=<path>` are also valid and useful if you are wiring
-the audit/proof pipeline — see the main README for those. They are not
-required for basic SAST integration.
+`--proof` is also valid and useful if you are wiring the audit/proof pipeline —
+see the main README. It is not required for basic SAST integration.
+
+### In-cluster audit (snapshot-only check)
+
+`xpc check --snapshot=live.xpcsnap` with **no path argument** runs the rules
+over the snapshot's merged world, with no git checkout. This is the shape for
+an in-cluster audit CronJob that captures the live cluster and lints its
+dynamic state. The canonical invocation:
+
+```sh
+xpc check --snapshot=live.xpcsnap --category=M --skip-render --format=sarif \
+  > audit.sarif
+```
+
+`--category=M` scopes the run to the dynamic-state rules (R31/R32), which read
+`status.atProvider` from the snapshot's live resources — notably **R32**
+(`XPC.M.observed-desired-fixed-point`), the reconcile-storm detector that is
+invisible from manifests on disk. See [`docs/snapshot.md`](snapshot.md#snapshot-only-check-in-cluster-audit)
+for the full control flow. The exit code is unchanged: 1 if any
+`error`-severity finding fires.
 
 ## GitHub Actions (optional)
 
@@ -159,6 +180,37 @@ a single manifest tree, `xpc plan` shows what the cluster will look
 like *after* the PR merges.
 
 For the full workflow, see [`docs/preview-diffs.md`](preview-diffs.md).
+
+### `xpc plan --format=sarif` (transition gate as MR annotations)
+
+`xpc plan` supports `--format=sarif` in addition to `json` and `markdown`. It
+emits a SARIF 2.1.0 document of the plan's **transition findings** — the
+`XPC.P.*` family — so GitLab `artifacts.reports.sast` ingests them as
+merge-request annotations on the head-side manifest, exactly like
+`xpc check --format=sarif`. The SARIF shape is identical (it reuses
+`pkg/report`'s SARIF writer).
+
+The emitted `ruleId` set is:
+
+| `ruleId`                    | Source rule | Meaning |
+|-----------------------------|-------------|---------|
+| `XPC.P.destructive-delete`  | R26 | A state-bearing CR is removed with deletionPolicy ≠ Orphan — a real destructive external call. |
+| `XPC.P.cascade-risk`        | R26 | An Argo `Application` with a cascading finalizer is removed without `preserveResourcesOnDeletion`. |
+| `XPC.P.immutable-change`    | R27 | An immutable `forProvider` field changed between base and head — provider will replace the external resource. |
+
+Each result carries `level` from severity (`error`/`warning`/`note`) and a
+`location` pointing at the base-side manifest (file + line) where the removed/
+changed resource was declared, when that source is known. Per-variant static
+check diagnostics (`p.Base`/`p.Head`) are intentionally **excluded** — the plan
+SARIF is the transition gate, not the per-tip check report.
+
+```sh
+xpc plan --base=main --head=HEAD --format=sarif ./deploy > plan.sarif
+```
+
+Exit-code semantics are unchanged: the plan exits **1** when any `XPC.P.*`
+`error`-severity finding fires (`cmd/xpc/main.go`), so a CI job can choose
+blocking (`allow_failure: false`) vs report-only (`allow_failure: true`).
 
 ### Prerequisites
 

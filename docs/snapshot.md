@@ -15,6 +15,8 @@ Snapshots are the input to two other commands:
 - `xpc check --snapshot=<file> <path>` merges a snapshot's type environment
   into the world being checked, so a manifest tree can be linted against
   CRDs/XRDs that live in the snapshot rather than the tree.
+- `xpc check --snapshot=<file>` with **no path** — the snapshot alone is the
+  source of the world (see *Snapshot-only check* below).
 
 ## Usage
 
@@ -96,6 +98,44 @@ xpc check --snapshot=manifold.xpcsnap .
 `xpc check --snapshot=` warns if the snapshot is older than 15 minutes (the
 default staleness TTL). `xpc plan --base=<snap>` does **not** emit that
 warning, so a day-old nightly baseline is fine to diff against with `plan`.
+
+## Snapshot-only check (in-cluster audit)
+
+A snapshot captured with `--from-cluster --include-resources` carries the live
+resource instances (`status.atProvider` and all). You can run `xpc check`
+against **only** that snapshot, with no path argument and no git checkout:
+
+```sh
+# In-cluster audit: the snapshot is the sole source of the world.
+xpc check --snapshot=live.xpcsnap --skip-render
+
+# Scope to the dynamic-state rules (category M) and emit SARIF for upload.
+xpc check --snapshot=live.xpcsnap --category=M --skip-render --format=sarif \
+  > audit.sarif
+```
+
+This is the shape for an in-cluster audit CronJob: capture the cluster with
+`xpc snapshot --from-cluster --include-resources --output=live.xpcsnap`, then
+`xpc check --snapshot=live.xpcsnap` — no repository to clone. The snapshot's
+merged resources populate `w.Resources`, so the dynamic rules that read live
+state fire — notably **R32** (`XPC.M.observed-desired-fixed-point`), which
+detects a `spec.forProvider` / `status.atProvider` divergence (the reconcile-
+storm fingerprint) that is invisible from manifests on disk.
+
+Control flow:
+
+- **No path + `--snapshot=`** → the snapshot sources the world. The world is
+  built from zero docs, the snapshot is merged, and resource-derived facts are
+  recomputed over the merged world before the rules run.
+- **No path + no `--snapshot=`** → defaults to `.` (the current directory), as
+  before.
+- **Zero docs *and* no snapshot** → still errors with `no YAML documents
+  found` (exit 1). The only-empty-when-truly-empty gate is preserved.
+- **A path *and* `--snapshot=`** → unchanged: manifests are the world and the
+  snapshot's type environment is merged in.
+
+Use `--skip-render` for snapshot-only runs: there are no Helm/Kustomize sources
+to render when the input is a captured cluster.
 
 ## Nightly baseline in CI
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"time"
 
@@ -106,7 +107,10 @@ Check flags:
   --format=<fmt>       Output format: agent, human, json, sarif (default: agent)
   --strict-conversions Refuse webhook conversions entirely
   --proof              Generate a proof file alongside the check
-  --snapshot=<path>    Use a specific snapshot file
+  --snapshot=<path>    Use a specific snapshot file. May be the SOLE input:
+                       'xpc check --snapshot=live.xpcsnap' with no path runs
+                       the rules over the snapshot's merged world (the
+                       in-cluster audit shape, no git checkout needed).
   --skip-render        Skip Helm/Kustomize rendering (emits one info diagnostic per skipped Application)
   --helm-bin=<path>    Path to the helm binary (default: first 'helm' on PATH)
   --helm-cache-dir=<dir>   Dir for remote Helm charts + render cache (enables remote)
@@ -127,6 +131,14 @@ Check flags:
                        observe (default, narrow), partial, any (broadest)
   --focus=<preset>     Restrict to a curated rule subset. Presets:
                        all (default), inc6-floor (R23+R24+R25 only)
+  --category=<letters> Restrict the run to rules in these category letters
+                       (comma-separated; the <X> in XPC.<X>.<slug>). E.g.
+                       --category=M or --category=M,S. Filters at evaluation
+                       level so unrelated rules' setup can't fail the run.
+  --rules=<codes>      Restrict the run to these full diagnostic codes
+                       (comma-separated). E.g.
+                       --rules=XPC.M.observed-desired-fixed-point. Unions with
+                       --category; both take priority over --focus.
   --waivers=<path>     Path to the accepted-risk register (default: upward
                        search for .xpc-waivers.yaml; also XPC_WAIVERS_PATH)
   --show-waived        List suppressed findings (to stderr) instead of just
@@ -164,7 +176,10 @@ Bisect flags:
 Plan flags:
   --base=<ref>         Base git ref, directory, or .xpcsnap file
   --head=<ref>         Head git ref, directory, or .xpcsnap file (default: HEAD)
-  --format=<fmt>       Output format: json, markdown (default: markdown)
+  --format=<fmt>       Output format: json, markdown, sarif (default: markdown)
+                       sarif emits a SARIF 2.1.0 doc of the XPC.P.* transition
+                       findings (destructive-delete, cascade-risk,
+                       immutable-change) for GitLab artifacts.reports.sast.
   --kernel-path=<dir>  Explicit kernel directory (as in 'check')
   --config=<path>      Explicit xpc.yaml path (as in 'check'; overrides
                        per-variant in-repo discovery)
@@ -185,6 +200,9 @@ Examples:
   xpc plan --base=main --head=HEAD --format=json ./deploy
   xpc check ./manifests
   xpc check --format=sarif ./manifests > results.sarif
+  xpc check --snapshot=live.xpcsnap --category=M --skip-render --format=sarif
+  xpc check --rules=XPC.M.observed-desired-fixed-point --snapshot=live.xpcsnap
+  xpc plan --base=main --head=HEAD --format=sarif ./deploy > plan.sarif
   xpc check --proof --snapshot=prod.xpcsnap ./manifests
   xpc snapshot --output=prod.xpcsnap ./manifests
   xpc snapshot --diff=a.xpcsnap,b.xpcsnap
@@ -218,6 +236,8 @@ func runCheck(args []string) int {
 	waiversPath := os.Getenv("XPC_WAIVERS_PATH")
 	showWaived := false
 	noWaivers := false
+	var categoryFilter []string
+	var ruleFilter []string
 	var paths []string
 
 	for _, arg := range args {
@@ -276,6 +296,10 @@ func runCheck(args []string) int {
 				fmt.Fprintf(os.Stderr, "invalid --focus=%s (must be one of: all, inc6-floor)\n", val)
 				return 1
 			}
+		case strings.HasPrefix(arg, "--category="):
+			categoryFilter = append(categoryFilter, splitCSV(strings.TrimPrefix(arg, "--category="))...)
+		case strings.HasPrefix(arg, "--rules="):
+			ruleFilter = append(ruleFilter, splitCSV(strings.TrimPrefix(arg, "--rules="))...)
 		case arg == "--help" || arg == "-h":
 			printUsage()
 			return 0
@@ -287,8 +311,10 @@ func runCheck(args []string) int {
 		}
 	}
 
-	if len(paths) == 0 {
-		// Default to current directory
+	if len(paths) == 0 && snapshotPath == "" {
+		// Default to current directory. When a snapshot is the sole input
+		// (e.g. an in-cluster audit CronJob with no git checkout), leave
+		// paths empty so the snapshot alone sources the world.
 		paths = append(paths, ".")
 	}
 
@@ -338,7 +364,26 @@ func runCheck(args []string) int {
 	}
 	timed("load", tLoad)
 
-	if len(allDocs) == 0 {
+	// Load the snapshot up front so it can serve as the sole source of the
+	// world. A snapshot-only run (no path arg, --snapshot=live.xpcsnap) is the
+	// in-cluster audit shape: there is no git checkout to read manifests from,
+	// and the snapshot's merged Resources/CRDs are what the rules evaluate.
+	var loadedSnapshot *snapshot.Snapshot
+	if snapshotPath != "" {
+		snap, err := snapshot.Load(snapshotPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading snapshot: %v\n", err)
+			return 1
+		}
+		if snap.IsStale(snapshot.DefaultTTL) {
+			fmt.Fprintln(os.Stderr, "warning: snapshot is stale (older than 15 minutes)")
+		}
+		loadedSnapshot = snap
+	}
+
+	// Only error on empty input when there is genuinely nothing to check:
+	// no YAML docs AND no snapshot to source the world from.
+	if len(allDocs) == 0 && loadedSnapshot == nil {
 		fmt.Fprintln(os.Stderr, "no YAML documents found")
 		return 1
 	}
@@ -369,27 +414,34 @@ func runCheck(args []string) int {
 	}
 	timed("build-ir", tBuild)
 
-	var loadedSnapshot *snapshot.Snapshot
+	// Merge the snapshot's type environment into the world. For a
+	// snapshot-only run the world started empty; this is what populates
+	// w.Resources (so R32 reads status.atProvider), w.CRDs, etc.
+	if loadedSnapshot != nil {
+		mergeSnapshotIntoWorld(world, loadedSnapshot)
+		// The merge appends the snapshot's live resources after Builder.Build
+		// already ran enrichment, so recompute every resource-derived fact
+		// (R32 fixed-point usages, R17 field facts, mount/SA/RBAC refs, …) over
+		// the merged world. Without this a snapshot-only run sees no resources
+		// at enrichment time and every dynamic rule is silent.
+		ir.ReEnrich(world)
+	}
 
-	// If a snapshot is provided, merge its type environment into the world
-	if snapshotPath != "" {
-		snap, err := snapshot.Load(snapshotPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading snapshot: %v\n", err)
-			return 1
-		}
-		if snap.IsStale(snapshot.DefaultTTL) {
-			fmt.Fprintln(os.Stderr, "warning: snapshot is stale (older than 15 minutes)")
-		}
-		mergeSnapshotIntoWorld(world, snap)
-		loadedSnapshot = snap
+	// Resolve the rule allowlist that gates evaluation. Precedence/merge:
+	//   --rules + --category union into an explicit allowlist (evaluation-
+	//   level filtering via the kernel's rule-allowed? dispatch gate), which
+	//   takes priority over --focus. Absent both, fall back to --focus.
+	allowlist, alErr := resolveRuleAllowlist(focusPreset, categoryFilter, ruleFilter)
+	if alErr != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", alErr)
+		return 1
 	}
 
 	// Run checker
 	checkerCfg := checker.Config{
 		StrictConversions: strictConversions,
 		KernelPath:        kernelPath,
-		RuleAllowlist:     focusPresetAllowlist(focusPreset),
+		RuleAllowlist:     allowlist,
 		ProfileRules:      profileRules,
 	}
 
@@ -982,8 +1034,10 @@ func runPlan(args []string) int {
 				format = plan.FormatJSON
 			case "markdown", "md":
 				format = plan.FormatMarkdown
+			case "sarif":
+				format = plan.FormatSARIF
 			default:
-				fmt.Fprintf(os.Stderr, "unknown --format=%s (want json or markdown)\n", f)
+				fmt.Fprintf(os.Stderr, "unknown --format=%s (want json, markdown, or sarif)\n", f)
 				return 1
 			}
 		case arg == "--render":
@@ -1118,6 +1172,11 @@ func runPlan(args []string) int {
 			fmt.Fprintf(os.Stderr, "write markdown: %v\n", err)
 			return 1
 		}
+	case plan.FormatSARIF:
+		if err := plan.WriteSARIF(&body, p); err != nil {
+			fmt.Fprintf(os.Stderr, "write sarif: %v\n", err)
+			return 1
+		}
 	}
 	if _, err := os.Stdout.Write(body.Bytes()); err != nil {
 		fmt.Fprintf(os.Stderr, "write stdout: %v\n", err)
@@ -1199,6 +1258,94 @@ func focusPresetAllowlist(preset string) []string {
 	default:
 		return nil
 	}
+}
+
+// splitCSV splits a comma-separated flag value into trimmed, non-empty tokens.
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if t := strings.TrimSpace(part); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// codeCategory returns the <X> category letter of a diagnostic code in the
+// XPC.<X>.<slug> family. Legacy numeric codes (XPC001..) have no category and
+// return "".
+func codeCategory(code string) string {
+	if !strings.HasPrefix(code, "XPC.") {
+		return ""
+	}
+	rest := code[len("XPC."):]
+	dot := strings.IndexByte(rest, '.')
+	if dot <= 0 {
+		return ""
+	}
+	return rest[:dot]
+}
+
+// resolveRuleAllowlist builds the RuleAllowlist that gates rule evaluation.
+//
+//   - When --category and/or --rules are set, the run is restricted to their
+//     union. --rules entries are full diagnostic codes (e.g.
+//     XPC.M.observed-desired-fixed-point) used verbatim. --category entries are
+//     single category letters (the <X> in XPC.<X>.<slug>); each expands to
+//     every known rule code in that category via checker.KnownRuleCodes(). This
+//     filters at evaluation level: the kernel's rule-allowed? gate skips the
+//     entire check-rN dispatch for non-listed rules, so an unrelated rule's
+//     setup cannot fail the run.
+//   - When neither is set, fall back to the --focus preset (unchanged).
+//
+// An unknown category letter (no matching rule) is an error so a typo like
+// --category=X fails loudly instead of silently checking nothing.
+func resolveRuleAllowlist(focusPreset string, categories, rules []string) ([]string, error) {
+	if len(categories) == 0 && len(rules) == 0 {
+		return focusPresetAllowlist(focusPreset), nil
+	}
+
+	known := checker.KnownRuleCodes()
+	byCategory := make(map[string][]string)
+	for _, code := range known {
+		if cat := codeCategory(code); cat != "" {
+			byCategory[cat] = append(byCategory[cat], code)
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(code string) {
+		if _, ok := seen[code]; ok {
+			return
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+
+	for _, cat := range categories {
+		codes, ok := byCategory[cat]
+		if !ok {
+			return nil, fmt.Errorf("invalid --category=%s (no rules in category %q; known categories: %s)",
+				cat, cat, strings.Join(sortedCategoryLetters(byCategory), ","))
+		}
+		for _, code := range codes {
+			add(code)
+		}
+	}
+	for _, code := range rules {
+		add(code)
+	}
+	return out, nil
+}
+
+func sortedCategoryLetters(byCategory map[string][]string) []string {
+	letters := make([]string, 0, len(byCategory))
+	for k := range byCategory {
+		letters = append(letters, k)
+	}
+	sort.Strings(letters)
+	return letters
 }
 
 func loadAppSetFixtures(path string) (map[string][]map[string]string, error) {
