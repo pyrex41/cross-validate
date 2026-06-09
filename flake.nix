@@ -20,7 +20,7 @@
       # Single source of truth for the release version. Keep in lockstep with
       # cmd/xpc/main.go's `const version` (the release-gitlab.sh check reads it
       # from there).
-      version = "0.2.5";
+      version = "0.2.7";
     in
     {
       packages = forAll (pkgs: rec {
