@@ -34,25 +34,32 @@ func TestParseServerVersion(t *testing.T) {
 
 func TestParseManagedCRDsFiltersByGroup(t *testing.T) {
 	in := strings.Join([]string{
-		"instances ec2.aws.upbound.io Cluster",
-		"externalsecrets external-secrets.io Namespaced",
-		"projects projects.gitlab.m.crossplane.io Cluster",
-		"widgets example.com Namespaced", // not a provider group -> dropped
+		"instances ec2.aws.upbound.io Cluster v1beta1",
+		"externalsecrets external-secrets.io Namespaced v1beta1",
+		"projects projects.gitlab.m.crossplane.io Cluster v1alpha1",
+		"widgets example.com Namespaced v1", // not a provider group -> dropped
+		"legacies ec2.aws.upbound.io Cluster", // no storage version reported -> bare selector
 		"",
 	}, "\n")
 	got := parseManagedCRDs(in)
-	if len(got) != 3 {
-		t.Fatalf("got %d targets, want 3: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("got %d targets, want 4: %+v", len(got), got)
 	}
 	bySel := map[string]target{}
 	for _, tg := range got {
 		bySel[tg.selector] = tg
 	}
-	if tg, ok := bySel["instances.ec2.aws.upbound.io"]; !ok || tg.namespaced {
-		t.Fatalf("ec2 instances: want cluster-scoped target, got %+v (ok=%v)", tg, ok)
+	// The selector must pin the STORAGE version: an unversioned get requests
+	// the preferred served version and pays per-object conversion-webhook cost
+	// (which times out on large collections, e.g. ECS taskdefinitions).
+	if tg, ok := bySel["instances.v1beta1.ec2.aws.upbound.io"]; !ok || tg.namespaced {
+		t.Fatalf("ec2 instances: want cluster-scoped version-pinned target, got %+v (ok=%v)", tg, ok)
 	}
-	if tg, ok := bySel["externalsecrets.external-secrets.io"]; !ok || !tg.namespaced {
-		t.Fatalf("externalsecrets: want namespaced target, got %+v (ok=%v)", tg, ok)
+	if tg, ok := bySel["externalsecrets.v1beta1.external-secrets.io"]; !ok || !tg.namespaced {
+		t.Fatalf("externalsecrets: want namespaced version-pinned target, got %+v (ok=%v)", tg, ok)
+	}
+	if _, ok := bySel["legacies.ec2.aws.upbound.io"]; !ok {
+		t.Fatalf("missing storage version must fall back to the bare selector: %+v", got)
 	}
 }
 
@@ -133,11 +140,13 @@ func TestCaptureArgConstructionAndParsing(t *testing.T) {
 		calls = append(calls, args)
 		joined := strings.Join(args, " ")
 		switch {
+		// jsonpath before version: the discovery jsonpath itself contains
+		// ".spec.versions" and must not match the version probe.
+		case strings.Contains(joined, "jsonpath"):
+			return []byte("instances ec2.aws.upbound.io Cluster v1beta1\n"), nil
 		case strings.Contains(joined, "version"):
 			return []byte(`{"serverVersion":{"gitVersion":"v1.30.0"}}`), nil
-		case strings.Contains(joined, "jsonpath"):
-			return []byte("instances ec2.aws.upbound.io Cluster\n"), nil
-		case strings.Contains(joined, "instances.ec2.aws.upbound.io"):
+		case strings.Contains(joined, "instances.v1beta1.ec2.aws.upbound.io"):
 			return listOf(`apiVersion: ec2.aws.upbound.io/v1beta1
 kind: Instance
 metadata:
@@ -181,7 +190,7 @@ spec:
 		if strings.Contains(joined, "--context=prod-eks") {
 			sawContext = true
 		}
-		if strings.Contains(joined, "instances.ec2.aws.upbound.io") && strings.Contains(joined, " -A") {
+		if strings.Contains(joined, "instances.v1beta1.ec2.aws.upbound.io") && strings.Contains(joined, " -A") {
 			t.Fatalf("cluster-scoped MR get must not pass -A: %v", args)
 		}
 		if strings.Contains(joined, "applications.argoproj.io") && !strings.Contains(joined, "-A") {
@@ -199,10 +208,10 @@ func TestCaptureSkipsMissingOptionalType(t *testing.T) {
 	run := func(ctx context.Context, bin string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		switch {
-		case strings.Contains(joined, "version"):
-			return []byte(`{"serverVersion":{"gitVersion":"v1.30.0"}}`), nil
 		case strings.Contains(joined, "jsonpath"):
 			return []byte(""), nil // no managed CRDs
+		case strings.Contains(joined, "version"):
+			return []byte(`{"serverVersion":{"gitVersion":"v1.30.0"}}`), nil
 		case strings.Contains(joined, "applicationsets.argoproj.io"):
 			return nil, errors.New(`error: the server doesn't have a resource type "applicationsets"`)
 		default:

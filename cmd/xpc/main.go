@@ -31,7 +31,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/waiver"
 )
 
-const version = "0.2.6"
+const version = "0.2.7"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -450,11 +450,44 @@ func runCheck(args []string) int {
 	timed("check", tCheck)
 	diags := result.Diagnostics
 
+	// Post-kernel diagnostics (the AppSet-expansion notes and skip-render
+	// coverage notes below) must respect the same allowlist that gated
+	// kernel dispatch. They are appended AFTER the kernel run, so without
+	// this gate a scoped run leaks out-of-scope codes — e.g. `--category=M`
+	// emitting one XPC.H.helm-renders note per Helm Application, which the
+	// two-sample drift audit then counts as "persistent divergences"
+	// (identical in both samples by construction) and storm-alerts on.
+	// Allowed when: no filtering requested, exact code in the allowlist, or
+	// the code's category letter was requested via --category (covers note
+	// codes like XPC.H.kustomize-renders that KnownRuleCodes omits).
+	postKernelAllowed := func(code string) bool {
+		if len(allowlist) == 0 {
+			return true
+		}
+		for _, c := range allowlist {
+			if c == code {
+				return true
+			}
+		}
+		if cat := codeCategory(code); cat != "" {
+			for _, c := range categoryFilter {
+				if c == cat {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	// Merge in any info-level diagnostics the AppSet expander emitted
 	// (unsupported generator kinds, unrenderable templates). These arrive
 	// on builder.ExpansionDiags because the kernel never sees AppSets
 	// directly — we synthesize their Applications in pkg/ir.
-	diags = append(diags, builder.ExpansionDiags...)
+	for _, d := range builder.ExpansionDiags {
+		if postKernelAllowed(d.Code) {
+			diags = append(diags, d)
+		}
+	}
 
 	// When rendering is skipped, surface one info diagnostic per
 	// Application that had a Helm or Kustomize source we did not render.
@@ -467,7 +500,7 @@ func runCheck(args []string) int {
 			for _, src := range app.Sources {
 				switch src.Renderer {
 				case types.RendererHelm:
-					if !helmSeen {
+					if !helmSeen && postKernelAllowed("XPC.H.helm-renders") {
 						diags = append(diags, types.Diagnostic{
 							Code:     "XPC.H.helm-renders",
 							Severity: types.SeverityInfo,
@@ -477,7 +510,7 @@ func runCheck(args []string) int {
 						helmSeen = true
 					}
 				case types.RendererKustomize:
-					if !kustSeen {
+					if !kustSeen && postKernelAllowed("XPC.H.kustomize-renders") {
 						diags = append(diags, types.Diagnostic{
 							Code:     "XPC.H.kustomize-renders",
 							Severity: types.SeverityInfo,
