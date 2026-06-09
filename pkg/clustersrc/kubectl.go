@@ -205,14 +205,26 @@ func (c *Capturer) serverVersion() string {
 }
 
 // discoverManagedCRDs lists CRDs and returns the resource selectors
-// ("<plural>.<group>") whose group matches a provider suffix. Selecting by
-// fully-qualified name avoids short-name collisions across providers.
+// ("<plural>.<storageVersion>.<group>") whose group matches a provider suffix.
+// Selecting by fully-qualified name avoids short-name collisions across
+// providers.
+//
+// The STORAGE version is pinned deliberately: a bare "<plural>.<group>" get
+// requests the preferred SERVED version, and when that differs from the
+// storage version (upjet providers serve v1beta2 while objects are stored as
+// v1beta1) the API server pushes every stored object through the CRD's
+// conversion webhook. On large collections that times out server-side — on
+// the facilitygrid-ops cluster, listing 341 taskdefinitions.ecs.aws.upbound.io
+// at v1beta2 exceeded the API server's 60s ceiling every time, while the same
+// list at the stored v1beta1 returned in ~2.3s — which sank the whole capture
+// (and with it the hourly drift audit). Listing at the storage version is a
+// straight etcd read, no conversion.
 func (c *Capturer) discoverManagedCRDs() ([]target, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
 	defer cancel()
 	// jsonpath keeps the payload tiny vs full -o yaml: one line per CRD of
-	// "<plural> <group> <scope>".
-	const jp = `{range .items[*]}{.spec.names.plural}{" "}{.spec.group}{" "}{.spec.scope}{"\n"}{end}`
+	// "<plural> <group> <scope> <storageVersion>".
+	const jp = `{range .items[*]}{.spec.names.plural}{" "}{.spec.group}{" "}{.spec.scope}{" "}{.spec.versions[?(@.storage==true)].name}{"\n"}{end}`
 	out, err := c.runner()(ctx, c.resolved,
 		c.baseArgs("get", "customresourcedefinitions", "-o", "jsonpath="+jp)...)
 	if err != nil {
@@ -384,8 +396,11 @@ func parseServerVersion(out []byte) string {
 	return v.ServerVersion.GitVersion
 }
 
-// parseManagedCRDs turns the jsonpath "<plural> <group> <scope>" lines into
-// capture targets, keeping only groups that match a provider suffix.
+// parseManagedCRDs turns the jsonpath "<plural> <group> <scope>
+// <storageVersion>" lines into capture targets, keeping only groups that match
+// a provider suffix. When the storage version is present the selector pins it
+// ("<plural>.<version>.<group>") so the get is conversion-free (see
+// discoverManagedCRDs); a missing version falls back to the bare form.
 func parseManagedCRDs(s string) []target {
 	var out []target
 	for _, line := range strings.Split(s, "\n") {
@@ -401,10 +416,14 @@ func parseManagedCRDs(s string) []target {
 		if len(fields) >= 3 {
 			namespaced = !strings.EqualFold(fields[2], "Cluster")
 		}
+		selector := plural + "." + group
+		if len(fields) >= 4 && fields[3] != "" {
+			selector = plural + "." + fields[3] + "." + group
+		}
 		out = append(out, target{
-			selector:   plural + "." + group,
+			selector:   selector,
 			namespaced: namespaced,
-			label:      plural + "." + group,
+			label:      selector,
 		})
 	}
 	return out
