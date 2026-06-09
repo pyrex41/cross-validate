@@ -31,7 +31,7 @@ import (
 	"github.com/pyrex41/cross-validate-/pkg/waiver"
 )
 
-const version = "0.2.7"
+const version = "0.2.8"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -130,7 +130,7 @@ Check flags:
   --ssa-mp-mode=<mode> R22 (ServerSideApply × managementPolicies) strictness:
                        observe (default, narrow), partial, any (broadest)
   --focus=<preset>     Restrict to a curated rule subset. Presets:
-                       all (default), inc6-floor (R23+R24+R25 only)
+                       all (default), inc6-floor (R23+R24+R25 only), render (H-category)
   --category=<letters> Restrict the run to rules in these category letters
                        (comma-separated; the <X> in XPC.<X>.<slug>). E.g.
                        --category=M or --category=M,S. Filters at evaluation
@@ -290,10 +290,10 @@ func runCheck(args []string) int {
 		case strings.HasPrefix(arg, "--focus="):
 			val := strings.TrimPrefix(arg, "--focus=")
 			switch val {
-			case "all", "inc6-floor":
+			case "all", "inc6-floor", "render":
 				focusPreset = val
 			default:
-				fmt.Fprintf(os.Stderr, "invalid --focus=%s (must be one of: all, inc6-floor)\n", val)
+				fmt.Fprintf(os.Stderr, "invalid --focus=%s (must be one of: all, inc6-floor, render)\n", val)
 				return 1
 			}
 		case strings.HasPrefix(arg, "--category="):
@@ -1287,6 +1287,18 @@ func focusPresetAllowlist(preset string) []string {
 			"XPC.S.crossplane-state-needs-orphan",
 			"XPC.E.appset-finalizer-without-preserve",
 			"XPC.E.prod-appset-autosync",
+		}
+	case "render":
+		// The H (render) obligation category: does every Argo source
+		// actually render, with well-typed values, deterministically?
+		// Lets a repo gate "the chart layer renders" as a blocking CI
+		// check while the wider rule set stays report-only.
+		return []string{
+			"XPC.H.helm-renders",
+			"XPC.H.kustomize-renders",
+			"XPC.H.composition-renders",
+			"XPC.H.values-well-typed",
+			"XPC.H.render-deterministic",
 		}
 	default:
 		return nil

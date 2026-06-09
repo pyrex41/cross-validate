@@ -802,6 +802,32 @@ func (b *Builder) addArgoApplication(doc loader.LoadedDocument) error {
 	return nil
 }
 
+// sourcePathCwd returns the directory against which a same-repo Argo
+// source.path should be resolved. Argo resolves source.path relative to the
+// repo ROOT of source.repoURL — not the Application file's directory — so an
+// app under deploy/.../applicationsets/ pointing at path: lib/charts/foo must
+// join against the enclosing git root (the 6b0323d6fe class: xpc joined to the
+// appfile dir, rendered a nonexistent chart, and reported "repo not found"
+// instead of the chart's real template error). The app-file-relative
+// candidate stays primary for back-compat (fixtures, single-dir layouts,
+// and Argo's own `path: ./` convention); the repo root is consulted only
+// when the app-dir join does not exist on disk.
+func sourcePathCwd(appFile, srcPath string) string {
+	appDir := filepath.Dir(appFile)
+	if srcPath == "" || filepath.IsAbs(srcPath) {
+		return appDir
+	}
+	if _, err := os.Stat(filepath.Join(appDir, srcPath)); err == nil {
+		return appDir
+	}
+	if root := findRepoRoot(appDir); root != "" {
+		if _, err := os.Stat(filepath.Join(root, srcPath)); err == nil {
+			return root
+		}
+	}
+	return appDir
+}
+
 // renderHelmSources invokes the HelmRenderer for each Helm source on `app`
 // and appends one RenderResult per source. Successful renders also
 // contribute their rendered resources to World.Resources with a provenance
@@ -810,7 +836,6 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 	if len(app.Sources) == 0 {
 		return
 	}
-	cwd := filepath.Dir(appFile)
 	if b.helmRenderer == nil {
 		b.helmRenderer = renderer.NewHelmRenderer(b.HelmBin, b.HelmCacheDir)
 	}
@@ -819,6 +844,7 @@ func (b *Builder) renderHelmSources(app types.ArgoApplication, appFile string) {
 		if src.Renderer != types.RendererHelm {
 			continue
 		}
+		cwd := sourcePathCwd(appFile, src.Path)
 		chartPath, resolveErr := renderer.ResolveChart(src, cwd)
 		if errors.Is(resolveErr, renderer.ErrRemoteChart) {
 			if b.HelmCacheDir == "" {
@@ -949,7 +975,6 @@ func (b *Builder) renderKustomizeSources(app types.ArgoApplication, appFile stri
 	if len(app.Sources) == 0 {
 		return
 	}
-	cwd := filepath.Dir(appFile)
 	if b.kustomizeRenderer == nil {
 		b.kustomizeRenderer = renderer.NewKustomizeRenderer(b.KustomizeBin)
 	}
@@ -958,6 +983,7 @@ func (b *Builder) renderKustomizeSources(app types.ArgoApplication, appFile stri
 		if src.Renderer != types.RendererKustomize {
 			continue
 		}
+		cwd := sourcePathCwd(appFile, src.Path)
 		overlayPath, resolveErr := renderer.ResolveChart(src, cwd)
 		if resolveErr != nil {
 			b.world.RenderResults = append(b.world.RenderResults, types.RenderResult{
@@ -1015,8 +1041,8 @@ func (b *Builder) runDeterminismChecks() {
 		if len(app.Sources) == 0 {
 			continue
 		}
-		cwd := filepath.Dir(app.Source.File)
 		for _, src := range app.Sources {
+			cwd := sourcePathCwd(app.Source.File, src.Path)
 			switch src.Renderer {
 			case types.RendererHelm:
 				if b.helmRenderer == nil {
